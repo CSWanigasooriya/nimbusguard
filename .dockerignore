@@ -1,51 +1,96 @@
 # Git
 .git
 .gitignore
+.gitmodules
 
 # Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
-venv/
-ENV/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Logs
-*.log
-app.log
-
-# Docker
-Dockerfile
-.dockerignore
-
-# Other
-.DS_Store
+__pycache__
+*.pyc
 *.pyo
 *.pyd
 .Python
+.pytest_cache
+.coverage
+.tox
+.venv
+venv/
+env/
+ENV/
 .env
-.env.local 
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Documentation
+*.md
+docs/
+README*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+app.log
+
+# Kubernetes
+k8s-nimbusguard/
+*.yaml
+*.yml
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Testing
+tests/
+test_*
+*_test.py
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Package managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets and configs
+*.pem
+*.key
+.env*
+config.ini
+settings.local.py 

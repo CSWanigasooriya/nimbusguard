@@ -1,13 +1,13 @@
+# syntax=docker/dockerfile:1
 FROM python:3.9-slim AS builder
 
 # Set working directory
 WORKDIR /app
 
-# Set environment variables
+# Set environment variables (enable pip caching for faster builds)
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Install system dependencies
@@ -15,34 +15,44 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Copy requirements first for better layer caching
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
+
+# Create wheels with pip cache (faster subsequent builds)
+RUN pip wheel --no-deps --wheel-dir /app/wheels -r requirements.txt
 
 # Final stage
 FROM python:3.9-slim
 
-# Set working directory and env vars
+# Set working directory and optimized env vars
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Create non-root user
-RUN adduser --disabled-password --gecos '' appuser \
-    && chown -R appuser:appuser /app
+# Install runtime dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy wheels from builder and install
+# Create non-root user
+RUN adduser --disabled-password --gecos '' appuser
+
+# Copy wheels from builder stage
 COPY --from=builder /app/wheels /wheels
 COPY --from=builder /app/requirements.txt .
-RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt \
+
+# Install Python packages from wheels (much faster)
+RUN pip install --find-links=/wheels -r requirements.txt \
     && rm -rf /wheels
 
-# Copy only necessary application files
+# Copy application code (last for optimal layer caching)
 COPY main.py .
 
 # Set proper permissions
