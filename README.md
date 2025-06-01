@@ -174,3 +174,18 @@ nimbusguard/
 ```
 
 This heavy processing API is designed to push your system to its limits and provide detailed insights into performance characteristics under computational stress. It supports deployment through Docker and Kubernetes for scalability and ease of management.
+
+## Clone Repository
+
+To clone this repository along with its submodules, use one of the following methods:
+
+### Method 1: Clone with submodules (Recommended)
+```bash
+git clone --recurse-submodules https://github.com/[your-username]/nimbusguard.git
+```
+
+### Method 2: If already cloned without submodules
+If you've already cloned the repository without the submodules, you can initialize and update them using:
+```bash
+git submodule update --init --recursive
+```
