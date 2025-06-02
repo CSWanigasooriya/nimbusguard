@@ -1,3 +1,3 @@
-[submodule "k8s-nimbusguard"]
-	path = k8s-nimbusguard
+[submodule "kubernetes-manifests"]
+	path = kubernetes-manifests
 	url = https://github.com/CSWanigasooriya/nimbusguard-k8s.git
