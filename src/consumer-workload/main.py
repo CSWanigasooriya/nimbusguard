@@ -9,6 +9,8 @@ from datetime import datetime
 
 from api.workload_endpoints import router as workload_router
 from api.event_endpoints import router as event_router
+from api.metrics_endpoints import router as metrics_router
+from api.health_endpoints import router as health_router
 from consumers.scaling_event_consumer import ScalingEventConsumer
 
 class JSONFormatter(logging.Formatter):
@@ -77,6 +79,8 @@ app.add_middleware(
 # Include routers
 app.include_router(workload_router)
 app.include_router(event_router)
+app.include_router(metrics_router)
+app.include_router(health_router)
 
 scaling_event_consumer = ScalingEventConsumer()
 
@@ -88,16 +92,7 @@ def start_kafka_consumer():
 def stop_kafka_consumer():
     scaling_event_consumer.stop()
 
-@app.get("/health")
-async def health_check() -> Dict[str, str]:
-    """Health check endpoint"""
-    logger.info("Health check requested", extra={"endpoint": "/health"})
-    return {"status": "healthy"}
-
-@app.get("/ready")
-async def readiness_check() -> Dict[str, str]:
-    """Readiness check endpoint"""
-    return {"status": "ready"}
+# Health endpoints are now handled by health_router
 
 if __name__ == "__main__":
     uvicorn.run(

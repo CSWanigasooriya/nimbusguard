@@ -9,13 +9,15 @@ and determines the optimal scaling action.
 import logging
 import asyncio
 import json
+import re
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.types import Command
 
+from ..config import get_agent_config, get_system_prompt
 from ..workflows.scaling_state import (
     ScalingWorkflowState, 
     WorkflowStatus, 
@@ -42,14 +44,17 @@ class DecisionAgent:
     - Updates ML models based on feedback
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Initialize the decision agent.
         
         Args:
-            config: Configuration dictionary containing model settings
+            config: Optional configuration dictionary. If None, loads from config system.
         """
-        self.config = config.get("agents", {}).get("decision", {})
+        # Load configuration from config system
+        self.config = get_agent_config("decision_agent") if config is None else config.get("agents", {}).get("decision", {})
+        
+        # Initialize LLM with configuration
         self.llm = ChatOpenAI(
             model=self.config.get("model", "gpt-4o-mini"),
             temperature=self.config.get("temperature", 0.1),
@@ -76,34 +81,8 @@ class DecisionAgent:
         self.max_scale_step = self.config.get("max_scale_step", 3)
         self.scale_cooldown = self.config.get("scale_cooldown", 300)  # seconds
         
-        # System prompt for decision reasoning
-        self.system_prompt = """You are the Decision Agent in NimbusGuard's AI-powered Kubernetes scaling system.
-
-Your role is to make intelligent scaling decisions based on:
-- Current cluster metrics (CPU, memory, request rate, error rate)
-- Historical performance data
-- Q-learning model recommendations
-- Business constraints and SLA requirements
-
-Your responsibilities:
-1. Analyze current metrics and trends
-2. Consider Q-learning recommendations
-3. Apply business logic and constraints
-4. Make final scaling decisions with confidence scores
-5. Provide clear reasoning for decisions
-
-Decision criteria:
-- Scale UP when: High resource usage, increasing load, SLA risk
-- Scale DOWN when: Low resource usage, sustained low load, cost optimization
-- MAINTAIN when: Stable metrics, recent scaling action, or uncertainty
-
-Always consider:
-- Resource efficiency vs. SLA compliance
-- Cost implications of scaling decisions
-- System stability and gradual scaling
-- Confidence levels and risk assessment
-
-Provide clear, actionable decisions with confidence scores and detailed reasoning."""
+        # Load system prompt from configuration
+        self.system_prompt = get_system_prompt("decision_agent")
 
     async def invoke(self, state: ScalingWorkflowState) -> Command:
         """
@@ -298,8 +277,12 @@ Provide clear, actionable decisions with confidence scores and detailed reasonin
             Format your response as structured analysis with clear recommendations.
             """
             
-            # Get LLM response
-            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            # Get LLM response with system and human messages
+            messages = [
+                SystemMessage(content=self.system_prompt),
+                HumanMessage(content=prompt)
+            ]
+            response = await self.llm.ainvoke(messages)
             
             # Parse LLM response
             analysis = {
@@ -646,28 +629,6 @@ async def decision_node(state: ScalingWorkflowState) -> Command:
     Returns:
         Command with scaling decision and routing
     """
-    # This would be loaded from config in production
-    config = {
-        "agents": {
-            "decision": {
-                "model": "gpt-4o-mini",
-                "temperature": 0.1,
-                "max_tokens": 1200,
-                "timeout": 30,
-                "confidence_threshold": 0.7,
-                "min_observations": 2,
-                "max_scale_step": 3,
-                "scale_cooldown": 300
-            }
-        },
-        "q_learning": {
-            "learning_rate": 0.1,
-            "epsilon": 0.1,
-            "epsilon_decay": 0.995,
-            "epsilon_min": 0.01,
-            "discount_factor": 0.95
-        }
-    }
-    
-    agent = DecisionAgent(config)
+    # Initialize agent using configuration system
+    agent = DecisionAgent()
     return await agent.invoke(state) 

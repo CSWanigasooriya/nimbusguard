@@ -1,0 +1,135 @@
+services:
+  consumer-workload:
+    build:
+      context: ./src/consumer-workload
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 2G
+        reservations:
+          cpus: '2.0'
+          memory: 1G
+    environment:
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+    networks:
+      - nimbusguard
+    depends_on:
+      - kafka
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  load-generator:
+    build:
+      context: ./src/load-generator
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - CONSUMER_WORKLOAD_URL=http://consumer-workload:8080
+    networks:
+      - nimbusguard
+    depends_on:
+      - consumer-workload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Kafka for event streaming
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      CLUSTER_ID: K7DeG7KMS1ucKSgxDZfoAQ
+      KAFKA_KRAFT_MODE: "true"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@localhost:9093"
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_LOG4J_OPTS: "-Dlog4j.configuration=file:/opt/kafka/config/custom-log4j.properties"
+    volumes:
+      - ./log4j.properties:/opt/kafka/config/custom-log4j.properties:ro
+    networks:
+      - nimbusguard
+
+  # LangGraph AI Operator
+  langgraph-operator:
+    build:
+      context: ./src/langgraph-operator
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8080"  # Operator health/metrics endpoint
+    environment:
+      # OpenAI Configuration (pass from host environment)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      
+      # Application Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DEBUG=${DEBUG:-false}
+      - DEV_MODE=${DEV_MODE:-true}
+      - PYTHONUNBUFFERED=1
+      
+      # Kubernetes Configuration (for local development)
+      - KUBERNETES_IN_CLUSTER=false
+      - NIMBUSGUARD_NAMESPACE=${NIMBUSGUARD_NAMESPACE:-nimbusguard}
+      
+      # Integration URLs (point to other services in compose)
+      - PROMETHEUS_URL=http://prometheus:9090
+      - CONSUMER_WORKLOAD_URL=http://consumer-workload:8080
+      
+    volumes:
+      # Mount local kubeconfig for development
+      - ~/.kube:/home/nimbusguard/.kube:ro
+      # Mount config files
+      - ./src/langgraph-operator/config:/app/config:ro
+    networks:
+      - nimbusguard
+    depends_on:
+      - consumer-workload
+      - prometheus
+      - kafka
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Basic Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'  
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - nimbusguard
+
+networks:
+  nimbusguard:
+    driver: bridge 

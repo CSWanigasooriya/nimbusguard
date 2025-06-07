@@ -11,10 +11,11 @@ import asyncio
 from typing import Dict, Any, Literal, Optional
 from datetime import datetime, timedelta
 
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.types import Command
 
+from ..config import get_agent_config, get_system_prompt
 from ..workflows.scaling_state import (
     ScalingWorkflowState, 
     WorkflowStatus, 
@@ -35,14 +36,17 @@ class SupervisorAgent:
     scaling process.
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Initialize the supervisor agent.
         
         Args:
-            config: Configuration dictionary containing model settings
+            config: Optional configuration dictionary. If None, loads from config system.
         """
-        self.config = config.get("agents", {}).get("supervisor", {})
+        # Load configuration from config system
+        self.config = get_agent_config("supervisor") if config is None else config.get("agents", {}).get("supervisor", {})
+        
+        # Initialize LLM with configuration
         self.llm = ChatOpenAI(
             model=self.config.get("model", "gpt-4o-mini"),
             temperature=self.config.get("temperature", 0.1),
@@ -51,37 +55,8 @@ class SupervisorAgent:
         )
         self.retry_attempts = self.config.get("retry_attempts", 3)
         
-        # Agent decision prompts
-        self.system_prompt = """You are the Supervisor Agent in NimbusGuard's AI-powered Kubernetes scaling system.
-
-Your role is to orchestrate a multi-agent workflow for intelligent scaling decisions. You have access to specialized agents:
-
-1. STATE_OBSERVER: Monitors cluster metrics and system state via Prometheus
-2. DECISION_AGENT: Makes scaling decisions using Q-learning and ML models  
-3. ACTION_EXECUTOR: Executes scaling actions on Kubernetes clusters
-4. REWARD_CALCULATOR: Calculates rewards for reinforcement learning
-
-Based on the current workflow state, you must decide:
-- Which agent should handle the next step
-- Whether the workflow is complete
-- If human intervention is needed
-- If an error requires retry or termination
-
-Current workflow states you handle:
-- INITIALIZING → STATE_OBSERVER (start monitoring)
-- OBSERVING → DECISION_AGENT (if metrics are ready) or STATE_OBSERVER (if more observation needed)
-- ANALYZING → DECISION_AGENT (continue analysis)
-- DECIDING → ACTION_EXECUTOR (if decision is ready) or DECISION_AGENT (if more analysis needed)
-- EXECUTING → REWARD_CALCULATOR (if action completed) or ACTION_EXECUTOR (if action in progress)
-- MONITORING → END (if stable) or STATE_OBSERVER (if monitoring needed)
-
-Always consider:
-- Error conditions and retry logic
-- Human approval requirements
-- Workflow timeouts and completion criteria
-- State validation and consistency
-
-Respond with your routing decision and reasoning."""
+        # Load system prompt from configuration
+        self.system_prompt = get_system_prompt("supervisor")
 
     async def invoke(self, state: ScalingWorkflowState) -> Command:
         """
@@ -164,10 +139,14 @@ Respond with your routing decision and reasoning."""
         # Get LLM decision
         try:
             messages = [
+                SystemMessage(content=self.system_prompt),
                 HumanMessage(content=prompt)
             ]
             response = await self.llm.ainvoke(messages)
             decision = self._parse_llm_response(response.content)
+            
+            # Log LLM decision for debugging
+            logger.info(f"Supervisor LLM decision: {decision}")
             
             # Create command based on decision
             return self._create_routing_command(state, decision)
@@ -344,11 +323,8 @@ async def supervisor_node(state: ScalingWorkflowState) -> Command:
     Returns:
         Command with routing decision
     """
-    # Get config from state or use defaults
-    config = state.get("config", {})
-    
-    # Initialize supervisor agent
-    supervisor = SupervisorAgent(config)
+    # Initialize supervisor agent using configuration system
+    supervisor = SupervisorAgent()
     
     # Process the state and return routing decision
     return await supervisor.invoke(state) 

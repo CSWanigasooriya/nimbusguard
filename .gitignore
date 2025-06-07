@@ -136,6 +136,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# NimbusGuard Environment Scripts (may contain real API keys during development)
+setup-env.sh
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -656,3 +659,16 @@ load_test_results/
 # poetry.lock
 
 # End of .gitignore
+
+# Security - Never commit these files
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets.yaml
+secrets.yml
+
+# Pre-commit
+.secrets.baseline
+
