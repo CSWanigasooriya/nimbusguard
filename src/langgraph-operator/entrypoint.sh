@@ -5,27 +5,57 @@ set -e  # Exit on any error
 
 echo "🚀 Starting NimbusGuard LangGraph Operator..."
 
-# Function to check if environment variable is set
-check_env_var() {
+# Function to read value from .env file
+read_env_file() {
     local var_name=$1
-    local var_value=$(eval echo \$$var_name)
+    local env_file="/app/.env"
     
-    if [ -z "$var_value" ]; then
-        echo "❌ Error: Environment variable $var_name is not set"
+    # First try to read from mounted .env file in the app directory
+    if [ -f "$env_file" ]; then
+        local value=$(grep "^${var_name}=" "$env_file" | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        echo "$value"
+        return 0
+    fi
+    
+    # Fallback to environment variable
+    local var_value=$(eval echo \$$var_name)
+    echo "$var_value"
+    return 0
+}
+
+# Function to check if OpenAI API key is configured
+check_openai_key() {
+    local api_key=$(read_env_file "OPENAI_API_KEY")
+    
+    if [ -z "$api_key" ]; then
+        echo "❌ Error: OPENAI_API_KEY not found in .env file or environment"
         return 1
     else
-        echo "✅ $var_name is configured"
+        echo "✅ OPENAI_API_KEY is configured"
+        # Set the environment variable for the Python application
+        export OPENAI_API_KEY="$api_key"
         return 0
     fi
 }
 
 # Function to validate OpenAI API key format
 validate_openai_key() {
-    if [[ $OPENAI_API_KEY =~ ^sk-[a-zA-Z0-9]{48,}$ ]]; then
+    local api_key=$(read_env_file "OPENAI_API_KEY")
+    
+    # Allow demo key for development
+    if [[ $api_key == "sk-demo-key-for-development"* ]]; then
+        echo "⚠️  Using demo OpenAI API key for development"
+        return 0
+    fi
+    
+    # Support both legacy (sk-...) and new project-based (sk-proj-...) API key formats
+    if [[ $api_key =~ ^sk-[a-zA-Z0-9]{48,}$ ]] || [[ $api_key =~ ^sk-proj-[a-zA-Z0-9_-]{90,}$ ]]; then
         echo "✅ OpenAI API key format is valid"
         return 0
     else
-        echo "❌ Error: OpenAI API key format is invalid (should start with 'sk-' and be at least 51 characters)"
+        echo "❌ Error: OpenAI API key format is invalid"
+        echo "   Expected: 'sk-...' (legacy) or 'sk-proj-...' (project-based)"
+        echo "   Found key: ${api_key:0:20}..."
         return 1
     fi
 }
@@ -33,19 +63,20 @@ validate_openai_key() {
 # Environment validation
 echo "🔍 Validating environment configuration..."
 
-# Check required environment variables
+# Check required configuration
 VALIDATION_FAILED=false
 
-if ! check_env_var "OPENAI_API_KEY"; then
+if ! check_openai_key; then
     VALIDATION_FAILED=true
 fi
 
-# Validate OpenAI key format if it exists
-if [ ! -z "$OPENAI_API_KEY" ]; then
-    if ! validate_openai_key; then
-        VALIDATION_FAILED=true
-    fi
+# Validate OpenAI key format
+if ! validate_openai_key; then
+    VALIDATION_FAILED=true
 fi
+
+# Note: Running in Kubernetes cluster, no special configuration needed
+echo "🔧 Kubernetes operator will connect using in-cluster config or mounted kubeconfig"
 
 # Check optional but important variables
 echo "📋 Optional configuration:"
@@ -79,32 +110,34 @@ else
     fi
 fi
 
-# Wait for dependencies
-echo "⏳ Waiting for dependencies..."
+# Wait for dependencies (temporarily disabled for controller pattern testing)
+echo "⏳ Skipping dependency checks for controller pattern testing..."
 
-# Wait for Prometheus
-echo "   Waiting for Prometheus..."
-until curl -sf "$PROMETHEUS_URL/api/v1/status/buildinfo" > /dev/null 2>&1; do
-    echo "   Prometheus not ready, waiting..."
-    sleep 2
-done
-echo "✅ Prometheus is ready"
+# # Wait for Prometheus
+# echo "   Waiting for Prometheus..."
+# until curl -sf "$PROMETHEUS_URL/api/v1/status/buildinfo" > /dev/null 2>&1; do
+#     echo "   Prometheus not ready, waiting..."
+#     sleep 2
+# done
+# echo "✅ Prometheus is ready"
 
-# Wait for consumer workload
-echo "   Waiting for Consumer Workload..."
-until curl -sf "${CONSUMER_WORKLOAD_URL}/health" > /dev/null 2>&1; do
-    echo "   Consumer workload not ready, waiting..."
-    sleep 2
-done
-echo "✅ Consumer Workload is ready"
+# # Wait for consumer workload
+# echo "   Waiting for Consumer Workload..."
+# until curl -sf "${CONSUMER_WORKLOAD_URL}/health" > /dev/null 2>&1; do
+#     echo "   Consumer workload not ready, waiting..."
+#     sleep 2
+# done
+# echo "✅ Consumer Workload is ready"
 
 echo ""
-echo "🎯 All dependencies are ready!"
+echo "🎯 Starting without dependency checks for testing!"
 echo "🚀 Starting LangGraph Operator..."
 echo ""
 
 # Start the operator
-exec python -m kopf run operator.py \
+export PYTHONPATH="/app:$PYTHONPATH"
+cd /app
+exec python -m kopf run nimbusguard_operator.py \
     --liveness=http://0.0.0.0:8080/healthz \
     --verbose \
     --log-format=json 

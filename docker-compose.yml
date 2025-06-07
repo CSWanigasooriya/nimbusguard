@@ -3,6 +3,9 @@ services:
     build:
       context: ./src/consumer-workload
       dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    image: consumer-workload:latest
     ports:
       - "8080:8080"
     deploy:
@@ -16,6 +19,10 @@ services:
     environment:
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
+      - LOG_FILE_PATH=/tmp/logs/app.log
+    # volumes:
+      # Optional: persist logs (uncomment if needed)
+      # - ./logs/consumer-workload:/tmp/logs
     networks:
       - nimbusguard
     depends_on:
@@ -30,6 +37,9 @@ services:
     build:
       context: ./src/load-generator
       dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    image: load-generator:latest
     ports:
       - "8081:8081"
     environment:
@@ -69,50 +79,7 @@ services:
     networks:
       - nimbusguard
 
-  # LangGraph AI Operator
-  langgraph-operator:
-    build:
-      context: ./src/langgraph-operator
-      dockerfile: Dockerfile
-    ports:
-      - "8082:8080"  # Operator health/metrics endpoint
-    environment:
-      # OpenAI Configuration (pass from host environment)
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      
-      # Application Configuration
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - DEBUG=${DEBUG:-false}
-      - DEV_MODE=${DEV_MODE:-true}
-      - PYTHONUNBUFFERED=1
-      
-      # Kubernetes Configuration (for local development)
-      - KUBERNETES_IN_CLUSTER=false
-      - NIMBUSGUARD_NAMESPACE=${NIMBUSGUARD_NAMESPACE:-nimbusguard}
-      
-      # Integration URLs (point to other services in compose)
-      - PROMETHEUS_URL=http://prometheus:9090
-      - CONSUMER_WORKLOAD_URL=http://consumer-workload:8080
-      
-    volumes:
-      # Mount local kubeconfig for development
-      - ~/.kube:/home/nimbusguard/.kube:ro
-      # Mount config files
-      - ./src/langgraph-operator/config:/app/config:ro
-    networks:
-      - nimbusguard
-    depends_on:
-      - consumer-workload
-      - prometheus
-      - kafka
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+
 
   # Basic Prometheus for metrics collection
   prometheus:

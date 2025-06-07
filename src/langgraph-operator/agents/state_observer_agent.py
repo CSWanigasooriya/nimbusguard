@@ -15,13 +15,13 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.types import Command
 
-from ..workflows.scaling_state import (
+from workflows.scaling_state import (
     ScalingWorkflowState, 
     WorkflowStatus, 
     MetricData,
     validate_state
 )
-from ..mcp_integration.mcp_tools import (
+from mcp_integration.mcp_tools import (
     STATE_OBSERVER_TOOLS,
     get_cluster_metrics,
     get_cpu_utilization,

@@ -15,12 +15,7 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 15s
 
-  - job_name: 'langgraph-operator'
-    static_configs:
-      - targets: ['langgraph-operator:8080']
-    metrics_path: /metrics
-    scrape_interval: 15s
-    
+
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090'] 

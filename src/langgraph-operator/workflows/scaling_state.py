@@ -35,6 +35,14 @@ class WorkflowStatus(Enum):
     FAILED = "failed"
 
 
+class ActionStatus(Enum):
+    """Status of an executed action"""
+    SUCCESS = "success"
+    FAILED = "failed"
+    PENDING = "pending"
+    SKIPPED = "skipped"
+
+
 @dataclass
 class MetricData:
     """Container for cluster metrics"""
@@ -65,18 +73,40 @@ class ScalingDecision:
 @dataclass
 class ActionResult:
     """Result of executing a scaling action"""
-    success: bool
-    action_taken: ScalingAction
-    old_replicas: int
-    new_replicas: int
-    error_message: Optional[str] = None
-    execution_time: float = 0.0
+    action: ScalingAction
+    target_replicas: int
+    actual_replicas: int
+    status: ActionStatus
     timestamp: datetime = field(default_factory=datetime.now)
+    execution_time_ms: float = 0.0
+    details: str = ""
+    error_message: Optional[str] = None
+    
+    # Compatibility properties for legacy code
+    @property
+    def success(self) -> bool:
+        """Compatibility property for old field name"""
+        return self.status == ActionStatus.SUCCESS
     
     @property
-    def actual_replicas(self) -> int:
+    def action_taken(self) -> ScalingAction:
         """Compatibility property for old field name"""
-        return self.new_replicas
+        return self.action
+    
+    @property
+    def old_replicas(self) -> int:
+        """Compatibility property - approximate from context"""
+        return self.actual_replicas if self.action == ScalingAction.MAINTAIN else self.target_replicas
+    
+    @property
+    def new_replicas(self) -> int:
+        """Compatibility property for old field name"""
+        return self.actual_replicas
+    
+    @property
+    def execution_time(self) -> float:
+        """Compatibility property - convert ms to seconds"""
+        return self.execution_time_ms / 1000.0
 
 
 @dataclass

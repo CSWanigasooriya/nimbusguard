@@ -15,14 +15,14 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.types import Command
 
-from ..config import get_agent_config, get_system_prompt
-from ..workflows.scaling_state import (
+from config import get_agent_config, get_system_prompt
+from workflows.scaling_state import (
     ScalingWorkflowState, 
     WorkflowStatus, 
     validate_state,
     serialize_state_for_logging
 )
-from ..mcp_integration.mcp_tools import COMMON_TOOLS, get_cluster_metrics
+from mcp_integration.mcp_tools import COMMON_TOOLS, get_cluster_metrics
 
 logger = logging.getLogger(__name__)
 

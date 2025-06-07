@@ -41,17 +41,31 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Create handlers
-file_handler = logging.FileHandler("app.log")
 console_handler = logging.StreamHandler()
 
-# Create formatters and add it to handlers
-json_formatter = JSONFormatter()
-file_handler.setFormatter(json_formatter)
-console_handler.setFormatter(json_formatter)
-
-# Add handlers to the logger
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
+# Only add file handler if we can write to the directory
+log_file_path = os.getenv("LOG_FILE_PATH", "/tmp/app.log")
+try:
+    # Test if we can write to the log file directory
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    file_handler = logging.FileHandler(log_file_path)
+    
+    # Create formatters and add it to handlers
+    json_formatter = JSONFormatter()
+    file_handler.setFormatter(json_formatter)
+    console_handler.setFormatter(json_formatter)
+    
+    # Add handlers to the logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    logger.info(f"Logging to file: {log_file_path}")
+except (OSError, PermissionError) as e:
+    # If we can't write to file, just use console logging
+    json_formatter = JSONFormatter()
+    console_handler.setFormatter(json_formatter)
+    logger.addHandler(console_handler)
+    logger.warning(f"Could not set up file logging ({e}), using console only")
 
 # Log startup information
 logger.info("Starting NimbusGuard Consumer Workload", extra={

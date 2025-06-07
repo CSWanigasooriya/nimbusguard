@@ -198,6 +198,18 @@ mlruns/
 *.json
 *.parquet
 *.feather
+
+# ============================================================================
+# Docker Build Cache
+# ============================================================================
+
+# BuildKit cache directories
+/tmp/buildkit-cache/
+.docker-cache/
+docker-cache/
+
+# Docker Bake cache
+.buildkit-cache/
 *.hdf5
 data/
 datasets/

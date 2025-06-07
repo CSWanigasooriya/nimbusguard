@@ -6,6 +6,7 @@ Generates configurable HTTP load and Kafka events to test scaling scenarios.
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 import asyncio
 import aiohttp
@@ -41,6 +42,49 @@ load_generation_state = {
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "load-generator"}
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint"""
+    stats = load_generation_state.get("stats", {})
+    
+    # Current status metrics
+    is_active = 1 if load_generation_state["active"] else 0
+    requests_sent = stats.get("requests_sent", 0)
+    
+    # Calculate current rate if active
+    current_rate = 0
+    if load_generation_state["active"] and stats:
+        elapsed = time.time() - stats.get("start_time", time.time())
+        current_rate = requests_sent / max(elapsed, 1)
+    
+    # Generate Prometheus format metrics
+    metrics_output = f"""# HELP load_generator_active Whether load generation is currently active
+# TYPE load_generator_active gauge
+load_generator_active {is_active}
+
+# HELP load_generator_requests_sent_total Total number of requests sent
+# TYPE load_generator_requests_sent_total counter
+load_generator_requests_sent_total {requests_sent}
+
+# HELP load_generator_current_rate Current request rate per second
+# TYPE load_generator_current_rate gauge
+load_generator_current_rate {current_rate:.2f}
+
+# HELP load_generator_pattern_info Current load generation pattern
+# TYPE load_generator_pattern_info gauge
+load_generator_pattern_info{{pattern="{stats.get('pattern', 'none')}"}} {is_active}
+
+# HELP load_generator_duration_seconds Total configured duration
+# TYPE load_generator_duration_seconds gauge
+load_generator_duration_seconds {stats.get('duration', 0)}
+
+# HELP load_generator_elapsed_seconds Time elapsed since start
+# TYPE load_generator_elapsed_seconds gauge
+load_generator_elapsed_seconds {int(time.time() - stats.get('start_time', time.time())) if load_generation_state['active'] else 0}
+"""
+    
+    return Response(content=metrics_output, media_type="text/plain")
 
 @app.post("/load/generate")
 async def generate_load(request: LoadGenerationRequest):
@@ -150,23 +194,40 @@ async def generate_http_load(request: LoadGenerationRequest, start_time: float):
             delay = 1.0 / max(requests_per_second, 0.1)
             
             try:
-                # Trigger CPU workload with shorter duration to allow more frequent requests
-                workload_data = {
-                    "intensity": min(80, request.intensity),
-                    "duration": 3  # Shorter duration to allow more frequent load generation
-                }
-                response = await session.post(
-                    f"{request.target_url}/api/v1/workload/cpu",
-                    json=workload_data,
+                # First check if workload is already running
+                status_response = await session.get(
+                    f"{request.target_url}/api/v1/workload/cpu/status",
                     headers={"Content-Type": "application/json"}
                 )
-                if response.status == 200:
-                    load_generation_state["stats"]["requests_sent"] += 1
-                elif response.status == 400:
-                    # Workload already running, this is expected behavior
-                    pass
+                
+                if status_response.status == 200:
+                    status_data = await status_response.json()
+                    
+                    # If workload is idle, start a new one
+                    if status_data.get("status") == "idle":
+                        workload_data = {
+                            "intensity": min(80, request.intensity),
+                            "duration": 5  # Slightly longer duration for efficiency
+                        }
+                        response = await session.post(
+                            f"{request.target_url}/api/v1/workload/cpu",
+                            json=workload_data,
+                            headers={"Content-Type": "application/json"}
+                        )
+                        if response.status == 200:
+                            load_generation_state["stats"]["requests_sent"] += 1
+                            print(f"Started new CPU workload (intensity: {workload_data['intensity']}%)")
+                        else:
+                            print(f"Failed to start workload: {response.status}")
+                    else:
+                        # Workload already running, count as successful
+                        load_generation_state["stats"]["requests_sent"] += 1
+                        # Only print occasionally to avoid log spam
+                        if load_generation_state["stats"]["requests_sent"] % 10 == 0:
+                            remaining = status_data.get("remaining_time", 0)
+                            print(f"CPU workload active (remaining: {remaining:.1f}s)")
                 else:
-                    print(f"Unexpected response status: {response.status}")
+                    print(f"Failed to check workload status: {status_response.status}")
             except Exception as e:
                 print(f"HTTP request failed: {e}")
             
