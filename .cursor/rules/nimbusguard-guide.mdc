@@ -1,0 +1,49 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# NimbusGuard Development Guide
+
+This rule provides guidance for code generation and development based on the comprehensive project documentation in [README.md](mdc:README.md).
+
+## Project Overview
+NimbusGuard is an AI-powered Kubernetes resilience platform that uses reinforcement learning and LangGraph workflows for proactive scaling and autonomous recovery.
+
+## Key Components to Reference
+When generating code, always refer to these key sections from the README:
+
+1. **Project Structure**: Follow the directory structure defined in [README.md](mdc:README.md) for organizing code files
+2. **Architecture Components**: Ensure new code aligns with the event-driven infrastructure and core AI platform architecture
+3. **Development Phases**: Consider which phase (1, 2, or 3) the code belongs to and implement accordingly
+4. **Technology Stack**: Use the specified versions and libraries listed in the README
+
+## Code Generation Guidelines
+
+### For AI Components
+- Reference the AI Agents Implementation section for agent behavior
+- Follow the Q-Learning and LSTM model configurations
+- Implement observability features as specified
+
+### For Infrastructure Code
+- Follow the Kubernetes manifest structure
+- Implement event-driven architecture patterns
+- Include proper instrumentation and metrics collection
+
+### For Testing
+- Create tests according to the test suite structure
+- Include unit, integration, and e2e tests as appropriate
+
+## Development Workflow
+Use the development commands listed in the README for consistent development practices:
+- `make dev` for development
+- `make test` for testing
+- `make deploy` for deployment
+- `make logs` for monitoring
+
+## Important Notes
+- Always maintain compatibility with the specified technology stack
+- Follow the phase-based implementation approach
+- Include proper documentation and comments
+- Implement observability features as specified
+- Follow the event-driven architecture patterns
