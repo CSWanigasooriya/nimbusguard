@@ -13,9 +13,12 @@ NimbusGuard is an AI-powered Kubernetes resilience platform that delivers proact
 ### One-Command Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/chamathwanigasooriya/nimbusguard.git
+# Clone the repository with submodules
+git clone --recurse-submodules https://github.com/chamathwanigasooriya/nimbusguard.git
 cd nimbusguard
+
+# Or if you already cloned without submodules:
+# git submodule update --init --recursive
 
 # Start complete Kubernetes development environment
 make k8s-dev
@@ -197,7 +200,7 @@ nimbusguard/
 │       ├── workflows/                   # LangGraph workflow definitions
 │       └── mlflow_integration/          # MLflow experiment tracking
 │
-├── kubernetes-manifests/                # Kubernetes deployment manifests
+├── kubernetes-manifests/                # Kubernetes deployment manifests (git submodule)
 │   ├── base/                           # Core platform components
 │   └── components/                     # Additional components
 │       ├── observability/              # Prometheus, Grafana, Tempo, Loki
@@ -291,6 +294,21 @@ make k8s-dev  # Will prompt for new key
 
 # Check operator logs
 kubectl logs -f deployment/langgraph-operator -n nimbusguard
+```
+
+#### Submodule Issues
+```bash
+# If kubernetes-manifests directory is empty or missing files
+git submodule update --init --recursive
+
+# If submodule is out of date
+git submodule update --remote
+
+# Check submodule status
+git submodule status
+
+# If you get "No such file or directory" errors during make k8s-dev
+# it's usually because submodules weren't initialized
 ```
 
 ### Getting Help
