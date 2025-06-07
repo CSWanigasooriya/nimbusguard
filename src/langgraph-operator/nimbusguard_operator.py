@@ -696,8 +696,6 @@ async def startup_handler(settings: kopf.OperatorSettings, **kwargs):
 @kopf.on.cleanup()
 async def cleanup_handler(**kwargs):
     """Clean up on operator shutdown."""
-    global nimbusguard_controller
-    
     if nimbusguard_controller:
         # Save Q-learning model
         try:
@@ -713,8 +711,6 @@ async def cleanup_handler(**kwargs):
 @kopf.on.create('nimbusguard.io', 'v1', 'scalingpolicies')
 async def create_scaling_policy(spec, status, name, namespace, uid, logger, **kwargs):
     """Handle creation of NimbusGuard scaling policies using controller pattern."""
-    global nimbusguard_controller
-    
     if not nimbusguard_controller:
         raise kopf.TemporaryError("Controller not ready", delay=10)
     
@@ -731,8 +727,6 @@ async def create_scaling_policy(spec, status, name, namespace, uid, logger, **kw
 @kopf.on.update('nimbusguard.io', 'v1', 'scalingpolicies')
 async def update_scaling_policy(spec, status, name, namespace, uid, logger, **kwargs):
     """Handle updates to NimbusGuard scaling policies using controller pattern."""
-    global nimbusguard_controller
-    
     if not nimbusguard_controller:
         raise kopf.TemporaryError("Controller not ready", delay=10)
     
@@ -749,8 +743,6 @@ async def update_scaling_policy(spec, status, name, namespace, uid, logger, **kw
 @kopf.on.resume('nimbusguard.io', 'v1', 'scalingpolicies')
 async def resume_scaling_policy(spec, status, name, namespace, uid, logger, **kwargs):
     """Handle resuming of NimbusGuard scaling policies (e.g., operator restart)."""
-    global nimbusguard_controller
-    
     if not nimbusguard_controller:
         raise kopf.TemporaryError("Controller not ready", delay=10)
     
@@ -767,8 +759,6 @@ async def resume_scaling_policy(spec, status, name, namespace, uid, logger, **kw
 @kopf.on.delete('nimbusguard.io', 'v1', 'scalingpolicies')
 async def delete_scaling_policy(spec, name, namespace, logger, **kwargs):
     """Handle deletion of NimbusGuard scaling policies."""
-    global nimbusguard_controller
-    
     if not nimbusguard_controller:
         return  # Controller already shut down
     
@@ -791,8 +781,6 @@ def liveness_probe(**kwargs):
 @kopf.on.probe(id='readiness')
 def readiness_probe(**kwargs):
     """Readiness probe endpoint."""
-    global nimbusguard_controller
-    
     if not nimbusguard_controller:
         raise kopf.TemporaryError("Controller not ready")
     
@@ -802,8 +790,6 @@ def readiness_probe(**kwargs):
 @kopf.on.probe(id='metrics')
 def metrics_probe(**kwargs):
     """Metrics probe endpoint for Prometheus."""
-    global nimbusguard_controller
-    
     try:
         if not nimbusguard_controller:
             return "# Controller not initialized\n"
