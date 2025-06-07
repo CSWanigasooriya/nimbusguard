@@ -1,0 +1,75 @@
+agents:
+  supervisor:
+    model: "gpt-4o-mini"
+    temperature: 0.1
+    max_tokens: 1000
+    timeout: 30
+    retry_attempts: 3
+    
+  state_observer:
+    model: "gpt-4o-mini" 
+    temperature: 0.0  # Deterministic for metric analysis
+    max_tokens: 500
+    timeout: 15
+    observation_interval: 10  # seconds
+    metrics_window: 300  # 5 minutes
+    
+  decision_agent:
+    model: "gpt-4o-mini"
+    temperature: 0.2  # Slight randomness for exploration
+    max_tokens: 800
+    timeout: 20
+    q_learning:
+      learning_rate: 0.1
+      discount_factor: 0.95
+      epsilon_start: 1.0
+      epsilon_end: 0.01
+      epsilon_decay: 0.995
+      exploration_steps: 1000
+      
+  action_executor:
+    model: "gpt-4o-mini"
+    temperature: 0.0  # Deterministic for actions
+    max_tokens: 300
+    timeout: 25
+    kubernetes:
+      dry_run: false
+      backup_replicas: true
+      rollback_timeout: 300
+      
+  reward_calculator:
+    model: "gpt-4o-mini"
+    temperature: 0.1
+    max_tokens: 400
+    timeout: 10
+    rewards:
+      sla_compliance_weight: 0.4
+      resource_efficiency_weight: 0.4  
+      stability_weight: 0.2
+      violation_penalty: -5
+      optimal_reward: 10
+      waste_penalty: -1
+
+scaling:
+  min_replicas: 1
+  max_replicas: 50
+  target_cpu_utilization: 70
+  target_memory_utilization: 80
+  cooldown_period: 300
+  scale_up_factor: 2
+  scale_down_factor: 0.5
+
+mcp_integration:
+  prometheus:
+    server_url: "http://prometheus:9090"
+    timeout: 10
+    max_retries: 3
+  kubernetes:
+    config_path: "~/.kube/config"
+    namespace: "nimbusguard"
+    timeout: 30
+
+logging:
+  level: "INFO"
+  format: "json"
+  structured: true 
