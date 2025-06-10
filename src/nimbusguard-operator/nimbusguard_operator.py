@@ -410,10 +410,10 @@ async def configure(settings: kopf.OperatorSettings, **_):
     
     # Start FastAPI server in background
     import uvicorn
-    config = uvicorn.Config(app, host="0.0.0.0", port=8081, log_level="info")
+    config = uvicorn.Config(app, host="0.0.0.0", port=8090, log_level="info")
     server = uvicorn.Server(config)
     asyncio.create_task(server.serve())
-    LOG.info("FastAPI server starting on port 8081")
+    LOG.info("FastAPI server starting on port 8090")
     
     LOG.info("NimbusGuard operator started successfully")
 

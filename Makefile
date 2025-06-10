@@ -1,4 +1,4 @@
-.PHONY: all help dev k8s-dev clean k8s-clean status forward keda-setup keda-clean stop-forward build-base build-images kopf-dev create-sample-scaling create-operator-secret
+.PHONY: all help dev k8s-dev clean k8s-clean status forward keda-setup keda-clean stop-forward build-base build-images kopf-dev create-sample-scaling create-operator-secret update-operator monitoring-stack monitoring-clean
 
 all: help
 
@@ -24,6 +24,8 @@ help:
 	@echo "  status       - Show service status"
 	@echo "  forward      - Forward ports for local access"
 	@echo "  create-sample-scaling - Create sample scaling config"
+	@echo "  monitoring-stack - Deploy monitoring stack (Prometheus, Loki, Tempo, Grafana)"
+	@echo "  monitoring-clean - Clean monitoring stack"
 
 # Run operator locally with kopf
 kopf-dev:
@@ -129,7 +131,7 @@ k8s-dev: create-operator-secret
 	@make stop-forward
 	@kubectl port-forward -n nimbusguard svc/consumer-workload 8080:8080 > /dev/null 2>&1 & \
 	kubectl port-forward -n nimbusguard svc/load-generator 8081:8081 > /dev/null 2>&1 & \
-	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 8082:8080 > /dev/null 2>&1 & \
+	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 8082:8090 > /dev/null 2>&1 & \
 	sleep 2
 	@echo "   ✅ Environment ready!"
 	@echo ""
@@ -148,7 +150,9 @@ clean:
 k8s-clean: stop-forward
 	@echo "🧹 Cleaning up Kubernetes environment..."
 	@kubectl delete -k kubernetes-manifests/base || true
+	@kubectl delete -k kubernetes-manifests/monitoring || true
 	@kubectl delete namespace nimbusguard || true
+	@kubectl delete namespace monitoring || true
 	@echo "✅ Environment cleaned up!"
 
 # Status Commands
@@ -176,10 +180,10 @@ status:
 # Forward ports
 forward: stop-forward
 	@echo "🔌 Setting up port forwarding..."
-	@for port in 8080 8081 8082 9090; do \
-		if lsof -i :$$port > /dev/null 2>&1; then \
-			echo "Port $$port is already in use. Stopping existing port forward..."; \
-			pkill -f "kubectl port-forward.*:$$port" || true; \
+	@for port in 8080 8081 8082 9090 3000; do \
+		if lsof -i :$port > /dev/null 2>&1; then \
+			echo "Port $port is already in use. Stopping existing port forward..."; \
+			pkill -f "kubectl port-forward.*:$port" || true; \
 			sleep 2; \
 		fi; \
 	done
@@ -191,8 +195,9 @@ forward: stop-forward
 	@echo "   Starting port forwarding..."
 	@kubectl port-forward -n nimbusguard svc/consumer-workload 8080:8080 > /dev/null 2>&1 & \
 	kubectl port-forward -n nimbusguard svc/load-generator 8081:8081 > /dev/null 2>&1 & \
-	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 8082:8080 > /dev/null 2>&1 & \
-	kubectl port-forward -n monitoring svc/prometheus-server 9090:9090 > /dev/null 2>&1 & \
+	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 8082:8090 > /dev/null 2>&1 & \
+	kubectl port-forward -n monitoring svc/prometheus 9090:9090 > /dev/null 2>&1 & \
+	kubectl port-forward -n monitoring svc/grafana 3000:3000 > /dev/null 2>&1 & \
 	sleep 2
 	@echo "✅ Port forwarding started!"
 	@echo ""
@@ -201,3 +206,66 @@ forward: stop-forward
 	@echo "   Load Generator:    http://localhost:8081"
 	@echo "   Operator:          http://localhost:8082"
 	@echo "   Prometheus:        http://localhost:9090 (if monitoring stack deployed)"
+	@echo "   Grafana:           http://localhost:3000 (admin/admin - if monitoring stack deployed)"
+
+# Deploy monitoring stack
+monitoring-stack:
+	@echo "📈 Deploying monitoring stack (Prometheus, Loki, Tempo, Grafana)..."
+	@echo "   Creating monitoring namespace..."
+	@kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+	@echo "   Applying monitoring manifests..."
+	@kubectl apply -k kubernetes-manifests/monitoring
+	@echo "   Waiting for monitoring services to be ready..."
+	@kubectl wait --for=condition=ready pod -l app=prometheus -n monitoring --timeout=300s || echo "⚠️  Prometheus not ready yet"
+	@kubectl wait --for=condition=ready pod -l app=loki -n monitoring --timeout=300s || echo "⚠️  Loki not ready yet"
+	@kubectl wait --for=condition=ready pod -l app=tempo -n monitoring --timeout=300s || echo "⚠️  Tempo not ready yet"
+	@kubectl wait --for=condition=ready pod -l app=grafana -n monitoring --timeout=300s || echo "⚠️  Grafana not ready yet"
+	@echo "✅ Monitoring stack deployed!"
+	@echo ""
+	@echo "📈 Monitoring services will be available after running 'make forward':"
+	@echo "   Prometheus: http://localhost:9090"
+	@echo "   Grafana:    http://localhost:3000 (admin/admin)"
+	@echo "   ℹ️  Loki and Tempo are accessible via Grafana data sources"
+
+# Clean monitoring stack
+monitoring-clean:
+	@echo "🧹 Cleaning monitoring stack..."
+	@kubectl delete -k kubernetes-manifests/monitoring || true
+	@kubectl delete namespace monitoring || true
+	@echo "✅ Monitoring stack cleaned!"
+
+# Helper to create a sample IntelligentScaling resource
+create-sample-scaling:
+	@echo "📝 Creating sample IntelligentScaling resource..."
+	@if [ -f kubernetes-manifests/examples/intelligent-scaling.yaml ]; then \
+		kubectl apply -f kubernetes-manifests/examples/intelligent-scaling.yaml; \
+		echo "✅ Sample IntelligentScaling resources created!"; \
+		echo "   Monitor with: kubectl get intelligentscaling -n nimbusguard"; \
+	else \
+		echo "❌ Example file not found. Please ensure kubernetes-manifests/examples/intelligent-scaling.yaml exists"; \
+	fi
+
+# Update operator with latest changes
+update-operator:
+	@echo "🔄 Updating operator with latest changes..."
+	@echo "🏗️  Rebuilding operator image..."
+	@DOCKER_BUILDKIT=1 docker build \
+		-t nimbusguard/nimbusguard-operator:latest \
+		-f src/nimbusguard-operator/Dockerfile \
+		src/nimbusguard-operator
+	@echo "📝 Applying updated manifests..."
+	@kubectl apply -k kubernetes-manifests/base
+	@echo "🔄 Restarting operator deployment..."
+	@kubectl rollout restart deployment/nimbusguard-operator -n nimbusguard
+	@echo "⏳ Waiting for rollout to complete..."
+	@kubectl rollout status deployment/nimbusguard-operator -n nimbusguard --timeout=300s
+	@echo "🔌 Updating port forwarding..."
+	@make stop-forward
+	@sleep 2
+	@make forward
+	@echo "✅ Operator updated successfully!"
+	@echo ""
+	@echo "🌐 Operator API now available at:"
+	@echo "   Health:  http://localhost:8082/health"
+	@echo "   Ready:   http://localhost:8082/ready"
+	@echo "   Metrics: http://localhost:8082/metrics"
