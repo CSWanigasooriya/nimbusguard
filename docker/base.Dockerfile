@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy all requirements files from services
 COPY src/consumer-workload/requirements.txt /tmp/consumer-requirements.txt
 COPY src/load-generator/requirements.txt /tmp/load-generator-requirements.txt
-COPY src/langgraph-operator/requirements.txt /tmp/langgraph-requirements.txt
+COPY src/nimbusguard-operator/requirements.txt /tmp/langgraph-requirements.txt
 
 # Install ALL dependencies from all services
 RUN --mount=type=cache,target=/root/.cache/pip \
