@@ -1,35 +1,30 @@
-# Existing dependencies
-kubernetes>=23.3.0,<24.0.0
-python-dotenv==1.0.0
-kubecrd==0.4.0
-kr8s==0.3.0
-pykube-ng==23.6.0
-dynaconf==3.2.10
-apischema==0.18.0
-kopf>=1.35.0
-pendulum==3.1.0
-deltaman==0.0.4
+# Core Kopf and Kubernetes
+kopf>=1.37.0
+kubernetes>=28.1.0
+kubernetes-asyncio>=28.1.0
 
-# Prometheus integration
-aiohttp>=3.8.0
-prometheus-client>=0.17.0
+# Async HTTP Client
+aiohttp>=3.9.0
 
-# OpenTelemetry for tracing
-opentelemetry-api>=1.12.0
-opentelemetry-sdk>=1.12.0
-opentelemetry-exporter-otlp>=1.12.0
-opentelemetry-instrumentation-aiohttp-client>=0.33b0
-opentelemetry-instrumentation-requests>=0.41b0
-
-# LangGraph for decision making
-langgraph>=0.0.10
+# AI and LangGraph
+langgraph>=0.0.60
 langchain-core>=0.1.0
-langchain-openai>=0.0.2
+langchain-openai>=0.0.5
+openai>=1.3.0
 
-# Additional utilities
-asyncio-mqtt>=0.13.0  # For potential future Kafka integration
-structlog>=23.1.0     # Better structured logging
+# Monitoring and Observability
+prometheus-client>=0.19.0
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0
+opentelemetry-exporter-otlp>=1.21.0
+opentelemetry-instrumentation-aiohttp-client>=0.42b0
 
-# New dependencies
-fastapi>=0.104.0
-uvicorn>=0.24.0
+# Data Serialization
+pydantic>=2.5.0
+apischema>=0.18.0
+
+# Utilities
+pyyaml>=6.0.1
+python-dateutil>=2.8.2
+typing-extensions>=4.8.0
+requests>=2.31.0

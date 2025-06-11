@@ -40,7 +40,7 @@ make dev           # Docker development environment
 make k8s-dev       # Kubernetes development (recommended)
 ```
 
-### Monitoring Commands
+### Status Commands
 ```bash
 make status        # Show system status with health checks
 make forward       # Setup persistent port forwarding only
@@ -56,7 +56,7 @@ make k8s-clean     # Clean Kubernetes environment
 
 After running `make k8s-dev` or `make status`, access services at:
 
-- **📊 Grafana**: http://localhost:3000 (admin/nimbusguard)
+- **📊 Grafana**: http://localhost:3000 (admin/admin)
 - **🎯 Consumer Workload**: http://localhost:8080
 - **🚀 Load Generator**: http://localhost:8081
 - **🧠 AI Operator**: http://localhost:8082
@@ -97,7 +97,7 @@ curl -X POST "http://localhost:8081/load/generate" \
 ### 4. Monitor AI Decisions
 ```bash
 # Watch AI operator logs
-kubectl logs -f deployment/langgraph-operator -n nimbusguard
+kubectl logs -f deployment/nimbusguard-operator -n nimbusguard
 
 # Check system status
 make status
@@ -118,8 +118,7 @@ NimbusGuard transforms traditional reactive Kubernetes scaling into intelligent,
 - **Kafka**: Event streaming platform for real-time data pipelines
 - **Load Generator**: Configurable service that generates realistic load patterns
 - **Consumer Workload**: FastAPI application that generates resource workloads and consumes scaling events
-- **LangGraph Operator**: Custom Kubernetes operator orchestrating multi-agent AI system
-- **KEDA**: Event-driven autoscaler for Kubernetes workloads
+- **NimbusGuard Operator**: Custom Kubernetes operator orchestrating multi-agent AI system
 
 ## 🤖 AI Agents Implementation
 
@@ -191,20 +190,17 @@ nimbusguard/
 │   │   ├── requirements.txt
 │   │   └── main.py                      # Load generation logic
 │   │
-│   └── langgraph-operator/              # AI-powered Kubernetes operator
+│   └── nimbusguard-operator/            # AI-powered Kubernetes operator
 │       ├── Dockerfile
 │       ├── requirements.txt
 │       ├── nimbusguard_operator.py      # Main operator controller
 │       ├── agents/                      # AI agent implementations
 │       ├── ml_models/                   # Machine learning models
-│       ├── workflows/                   # LangGraph workflow definitions
-│       └── mlflow_integration/          # MLflow experiment tracking
+│       └── workflows/                   # LangGraph workflow definitions
 │
-├── kubernetes-manifests/                # Kubernetes deployment manifests (git submodule)
+├── kubernetes-manifests/                # Kubernetes deployment manifests
 │   ├── base/                           # Core platform components
-│   └── components/                     # Additional components
-│       ├── observability/              # Prometheus, Grafana, Tempo, Loki
-│       └── keda/                       # KEDA autoscaling
+│   └── monitoring/                     # Monitoring stack (Prometheus, Grafana)
 │
 └── monitoring/                         # Monitoring configurations
     ├── dashboards/                     # Grafana dashboards
@@ -256,11 +252,6 @@ target_cpu_utilization: 70
 - **Loki**: Log aggregation
 - **OpenTelemetry**: Observability instrumentation
 
-### Infrastructure
-- **KEDA**: Event-driven autoscaling
-- **Kubernetes HPA**: Horizontal Pod Autoscaler
-- **MLflow**: ML experiment tracking and model registry
-
 ## 🔍 Troubleshooting
 
 ### Common Issues
@@ -271,7 +262,7 @@ target_cpu_utilization: 70
 make status
 
 # Restart port forwarding
-pkill -f "kubectl port-forward.*nimbusguard"
+make stop-forward
 make forward
 ```
 
@@ -293,7 +284,7 @@ kubectl rollout restart deployment/<deployment-name> -n nimbusguard
 make k8s-dev  # Will prompt for new key
 
 # Check operator logs
-kubectl logs -f deployment/langgraph-operator -n nimbusguard
+kubectl logs -f deployment/nimbusguard-operator -n nimbusguard
 ```
 
 #### Submodule Issues
@@ -306,9 +297,6 @@ git submodule update --remote
 
 # Check submodule status
 git submodule status
-
-# If you get "No such file or directory" errors during make k8s-dev
-# it's usually because submodules weren't initialized
 ```
 
 ### Getting Help
@@ -334,7 +322,7 @@ The system is fully operational with the following features:
 1. **Start**: `make k8s-dev` - Complete environment setup
 2. **Monitor**: `make status` - Check system health
 3. **Test**: Use provided curl commands to test scaling scenarios
-4. **Debug**: `kubectl logs -f deployment/langgraph-operator -n nimbusguard`
+4. **Debug**: `kubectl logs -f deployment/nimbusguard-operator -n nimbusguard`
 5. **Cleanup**: `make k8s-clean` - Remove all resources
 
 ### 📈 Performance Metrics
@@ -349,8 +337,6 @@ This project is licensed under the MIT License.
 
 ## 🔗 Related Projects
 
-- [KEDA](https://keda.sh/) - Kubernetes Event-driven Autoscaling
 - [LangGraph](https://github.com/langchain-ai/langgraph) - Multi-agent AI workflows
 - [Prometheus](https://prometheus.io/) - Monitoring and alerting
-- [MLflow](https://mlflow.org/) - ML lifecycle management
 - [OpenTelemetry](https://opentelemetry.io/) - Observability framework

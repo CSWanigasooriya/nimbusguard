@@ -6,7 +6,7 @@ from kafka import KafkaConsumer, errors
 logger = logging.getLogger(__name__)
 
 class ScalingEventConsumer:
-    def __init__(self, topic='scaling-events', bootstrap_servers='kafka:9092', group_id='nimbusguard-consumer'):
+    def __init__(self, topic='scaling-events', bootstrap_servers='kafka:9092', group_id='background-consumer'):
         self.topic = topic
         self.bootstrap_servers = bootstrap_servers
         self.group_id = group_id
