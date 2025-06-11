@@ -21,4 +21,4 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 # Run the operator
-CMD ["python", "nimbusguard_operator.py"] 
+CMD ["kopf", "run", "nimbusguard_operator.py", "--standalone"] 
