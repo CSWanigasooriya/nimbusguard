@@ -1,7 +1,8 @@
-# Core Kopf and Kubernetes
+# Core Kopf and Kubernetes (compatible with kubecrd)
 kopf>=1.37.0
-kubernetes>=28.1.0
-kubernetes-asyncio>=28.1.0
+kubernetes>=23.3.0,<24.0.0
+kubernetes-asyncio>=23.3.0,<24.0.0
+kubecrd>=0.2.0
 
 # Async HTTP Client
 aiohttp>=3.9.0

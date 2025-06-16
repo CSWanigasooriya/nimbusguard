@@ -92,7 +92,6 @@ k8s-dev: install-keda create-operator-secret
 	@echo "   Creating namespaces..."
 	@kubectl create namespace nimbusguard --dry-run=client -o yaml | kubectl apply -f -
 	@kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
-	@echo "   Applying Kubernetes manifests..."
 	@kubectl apply -k kubernetes-manifests/base
 	@echo "   Deploying monitoring stack..."
 	@kubectl apply -k kubernetes-manifests/monitoring

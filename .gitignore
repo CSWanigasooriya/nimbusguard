@@ -185,7 +185,6 @@ cython_debug/
 *.safetensors
 
 # Model artifacts
-models/
 checkpoints/
 saved_models/
 model_artifacts/
