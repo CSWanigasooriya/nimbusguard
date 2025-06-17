@@ -1,7 +1,7 @@
 alloy:
   configMap:
     content: |-
-      // LOGS: Collect container logs from Kubernetes and send to Loki
+     // LOGS: Collect container logs from Kubernetes and send to Loki
       discovery.kubernetes "pods" {
         role = "pod"
       }
@@ -26,7 +26,47 @@ alloy:
         }
       }
 
-      // METRICS: Scrape Prometheus metrics and send to Prometheus
+      // METRICS: Specific Loki metrics scraping
+      discovery.kubernetes "services" {
+        role = "service"
+      }
+
+      discovery.relabel "loki_metrics" {
+        targets = discovery.kubernetes.services.targets
+        
+        rule {
+          source_labels = ["__meta_kubernetes_service_name"]
+          regex = "loki"
+          action = "keep"
+        }
+        
+        rule {
+          source_labels = ["__meta_kubernetes_service_port_name"]
+          regex = "http"
+          action = "keep"
+        }
+        
+        rule {
+          source_labels = ["__address__"]
+          target_label = "__address__"
+          replacement = "${1}:3100"
+        }
+        
+        rule {
+          source_labels = []
+          target_label = "__metrics_path__"
+          replacement = "/metrics"
+        }
+      }
+
+      prometheus.scrape "loki_metrics" {
+        targets = discovery.relabel.loki_metrics.output
+        forward_to = [prometheus.remote_write.default.receiver]
+        scrape_interval = "15s"
+        metrics_path = "/metrics"
+      }
+
+      // METRICS: General Kubernetes metrics scraping
       prometheus.scrape "k8s" {
         targets = discovery.kubernetes.pods.targets
         forward_to = [prometheus.remote_write.default.receiver]
