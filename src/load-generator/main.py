@@ -5,24 +5,25 @@ Load Generator Service for NimbusGuard
 Generates configurable HTTP load and Kafka events to test scaling scenarios.
 """
 
+import asyncio
+import time
+from datetime import datetime
+
+import aiohttp
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
-import asyncio
-import aiohttp
-import json
-import time
-from typing import Dict, Any
-from datetime import datetime
 
 app = FastAPI(title="NimbusGuard Load Generator", version="1.0.0")
+
 
 class LoadGenerationRequest(BaseModel):
     pattern: str  # "constant", "spike", "gradual", "burst"
     duration: int  # seconds
-    target: str   # "http" or "kafka"
+    target: str  # "http" or "kafka"
     intensity: int = 50  # 1-100 scale
     target_url: str = "http://consumer-workload:8080"
+
 
 class LoadGenerationStatus(BaseModel):
     active: bool
@@ -31,6 +32,7 @@ class LoadGenerationStatus(BaseModel):
     remaining: int
     requests_sent: int
 
+
 # Global state
 load_generation_state = {
     "active": False,
@@ -38,26 +40,28 @@ load_generation_state = {
     "stats": {}
 }
 
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "load-generator"}
 
+
 @app.get("/metrics")
 async def metrics():
     """Prometheus metrics endpoint"""
     stats = load_generation_state.get("stats", {})
-    
+
     # Current status metrics
     is_active = 1 if load_generation_state["active"] else 0
     requests_sent = stats.get("requests_sent", 0)
-    
+
     # Calculate current rate if active
     current_rate = 0
     if load_generation_state["active"] and stats:
         elapsed = time.time() - stats.get("start_time", time.time())
         current_rate = requests_sent / max(elapsed, 1)
-    
+
     # Generate Prometheus format metrics
     metrics_output = f"""# HELP load_generator_active Whether load generation is currently active
 # TYPE load_generator_active gauge
@@ -83,15 +87,16 @@ load_generator_duration_seconds {stats.get('duration', 0)}
 # TYPE load_generator_elapsed_seconds gauge
 load_generator_elapsed_seconds {int(time.time() - stats.get('start_time', time.time())) if load_generation_state['active'] else 0}
 """
-    
+
     return Response(content=metrics_output, media_type="text/plain")
+
 
 @app.post("/load/generate")
 async def generate_load(request: LoadGenerationRequest):
     """Start load generation"""
     if load_generation_state["active"]:
         raise HTTPException(status_code=400, detail="Load generation already active")
-    
+
     # Start load generation task
     task = asyncio.create_task(run_load_generation(request))
     load_generation_state["active"] = True
@@ -102,8 +107,9 @@ async def generate_load(request: LoadGenerationRequest):
         "duration": request.duration,
         "requests_sent": 0
     }
-    
+
     return {"status": "started", "pattern": request.pattern, "duration": request.duration}
+
 
 @app.get("/load/status")
 async def get_load_status() -> LoadGenerationStatus:
@@ -116,11 +122,11 @@ async def get_load_status() -> LoadGenerationStatus:
             remaining=0,
             requests_sent=0
         )
-    
+
     stats = load_generation_state["stats"]
     elapsed = int(time.time() - stats["start_time"])
     remaining = max(0, stats["duration"] - elapsed)
-    
+
     return LoadGenerationStatus(
         active=True,
         pattern=stats["pattern"],
@@ -129,24 +135,26 @@ async def get_load_status() -> LoadGenerationStatus:
         requests_sent=stats["requests_sent"]
     )
 
+
 @app.post("/load/stop")
 async def stop_load():
     """Stop active load generation"""
     if not load_generation_state["active"]:
         raise HTTPException(status_code=400, detail="No active load generation")
-    
+
     if load_generation_state["task"]:
         load_generation_state["task"].cancel()
-    
+
     load_generation_state["active"] = False
     load_generation_state["task"] = None
-    
+
     return {"status": "stopped"}
+
 
 async def run_load_generation(request: LoadGenerationRequest):
     """Execute load generation based on pattern"""
     start_time = time.time()
-    
+
     try:
         if request.target == "http":
             await generate_http_load(request, start_time)
@@ -162,13 +170,14 @@ async def run_load_generation(request: LoadGenerationRequest):
         load_generation_state["active"] = False
         load_generation_state["task"] = None
 
+
 async def generate_http_load(request: LoadGenerationRequest, start_time: float):
     """Generate HTTP load to consumer workload"""
     async with aiohttp.ClientSession() as session:
         while time.time() - start_time < request.duration:
             elapsed = time.time() - start_time
             progress = elapsed / request.duration
-            
+
             # Calculate request rate based on pattern
             if request.pattern == "constant":
                 requests_per_second = request.intensity / 10
@@ -189,20 +198,20 @@ async def generate_http_load(request: LoadGenerationRequest, start_time: float):
                     requests_per_second = request.intensity / 30
             else:
                 requests_per_second = request.intensity / 10
-            
+
             # Send requests
             delay = 1.0 / max(requests_per_second, 0.1)
-            
+
             try:
                 # First check if workload is already running
                 status_response = await session.get(
                     f"{request.target_url}/api/v1/workload/cpu/status",
                     headers={"Content-Type": "application/json"}
                 )
-                
+
                 if status_response.status == 200:
                     status_data = await status_response.json()
-                    
+
                     # If workload is idle, start a new one
                     if status_data.get("status") == "idle":
                         workload_data = {
@@ -230,8 +239,9 @@ async def generate_http_load(request: LoadGenerationRequest, start_time: float):
                     print(f"Failed to check workload status: {status_response.status}")
             except Exception as e:
                 print(f"HTTP request failed: {e}")
-            
+
             await asyncio.sleep(delay)
+
 
 async def generate_kafka_events(request: LoadGenerationRequest, start_time: float):
     """Generate Kafka scaling events"""
@@ -240,7 +250,7 @@ async def generate_kafka_events(request: LoadGenerationRequest, start_time: floa
     async with aiohttp.ClientSession() as session:
         while time.time() - start_time < request.duration:
             elapsed = time.time() - start_time
-            
+
             # Generate scaling event
             event_data = {
                 "event_type": "resource_pressure",
@@ -252,7 +262,7 @@ async def generate_kafka_events(request: LoadGenerationRequest, start_time: floa
                     "request_rate": request.intensity * 2
                 }
             }
-            
+
             try:
                 await session.post(
                     f"{request.target_url}/api/v1/events/trigger",
@@ -262,9 +272,11 @@ async def generate_kafka_events(request: LoadGenerationRequest, start_time: floa
                 load_generation_state["stats"]["requests_sent"] += 1
             except Exception as e:
                 print(f"Kafka event failed: {e}")
-            
+
             await asyncio.sleep(2)  # Event every 2 seconds
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8081) 
+
+    uvicorn.run(app, host="0.0.0.0", port=8081)
