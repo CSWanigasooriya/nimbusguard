@@ -68,6 +68,40 @@ install-keda:
 # Reinstall KEDA with correct version
 reinstall-keda: uninstall-keda install-keda
 
+# Uninstall Alloy
+uninstall-alloy:
+	@echo "🗑️  Uninstalling old Alloy..."
+	@helm uninstall alloy -n monitoring 2>/dev/null || true
+	@kubectl delete namespace monitoring --ignore-not-found=true
+	@echo "⏳ Waiting for cleanup..."
+	@sleep 10
+	@echo "✅ Alloy uninstalled!"
+
+# Install Alloy (using Helm)
+install-alloy:
+	@echo "🚀 Installing Grafana Alloy..."
+	@helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true
+	@helm repo update
+	@helm upgrade --install alloy grafana/alloy \
+		--namespace monitoring \
+		--create-namespace \
+		--wait \
+		--timeout 300s \
+		-f helm/values-alloy.yaml
+	@echo "⏳ Waiting for Alloy to be ready..."
+	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=alloy -n monitoring --timeout=300s
+	@echo "✅ Alloy installed successfully!"
+
+# Reinstall Alloy with correct version
+reinstall-alloy: uninstall-alloy install-alloy
+
+# Reset Kubernetes resources
+reset-k8s-resources:
+	@echo "🗑️  Deleting all resources from base and monitoring kustomize..."
+	@kubectl delete -k kubernetes-manifests/base || true
+	@kubectl delete -k kubernetes-manifests/monitoring || true
+	@echo "✅ All resources deleted!"
+
 # Kubernetes Development
 k8s-dev: install-keda create-operator-secret
 	@echo "🚀 Starting Kubernetes development environment..."
@@ -92,6 +126,12 @@ k8s-dev: install-keda create-operator-secret
 	@echo "   Creating namespaces..."
 	@kubectl create namespace nimbusguard --dry-run=client -o yaml | kubectl apply -f -
 	@kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+	@echo "   Installing Alloy if not present..."
+	@if ! helm status alloy -n monitoring > /dev/null 2>&1; then \
+		$(MAKE) install-alloy; \
+	else \
+		echo "✅ Alloy already installed."; \
+	fi
 	@echo "   Applying Kubernetes manifests..."
 	@kubectl apply -k kubernetes-manifests/base
 	@echo "   Deploying monitoring stack..."
