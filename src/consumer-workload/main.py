@@ -1,20 +1,22 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-import logging
 import json
+import logging
 import os
-from typing import Dict, Any
 from datetime import datetime
 
-from api.workload_endpoints import router as workload_router
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 from api.event_endpoints import router as event_router
-from api.metrics_endpoints import router as metrics_router
 from api.health_endpoints import router as health_router
+from api.metrics_endpoints import router as metrics_router
+from api.workload_endpoints import router as workload_router
 from consumers.scaling_event_consumer import ScalingEventConsumer
+
 
 class JSONFormatter(logging.Formatter):
     """Custom JSON formatter for structured logging"""
+
     def format(self, record):
         log_record = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -25,16 +27,17 @@ class JSONFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno
         }
-        
+
         # Add extra fields if they exist
         if hasattr(record, 'extra'):
             log_record.update(record.extra)
-            
+
         # Add exception info if it exists
         if record.exc_info:
             log_record['exception'] = self.formatException(record.exc_info)
-            
+
         return json.dumps(log_record)
+
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -49,16 +52,16 @@ try:
     # Test if we can write to the log file directory
     os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
     file_handler = logging.FileHandler(log_file_path)
-    
+
     # Create formatters and add it to handlers
     json_formatter = JSONFormatter()
     file_handler.setFormatter(json_formatter)
     console_handler.setFormatter(json_formatter)
-    
+
     # Add handlers to the logger
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
-    
+
     logger.info(f"Logging to file: {log_file_path}")
 except (OSError, PermissionError) as e:
     # If we can't write to file, just use console logging
@@ -98,13 +101,16 @@ app.include_router(health_router)
 
 scaling_event_consumer = ScalingEventConsumer()
 
+
 @app.on_event("startup")
 def start_kafka_consumer():
     scaling_event_consumer.start()
 
+
 @app.on_event("shutdown")
 def stop_kafka_consumer():
     scaling_event_consumer.stop()
+
 
 # Health endpoints are now handled by health_router
 
@@ -115,4 +121,4 @@ if __name__ == "__main__":
         port=8080,
         reload=True,
         log_level="info"
-    ) 
+    )
