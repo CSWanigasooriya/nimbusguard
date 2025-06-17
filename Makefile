@@ -132,8 +132,10 @@ k8s-dev: install-keda create-operator-secret
 	else \
 		echo "✅ Alloy already installed."; \
 	fi
-	@echo "   Applying Kubernetes manifests..."
+	@echo "   Applying Kubernetes manifests (base: CRDs only)..."
 	@kubectl apply -k kubernetes-manifests/base
+	@echo "   Applying Kubernetes manifests (components: core workloads)..."
+	@kubectl apply -k kubernetes-manifests/components
 	@echo "   Deploying monitoring stack..."
 	@kubectl apply -k kubernetes-manifests/monitoring
 	@echo "   Waiting for pods to be ready..."
