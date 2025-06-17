@@ -1,0 +1,77 @@
+alloy:
+  configMap:
+    content: |-
+      // LOGS: Collect container logs from Kubernetes and send to Loki
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      loki.source.kubernetes "pods" {
+        targets = discovery.kubernetes.pods.targets
+        forward_to = [loki.process.k8s_labels.receiver]
+      }
+
+      loki.process "k8s_labels" {
+        stage.static_labels {
+          values = {
+            cluster = "nimbusguard",
+          }
+        }
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }
+
+      // METRICS: Scrape Prometheus metrics and send to Prometheus
+      prometheus.scrape "k8s" {
+        targets = discovery.kubernetes.pods.targets
+        forward_to = [prometheus.remote_write.default.receiver]
+      }
+
+      prometheus.remote_write "default" {
+        endpoint {
+          url = "http://prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
+        }
+      }
+
+      // TRACES: Receive OTLP traces and send to Tempo
+      otelcol.receiver.otlp "default" {
+        grpc {
+          endpoint = "0.0.0.0:4317"
+        }
+        http {
+          endpoint = "0.0.0.0:4318"
+        }
+        output {
+          traces = [otelcol.processor.k8sattributes.default.input]
+        }
+      }
+
+      otelcol.processor.k8sattributes "default" {
+        passthrough = false
+        extract {
+          metadata = ["k8s.pod.name", "k8s.namespace.name", "k8s.deployment.name"]
+        }
+        output {
+          traces = [otelcol.processor.batch.default.input]
+        }
+      }
+
+      otelcol.processor.batch "default" {
+        output {
+          traces = [otelcol.exporter.otlp.tempo.input]
+        }
+      }
+
+      otelcol.exporter.otlp "tempo" {
+        client {
+          endpoint = "tempo.monitoring.svc.cluster.local:4317"
+          tls {
+            insecure = true
+          }
+        }
+      }
