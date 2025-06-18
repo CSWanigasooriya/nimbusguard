@@ -150,7 +150,7 @@ k8s-dev: install-keda create-operator-secret
 	@make stop-forward
 	@kubectl port-forward -n nimbusguard svc/consumer-workload 8080:8080 > /dev/null 2>&1 & \
 	kubectl port-forward -n nimbusguard svc/load-generator 8081:8081 > /dev/null 2>&1 & \
-	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 8090:8090 > /dev/null 2>&1 & \
+	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 9080:9080 > /dev/null 2>&1 & \
 	kubectl port-forward -n monitoring svc/prometheus 9090:9090 > /dev/null 2>&1 & \
 	kubectl port-forward -n monitoring svc/grafana 3000:3000 > /dev/null 2>&1 & \
 	sleep 2
@@ -159,7 +159,7 @@ k8s-dev: install-keda create-operator-secret
 	@echo "   Services available at:"
 	@echo "   Consumer Workload: http://localhost:8080"
 	@echo "   Load Generator:    http://localhost:8081"
-	@echo "   Operator:          http://localhost:8090"
+	@echo "   Operator:          http://localhost:9080"
 	@echo "   Prometheus:        http://localhost:9090"
 	@echo "   Grafana:           http://localhost:3000 (admin/admin)"
 
@@ -168,13 +168,13 @@ forward:
 	@echo "🔀 Setting up port forwarding for all services..."
 	@kubectl port-forward -n nimbusguard svc/consumer-workload 8080:8080 > /dev/null 2>&1 & \
 	kubectl port-forward -n nimbusguard svc/load-generator 8081:8081 > /dev/null 2>&1 & \
-	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 8090:8090 > /dev/null 2>&1 & \
+	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 9080:9080 > /dev/null 2>&1 & \
 	kubectl port-forward -n monitoring svc/prometheus 9090:9090 > /dev/null 2>&1 & \
 	kubectl port-forward -n monitoring svc/grafana 3000:3000 > /dev/null 2>&1 & \
 	sleep 2
 	@echo "   ✅ Port forwarding ready!"
 	@echo "   Consumer Workload: http://localhost:8080"
 	@echo "   Load Generator:    http://localhost:8081"
-	@echo "   Operator:          http://localhost:8090"
+	@echo "   Operator:          http://localhost:9080"
 	@echo "   Prometheus:        http://localhost:9090"
 	@echo "   Grafana:           http://localhost:3000 (admin/admin)"
