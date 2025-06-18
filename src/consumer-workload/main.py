@@ -12,7 +12,9 @@ from api.health_endpoints import router as health_router
 from api.metrics_endpoints import router as metrics_router
 from api.workload_endpoints import router as workload_router
 from consumers.scaling_event_consumer import ScalingEventConsumer
+from tracing import setup_tracing
 
+setup_tracing()
 
 class JSONFormatter(logging.Formatter):
     """Custom JSON formatter for structured logging"""

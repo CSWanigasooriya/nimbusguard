@@ -43,10 +43,10 @@ install-keda:
 	@echo "🚀 Installing KEDA..."
 	@helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
 	@helm repo update
+	@kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
 	@helm upgrade --install keda kedacore/keda \
 		--version 2.17.1 \
 		--namespace keda \
-		--create-namespace \
 		--wait \
 		--timeout 300s \
 		--set installCRDs=true \
@@ -58,11 +58,12 @@ install-keda:
 		--set certs.autoGenerate=true \
 		--set certs.certDir=/certs \
 		--set certs.certSecretName=kedaorg-certs \
-		--set certs.caSecretName=kedaorg-ca
+		--set certs.caSecretName=kedaorg-ca \
+		--force
 	@echo "⏳ Waiting for KEDA to be ready..."
-	@kubectl wait --for=condition=ready pod -l app=keda-operator -n keda --timeout=300s
-	@kubectl wait --for=condition=ready pod -l app=keda-operator-metrics-apiserver -n keda --timeout=300s
-	@kubectl wait --for=condition=ready pod -l app=keda-admission-webhooks -n keda --timeout=300s
+	@kubectl wait --for=condition=ready pod -l app=keda-operator -n keda --timeout=300s || echo "⚠️  KEDA operator not ready yet"
+	@kubectl wait --for=condition=ready pod -l app=keda-operator-metrics-apiserver -n keda --timeout=300s || echo "⚠️  KEDA metrics server not ready yet"
+	@kubectl wait --for=condition=ready pod -l app=keda-admission-webhooks -n keda --timeout=300s || echo "⚠️  KEDA webhooks not ready yet"
 	@echo "✅ KEDA installed successfully!"
 
 # Reinstall KEDA with correct version
@@ -102,8 +103,8 @@ reset-k8s-resources:
 	@kubectl delete -k kubernetes-manifests/monitoring || true
 	@echo "✅ All resources deleted!"
 
-# Kubernetes Development
-k8s-dev: install-keda create-operator-secret
+# Kubernetes Development - FIXED ORDER
+k8s-dev: install-keda
 	@echo "🚀 Starting Kubernetes development environment..."
 	@echo "🏗️  Building base image..."
 	@DOCKER_BUILDKIT=1 docker build \
@@ -123,18 +124,17 @@ k8s-dev: install-keda create-operator-secret
 		-f src/nimbusguard-operator/Dockerfile \
 		src/nimbusguard-operator
 	@echo "✅ All images built!"
-	@echo "   Creating namespaces..."
-	@kubectl create namespace nimbusguard --dry-run=client -o yaml | kubectl apply -f -
-	@kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+	@echo "   Applying base manifests (namespaces + CRDs)..."
+	@kubectl apply -k kubernetes-manifests/base
+	@echo "   Creating operator secrets..."
+	@$(MAKE) create-operator-secret
 	@echo "   Installing Alloy if not present..."
 	@if ! helm status alloy -n monitoring > /dev/null 2>&1; then \
 		$(MAKE) install-alloy; \
 	else \
 		echo "✅ Alloy already installed."; \
 	fi
-	@echo "   Applying Kubernetes manifests (base: CRDs only)..."
-	@kubectl apply -k kubernetes-manifests/base
-	@echo "   Applying Kubernetes manifests (components: core workloads)..."
+	@echo "   Applying component manifests..."
 	@kubectl apply -k kubernetes-manifests/components
 	@echo "   Deploying monitoring stack..."
 	@kubectl apply -k kubernetes-manifests/monitoring

@@ -1,7 +1,7 @@
 alloy:
   configMap:
     content: |-
-     // LOGS: Collect container logs from Kubernetes and send to Loki
+      // LOGS: Collect container logs from Kubernetes and send to Loki
       discovery.kubernetes "pods" {
         role = "pod"
       }
@@ -17,6 +17,18 @@ alloy:
             cluster = "nimbusguard",
           }
         }
+        
+        // Extract trace IDs from logs for correlation
+        stage.regex {
+          expression = ".*traceID=(?P<trace_id>\\w+).*"
+        }
+        
+        stage.labels {
+          values = {
+            trace_id = "",
+          }
+        }
+        
         forward_to = [loki.write.default.receiver]
       }
 
@@ -26,52 +38,135 @@ alloy:
         }
       }
 
-      // METRICS: Specific Loki metrics scraping
+      // METRICS: Alloy does ALL the scraping, sends everything to Prometheus via remote_write
       discovery.kubernetes "services" {
         role = "service"
       }
 
-      discovery.relabel "loki_metrics" {
+      discovery.kubernetes "pods_for_metrics" {
+        role = "pod"
+      }
+
+      // Scrape ALL monitoring services (including Prometheus itself)
+      discovery.relabel "monitoring_services" {
         targets = discovery.kubernetes.services.targets
         
         rule {
-          source_labels = ["__meta_kubernetes_service_name"]
-          regex = "loki"
+          source_labels = ["__meta_kubernetes_service_annotation_prometheus_io_scrape"]
+          regex = "true"
           action = "keep"
         }
         
         rule {
-          source_labels = ["__meta_kubernetes_service_port_name"]
-          regex = "http"
+          source_labels = ["__meta_kubernetes_namespace"]
+          regex = "monitoring"
           action = "keep"
         }
         
         rule {
-          source_labels = ["__address__"]
-          target_label = "__address__"
-          replacement = "${1}:3100"
+          source_labels = ["__meta_kubernetes_service_annotation_prometheus_io_path"]
+          action = "replace"
+          target_label = "__metrics_path__"
+          regex = "(.+)"
+          replacement = "${1}"
         }
         
         rule {
-          source_labels = []
+          source_labels = ["__meta_kubernetes_service_annotation_prometheus_io_path"]
+          regex = ""
+          action = "replace"
           target_label = "__metrics_path__"
           replacement = "/metrics"
         }
+        
+        rule {
+          source_labels = ["__address__", "__meta_kubernetes_service_annotation_prometheus_io_port"]
+          action = "replace"
+          regex = "([^:]+)(?::\\d+)?;(\\d+)"
+          replacement = "${1}:${2}"
+          target_label = "__address__"
+        }
+        
+        rule {
+          source_labels = ["__meta_kubernetes_service_name"]
+          action = "replace"
+          target_label = "job"
+        }
+        
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          action = "replace"
+          target_label = "namespace"
+        }
       }
 
-      prometheus.scrape "loki_metrics" {
-        targets = discovery.relabel.loki_metrics.output
+      prometheus.scrape "monitoring_services" {
+        targets = discovery.relabel.monitoring_services.output
         forward_to = [prometheus.remote_write.default.receiver]
         scrape_interval = "15s"
-        metrics_path = "/metrics"
       }
 
-      // METRICS: General Kubernetes metrics scraping
-      prometheus.scrape "k8s" {
-        targets = discovery.kubernetes.pods.targets
+      // Scrape application pods with prometheus.io/scrape annotation
+      discovery.relabel "app_pods" {
+        targets = discovery.kubernetes.pods_for_metrics.targets
+        
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"]
+          regex = "true"
+          action = "keep"
+        }
+        
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_path"]
+          action = "replace"
+          target_label = "__metrics_path__"
+          regex = "(.+)"
+          replacement = "${1}"
+        }
+        
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_path"]
+          regex = ""
+          action = "replace"
+          target_label = "__metrics_path__"
+          replacement = "/metrics"
+        }
+        
+        rule {
+          source_labels = ["__address__", "__meta_kubernetes_pod_annotation_prometheus_io_port"]
+          action = "replace"
+          regex = "([^:]+)(?::\\d+)?;(\\d+)"
+          replacement = "${1}:${2}"
+          target_label = "__address__"
+        }
+        
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          action = "replace"
+          target_label = "pod"
+        }
+        
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          action = "replace"
+          target_label = "namespace"
+        }
+        
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          action = "replace"
+          target_label = "job"
+          replacement = "${1}"
+        }
+      }
+
+      prometheus.scrape "app_pods" {
+        targets = discovery.relabel.app_pods.output
         forward_to = [prometheus.remote_write.default.receiver]
+        scrape_interval = "15s"
       }
 
+      // Send all metrics to Prometheus via remote_write
       prometheus.remote_write "default" {
         endpoint {
           url = "http://prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
@@ -94,7 +189,13 @@ alloy:
       otelcol.processor.k8sattributes "default" {
         passthrough = false
         extract {
-          metadata = ["k8s.pod.name", "k8s.namespace.name", "k8s.deployment.name"]
+          metadata = [
+            "k8s.pod.name", 
+            "k8s.namespace.name", 
+            "k8s.deployment.name",
+            "k8s.container.name",
+            "k8s.node.name",
+          ]
         }
         output {
           traces = [otelcol.processor.batch.default.input]
@@ -102,6 +203,8 @@ alloy:
       }
 
       otelcol.processor.batch "default" {
+        timeout = "1s"
+        send_batch_size = 1024
         output {
           traces = [otelcol.exporter.otlp.tempo.input]
         }
@@ -115,3 +218,20 @@ alloy:
           }
         }
       }
+      
+  # Configure proper service exposure for Alloy's own metrics
+  service:
+    type: ClusterIP
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "12345"
+      prometheus.io/path: "/metrics"
+  
+  # Add proper resource limits
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
