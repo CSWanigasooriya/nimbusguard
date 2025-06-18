@@ -21,4 +21,4 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 # Run the operator
-CMD ["kopf", "run", "nimbusguard_operator.py", "--standalone"] 
+CMD ["kopf", "run", "--standalone", "--liveness=http://0.0.0.0:9080/healthz", "--all-namespaces", "main.py"]

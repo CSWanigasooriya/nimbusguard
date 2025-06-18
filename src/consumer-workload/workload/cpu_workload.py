@@ -52,7 +52,7 @@ class CPUWorkloadGenerator:
             elapsed = time.time() - self._start_time
             # Calculate current target using exponential growth
             current_target = self._initial_usage + (target_usage - self._initial_usage) * (
-                        1 - math.exp(-3 * elapsed / duration))
+                    1 - math.exp(-3 * elapsed / duration))
 
             busy_time = current_target / 100.0
             idle_time = 1.0 - busy_time
