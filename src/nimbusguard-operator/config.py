@@ -28,6 +28,11 @@ def setup_logging():
 # This dictionary tracks the real-time health of various operator components.
 health_status = {
     "kubernetes": True,
+    "prometheus": False,  # Updated by PrometheusClient
+    "tempo": False,       # Updated by TempoClient
+    "loki": False,        # Updated by LokiClient
     "openai": bool(os.getenv("OPENAI_API_KEY")), # Maintained from original logic
-    "decision_engine": True
+    "ml_decision_engine": False,  # Updated by DQN Agent
+    "decision_engine": True,
+    "observability_collector": True
 }
