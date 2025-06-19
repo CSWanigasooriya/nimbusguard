@@ -6,11 +6,12 @@
 import asyncio
 import logging
 import re
-from typing import Optional, Dict, List, Any
+from collections import defaultdict
 from datetime import datetime, timedelta
+from typing import Dict, List
+
 import aiohttp
 import numpy as np
-from collections import defaultdict, Counter
 
 from config import health_status
 

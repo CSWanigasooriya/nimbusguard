@@ -1,38 +1,37 @@
-# engine/ml/dqn_agent.py
+# engine/ml/dqn_agent.py - Optimized with model compatibility checks
 # ============================================================================
 # DQN Agent for Kubernetes Autoscaling
 # ============================================================================
 
-import os
-import time
-import random
 import logging
-from typing import Dict, Any, Optional, Tuple, List
+import os
+import random
+import time
 from collections import deque
+from typing import Dict, Any, Optional, Tuple
+
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
 
-from .dqn_model import DQNModel, DoubleDQNModel, PrioritizedReplayBuffer
-from .state_representation import EnvironmentState, ScalingActions
+from .dqn_model import DoubleDQNModel, PrioritizedReplayBuffer
 from .reward_system import RewardSystem, RewardComponents
+from .state_representation import EnvironmentState, ScalingActions
 
 LOG = logging.getLogger(__name__)
 
+
 class DQNAgent:
     """
-    DQN Agent for intelligent Kubernetes autoscaling.
-    
-    Integrates with your existing observability stack to make scaling decisions.
+    DQN Agent for intelligent Kubernetes autoscaling, optimized for a 20-dimensional state.
     """
-    
-    def __init__(self, 
-                 state_dim: int = 43,
+
+    def __init__(self,
+                 state_dim: int = 20,
                  action_dim: int = 5,
                  learning_rate: float = 1e-4,
                  gamma: float = 0.95,
-                 epsilon_start: float = 0.1,  # Start with low exploration in production
+                 epsilon_start: float = 0.1,
                  epsilon_end: float = 0.01,
                  epsilon_decay: float = 0.995,
                  batch_size: int = 32,
@@ -42,22 +41,7 @@ class DQNAgent:
                  model_path: Optional[str] = None):
         """
         Initialize DQN Agent.
-        
-        Args:
-            state_dim: Dimension of state space (43 for your observability features)
-            action_dim: Number of possible actions (5 scaling actions)
-            learning_rate: Learning rate for optimizer
-            gamma: Discount factor for future rewards
-            epsilon_start: Initial exploration rate
-            epsilon_end: Final exploration rate
-            epsilon_decay: Exploration decay rate
-            batch_size: Training batch size
-            memory_size: Replay buffer size
-            target_update_freq: Frequency to update target network
-            device: PyTorch device (auto-detected if None)
-            model_path: Path to pre-trained model (optional)
         """
-        
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.gamma = gamma
@@ -66,308 +50,213 @@ class DQNAgent:
         self.epsilon_decay = epsilon_decay
         self.batch_size = batch_size
         self.target_update_freq = target_update_freq
-        
-        # Device setup
-        if device is None:
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        else:
-            self.device = device
-        
+
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         LOG.info(f"DQN Agent using device: {self.device}")
-        
-        # Initialize networks
+
+        # Initialize networks and dependencies
         self.policy_net = DoubleDQNModel(state_dim, action_dim).to(self.device)
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
-        self.criterion = nn.SmoothL1Loss()
-        
-        # Experience replay
         self.memory = PrioritizedReplayBuffer(memory_size)
-        
-        # Reward system
         self.reward_system = RewardSystem()
-        
-        # Training metrics
-        self.training_step = 0
-        self.episode_rewards = deque(maxlen=100)
-        self.episode_lengths = deque(maxlen=100)
-        self.loss_history = deque(maxlen=1000)
-        
-        # Production metrics
+
+        # Internal trackers
+        self.training_step_count = 0
         self.total_decisions = 0
-        self.successful_decisions = 0
-        self.last_action_time = 0
-        self.recent_states = deque(maxlen=10)  # For experience collection
-        
-        # Load pre-trained model if provided
+        self.loss_history = deque(maxlen=1000)
+
         if model_path and os.path.exists(model_path):
             self.load_model(model_path)
-            LOG.info(f"Loaded pre-trained model from {model_path}")
         else:
-            LOG.info("Initialized DQN Agent with random weights")
-    
-    def select_action(self, 
-                     state: EnvironmentState, 
-                     training: bool = False,
-                     force_valid: bool = True) -> Tuple[ScalingActions, Dict[str, Any]]:
-        """
-        Select scaling action using epsilon-greedy policy.
-        
-        Args:
-            state: Current environment state
-            training: Whether in training mode (affects exploration)
-            force_valid: Whether to ensure action is valid given constraints
-            
-        Returns:
-            Tuple of (selected_action, decision_metadata)
-        """
-        
-        # Convert state to tensor
-        state_tensor = torch.FloatTensor(state.to_dqn_input()).to(self.device)
-        
-        # Get valid actions if constraint enforcement is enabled
+            LOG.info("No pre-trained model found. Initializing DQN Agent with random weights.")
+
+    def select_action(self,
+                      state: EnvironmentState,
+                      training: bool = False,
+                      force_valid: bool = True) -> Tuple[ScalingActions, Dict[str, Any]]:
+        """Selects a scaling action using an epsilon-greedy policy."""
+        state_vector = state.to_dqn_input()
+
+        # Validate state dimensions before processing
+        if len(state_vector) != self.state_dim:
+            LOG.error(f"State dimension mismatch: Expected {self.state_dim}, got {len(state_vector)}")
+            LOG.warning("Falling back to NO_ACTION due to dimension mismatch")
+            return ScalingActions.NO_ACTION, {"error": "state_dimension_mismatch"}
+
+        state_tensor = torch.FloatTensor(state_vector).to(self.device)
         valid_actions = state.get_valid_actions() if force_valid else list(ScalingActions)
-        
+
+        # Initialize action to silence the "might be referenced before assignment" warning
+        # It will always be overwritten in the logic below
+        action = valid_actions[0] if valid_actions else ScalingActions.NO_ACTION
+
         decision_metadata = {
             "timestamp": time.time(),
             "epsilon": self.epsilon,
             "training_mode": training,
             "valid_actions": [action.name for action in valid_actions],
-            "state_health_score": state.health_score,
-            "state_confidence": state.confidence_score
         }
-        
-        # Epsilon-greedy action selection
+
         if training and random.random() < self.epsilon:
-            # Exploration: random valid action
             action = random.choice(valid_actions)
-            decision_metadata["decision_type"] = "exploration"
-            LOG.debug(f"Exploration action selected: {action.name}")
+            decision_metadata["decision_type"] = False  # False for exploration
         else:
-            # Exploitation: best Q-value action
             with torch.no_grad():
                 q_values = self.policy_net.get_q_values(state_tensor)
                 decision_metadata["q_values"] = q_values.cpu().numpy().tolist()
-                
+
                 if force_valid:
-                    # Mask invalid actions
                     valid_indices = [action.value for action in valid_actions]
-                    masked_q_values = torch.full((self.action_dim,), float('-inf'))
-                    masked_q_values[valid_indices] = q_values[0][valid_indices]
+                    masked_q_values = torch.full((1, self.action_dim), float('-inf'), device=self.device)
+                    masked_q_values[0, valid_indices] = q_values[0, valid_indices]
                     action_idx = masked_q_values.argmax().item()
+                    action = ScalingActions(action_idx)
                 else:
                     action_idx = q_values.argmax().item()
-                
-                action = ScalingActions(action_idx)
-                decision_metadata["decision_type"] = "exploitation"
+                    action = ScalingActions(action_idx)
+
+                decision_metadata["decision_type"] = True  # True for exploitation
                 decision_metadata["max_q_value"] = float(q_values.max())
-                LOG.debug(f"Exploitation action selected: {action.name} (Q-value: {q_values.max():.3f})")
-        
-        # Update exploration rate
+
         if training and self.epsilon > self.epsilon_end:
             self.epsilon *= self.epsilon_decay
-        
-        # Update metrics
+
         self.total_decisions += 1
-        self.last_action_time = time.time()
-        
         return action, decision_metadata
-    
-    def store_experience(self, 
-                        state: EnvironmentState,
-                        action: ScalingActions,
-                        reward_components: RewardComponents,
-                        next_state: EnvironmentState,
-                        done: bool = False):
-        """Store experience in replay buffer"""
-        
-        state_vector = state.to_dqn_input()
-        next_state_vector = next_state.to_dqn_input()
-        
-        # Calculate TD error for prioritized replay
+
+    def store_experience(self,
+                         state: EnvironmentState,
+                         action: ScalingActions,
+                         reward_components: RewardComponents,
+                         next_state: EnvironmentState,
+                         done: bool = False):
+        """Calculates TD error and stores the experience in the replay buffer."""
+        state_vec = state.to_dqn_input()
+        next_state_vec = next_state.to_dqn_input()
+
         with torch.no_grad():
-            state_tensor = torch.FloatTensor(state_vector).unsqueeze(0).to(self.device)
-            next_state_tensor = torch.FloatTensor(next_state_vector).unsqueeze(0).to(self.device)
-            
+            state_tensor = torch.FloatTensor(state_vec).unsqueeze(0).to(self.device)
+            next_state_tensor = torch.FloatTensor(next_state_vec).unsqueeze(0).to(self.device)
             current_q = self.policy_net(state_tensor)[0][action.value]
             next_q = self.policy_net.get_target_q_values(next_state_tensor).max(1)[0]
-            target_q = reward_components.total_reward + (self.gamma * next_q * (1 - done))
-            
+            target_q = reward_components.total_reward + (self.gamma * next_q * (1 - int(done)))
             td_error = abs(current_q - target_q).item()
-        
-        self.memory.push(
-            state_vector,
-            action.value,
-            reward_components.total_reward,
-            next_state_vector,
-            done,
-            priority=td_error + 1e-6  # Small epsilon to avoid zero priority
-        )
-        
-        LOG.debug(f"Stored experience: action={action.name}, reward={reward_components.total_reward:.2f}")
-    
+
+        self.memory.push(state_vec, action.value, reward_components.total_reward, next_state_vec, done,
+                         priority=td_error + 1e-6)
+
     def train_step(self) -> Optional[Dict[str, float]]:
-        """
-        Perform one training step if enough experiences are available.
-        
-        Returns:
-            Training metrics or None if not enough data
-        """
-        
-        if len(self.memory) < self.batch_size:
-            return None
-        
-        # Sample batch from replay buffer
+        """Performs one training step by sampling from the replay buffer."""
+        if len(self.memory) < self.batch_size: return None
         batch = self.memory.sample(self.batch_size, beta=0.4)
-        if batch is None:
-            return None
-        
+        if batch is None: return None
+
         states, actions, rewards, next_states, dones, indices, weights = batch
-        
-        # Convert to tensors
         states = torch.FloatTensor(states).to(self.device)
-        actions = torch.LongTensor(actions).to(self.device)
+        actions = torch.LongTensor(actions).unsqueeze(1).to(self.device)
         rewards = torch.FloatTensor(rewards).to(self.device)
         next_states = torch.FloatTensor(next_states).to(self.device)
         dones = torch.BoolTensor(dones).to(self.device)
         weights = torch.FloatTensor(weights).to(self.device)
-        
-        # Current Q values
-        current_q_values = self.policy_net(states).gather(1, actions.unsqueeze(1))
-        
-        # Next Q values from target network
+
+        current_q_values = self.policy_net(states).gather(1, actions)
         with torch.no_grad():
             next_q_values = self.policy_net.get_target_q_values(next_states).max(1)[0]
             target_q_values = rewards + (self.gamma * next_q_values * ~dones)
-        
-        # Calculate loss with importance sampling weights
-        td_errors = current_q_values.squeeze() - target_q_values
+
+        td_errors = target_q_values - current_q_values.squeeze()
         loss = (weights * td_errors.pow(2)).mean()
-        
-        # Optimize
+
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
         self.optimizer.step()
-        
-        # Update priorities
-        new_priorities = np.abs(td_errors.detach().cpu().numpy()) + 1e-6
-        self.memory.update_priorities(indices, new_priorities)
-        
-        # Update target network periodically
-        self.training_step += 1
-        if self.training_step % self.target_update_freq == 0:
+
+        self.memory.update_priorities(indices, np.abs(td_errors.detach().cpu().numpy()) + 1e-6)
+
+        self.training_step_count += 1
+        if self.training_step_count % self.target_update_freq == 0:
             self.policy_net.update_target_network()
-            LOG.info(f"Updated target network at step {self.training_step}")
-        
-        # Track training metrics
-        loss_value = loss.item()
-        self.loss_history.append(loss_value)
-        
-        return {
-            "loss": loss_value,
-            "training_step": self.training_step,
-            "epsilon": self.epsilon,
-            "q_value_mean": current_q_values.mean().item(),
-            "td_error_mean": abs(td_errors).mean().item(),
-            "memory_size": len(self.memory)
-        }
-    
-    def evaluate_decision(self, 
-                         previous_state: EnvironmentState,
-                         action: ScalingActions,
-                         current_state: EnvironmentState,
-                         execution_success: bool = True) -> RewardComponents:
-        """
-        Evaluate a scaling decision and calculate reward.
-        
-        Args:
-            previous_state: State before action
-            action: Action that was taken
-            current_state: State after action
-            execution_success: Whether the action executed successfully
-            
-        Returns:
-            Reward components for the decision
-        """
-        
-        reward_components = self.reward_system.calculate_reward(
-            previous_state, action, current_state, execution_success
-        )
-        
-        if execution_success:
-            self.successful_decisions += 1
-        
-        LOG.info(f"Decision evaluation - Action: {action.name}, "
-                f"Total Reward: {reward_components.total_reward:.2f}")
-        LOG.debug(self.reward_system.get_reward_explanation(reward_components))
-        
-        return reward_components
-    
+            LOG.info(f"Updated target network at step {self.training_step_count}")
+
+        self.loss_history.append(loss.item())
+        return {"loss": loss.item(), "epsilon": self.epsilon}
+
+    def evaluate_decision(self, *args, **kwargs) -> RewardComponents:
+        """Evaluates a scaling decision by calculating its reward."""
+        return self.reward_system.calculate_reward(*args, **kwargs)
+
     def save_model(self, filepath: str):
-        """Save model and agent state"""
-        
+        """Saves the model and agent's state, including config for compatibility checks."""
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         checkpoint = {
             'policy_net_state_dict': self.policy_net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'epsilon': self.epsilon,
-            'training_step': self.training_step,
+            'training_step_count': self.training_step_count,
             'total_decisions': self.total_decisions,
-            'successful_decisions': self.successful_decisions,
+            # --- NEW: Store agent configuration ---
             'agent_config': {
                 'state_dim': self.state_dim,
                 'action_dim': self.action_dim,
                 'gamma': self.gamma,
-                'epsilon_end': self.epsilon_end,
-                'epsilon_decay': self.epsilon_decay,
-                'batch_size': self.batch_size,
-                'target_update_freq': self.target_update_freq
             }
         }
-        
         torch.save(checkpoint, filepath)
         LOG.info(f"DQN Agent saved to {filepath}")
-    
+
     def load_model(self, filepath: str):
-        """Load model and agent state"""
-        
-        checkpoint = torch.load(filepath, map_location=self.device)
-        
-        self.policy_net.load_state_dict(checkpoint['policy_net_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.epsilon = checkpoint.get('epsilon', self.epsilon_end)
-        self.training_step = checkpoint.get('training_step', 0)
-        self.total_decisions = checkpoint.get('total_decisions', 0)
-        self.successful_decisions = checkpoint.get('successful_decisions', 0)
-        
-        # Update target network
-        self.policy_net.update_target_network()
-        
-        LOG.info(f"DQN Agent loaded from {filepath}")
-    
+        """Loads a model and agent's state, now with a compatibility check."""
+        LOG.info(f"Attempting to load model from {filepath}...")
+        try:
+            checkpoint = torch.load(filepath, map_location=self.device)
+        except Exception as e:
+            LOG.error(f"Failed to load model from {filepath}: {e}")
+            LOG.warning("Agent will start with random weights.")
+            return
+
+        # --- Enhanced Compatibility Check ---
+        agent_config = checkpoint.get('agent_config', {})
+        checkpoint_state_dim = agent_config.get('state_dim')
+
+        if checkpoint_state_dim is None:
+            LOG.warning(f"Model checkpoint doesn't contain state_dim. This may be an older model format.")
+            LOG.info(f"Current agent is configured for state_dim={self.state_dim}. Will attempt to load anyway.")
+
+        elif checkpoint_state_dim != self.state_dim:
+            LOG.error(f"MODEL INCOMPATIBLE! Checkpoint has state_dim={checkpoint_state_dim}, "
+                      f"but agent is configured for state_dim={self.state_dim}.")
+            LOG.warning(
+                f"Please delete the old model file ('{filepath}') and restart the operator to train a new model.")
+            LOG.warning("Ignoring incompatible model file. Agent will start with random weights.")
+            return  # IMPORTANT: Abort loading the incompatible model
+
+        # If compatible, proceed with loading the state
+        try:
+            self.policy_net.load_state_dict(checkpoint['policy_net_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            self.epsilon = checkpoint.get('epsilon', self.epsilon_end)
+            self.training_step_count = checkpoint.get('training_step_count', 0)
+            self.total_decisions = checkpoint.get('total_decisions', 0)
+            self.policy_net.update_target_network()
+            LOG.info(f"Successfully loaded and validated compatible model from {filepath}")
+        except Exception as e:
+            LOG.error(f"Error while loading model components: {e}")
+            LOG.warning("Agent will start with random weights.")
+
     def get_performance_metrics(self) -> Dict[str, Any]:
-        """Get current agent performance metrics"""
-        
-        success_rate = (self.successful_decisions / max(self.total_decisions, 1)) * 100
-        avg_loss = np.mean(self.loss_history) if self.loss_history else 0.0
-        
+        """Returns a dictionary of the agent's current performance metrics."""
         return {
             "total_decisions": self.total_decisions,
-            "successful_decisions": self.successful_decisions,
-            "success_rate_percent": success_rate,
             "current_epsilon": self.epsilon,
-            "training_step": self.training_step,
-            "avg_recent_loss": avg_loss,
-            "memory_utilization": len(self.memory) / self.memory.capacity * 100,
-            "last_action_time": self.last_action_time
+            "training_steps": self.training_step_count,
+            "avg_recent_loss": np.mean(self.loss_history) if self.loss_history else 0.0,
+            "memory_utilization_percent": len(self.memory) / self.memory.capacity * 100,
         }
-    
+
     def set_training_mode(self, training: bool):
-        """Set agent to training or evaluation mode"""
-        
-        if training:
-            self.policy_net.train()
-            LOG.info("DQN Agent set to training mode")
-        else:
-            self.policy_net.eval()
-            self.epsilon = self.epsilon_end  # Minimal exploration in production
-            LOG.info("DQN Agent set to evaluation mode")
+        """Sets the agent to training or evaluation mode."""
+        self.policy_net.train(training)
+        if not training:
+            self.epsilon = self.epsilon_end
+        LOG.info(f"DQN Agent set to {'TRAINING' if training else 'EVALUATION'} mode.")

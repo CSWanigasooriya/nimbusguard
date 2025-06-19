@@ -287,8 +287,8 @@ alloy:
 
         // Add external labels for better identification
         external_labels = {
-          cluster = "nimbusguard"
-          collector = "alloy"
+          cluster = "nimbusguard",
+          collector = "alloy",
         }
       }
 
@@ -315,7 +315,7 @@ alloy:
             "k8s.container.name",
             "k8s.node.name",
             "k8s.pod.uid",
-            "k8s.replicaset.name"
+            "k8s.replicaset.name",
           ]
         }
         pod_association {

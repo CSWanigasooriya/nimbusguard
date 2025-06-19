@@ -5,8 +5,9 @@
 
 import asyncio
 import logging
-from typing import Optional, Dict, List, Any
 from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+
 import aiohttp
 import numpy as np
 
