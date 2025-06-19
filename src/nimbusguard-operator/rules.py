@@ -1,4 +1,4 @@
-# engine/rules.py - Corrected to use action history
+# engine/rules.py - Corrected to use action history and proper state dimension
 # ============================================================================
 # DQN-Based Decision Engine
 # ============================================================================
@@ -46,7 +46,7 @@ def make_decision(
         max_replicas: int,
         spec: Dict[str, Any],
         unified_state: Dict[str, Any],
-        recent_actions: List[int]  # --- FIXED: Added parameter to accept action history ---
+        recent_actions: List[int]
 ) -> Dict[str, Any]:
     """
     Uses the DQN agent to make a scaling decision, now considering recent action history.
@@ -116,3 +116,4 @@ def _fallback_to_safety_decision(current_replicas: int, min_replicas: int, max_r
     if target_replicas != current_replicas:
         action = "scale_up" if target_replicas > current_replicas else "scale_down"
     return {"action": action, "target_replicas": target_replicas, "reason": f"Safety Fallback: {reason}"}
+
