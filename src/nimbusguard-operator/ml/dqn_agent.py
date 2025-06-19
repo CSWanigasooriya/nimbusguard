@@ -23,11 +23,11 @@ LOG = logging.getLogger(__name__)
 
 class DQNAgent:
     """
-    DQN Agent for intelligent Kubernetes autoscaling, optimized for a 20-dimensional state.
+    DQN Agent for intelligent Kubernetes autoscaling, optimized for a 11-dimensional state.
     """
 
     def __init__(self,
-                 state_dim: int = 20,
+                 state_dim: int = 11,
                  action_dim: int = 5,
                  learning_rate: float = 1e-4,
                  gamma: float = 0.95,
@@ -195,7 +195,6 @@ class DQNAgent:
             'epsilon': self.epsilon,
             'training_step_count': self.training_step_count,
             'total_decisions': self.total_decisions,
-            # --- NEW: Store agent configuration ---
             'agent_config': {
                 'state_dim': self.state_dim,
                 'action_dim': self.action_dim,

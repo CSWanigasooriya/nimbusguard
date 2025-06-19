@@ -24,13 +24,8 @@ def _initialize_dqn_agent(spec: Dict[str, Any]) -> DQNAgent:
         ml_config = spec.get("ml_config", {})
         model_path = ml_config.get("model_path", "/models/nimbusguard_dqn.pth")
 
-        # --- CRITICAL CHANGE ---
-        # The state dimension is now 7, matching our core feature vector.
-        # We add +4 for current_replicas, min/max replicas, and time since last scale,
-        # if your DQNAgent implementation expects them as part of the input vector.
-        # If the agent only takes the observability features, use state_dim=7.
-        # Let's assume the agent is designed to take the 7 features plus replica info.
-        state_dimension = 7 + 4  # 7 observability features + 4 context features
+        # The state dimension is now 11: 7 observability features + 4 scaling context features
+        state_dimension = 11
 
         _dqn_agent = DQNAgent(
             state_dim=state_dimension,
@@ -63,6 +58,13 @@ def make_decision(
     confidence = unified_state.get("confidence_score", 0.0)
     ml_config = spec.get("ml_config", {})
     confidence_threshold = ml_config.get("confidence_threshold", 0.3)
+
+    # Log metrics availability
+    if "metrics_availability" in unified_state:
+        metrics = unified_state.get("metrics_availability", {})
+        missing_metrics = [k for k, v in metrics.items() if v is False]
+        if missing_metrics:
+            LOG.warning(f"Missing metrics: {', '.join(missing_metrics)}")
 
     if confidence < confidence_threshold:
         reason = f"Observability confidence ({confidence:.2f}) is below threshold ({confidence_threshold})."

@@ -1,4 +1,4 @@
-# engine/handler.py - Optimized for the new 20-feature DQN model
+# engine/handler.py - Optimized for the new 11-feature DQN model
 # ============================================================================
 # Kubernetes Interaction and Orchestration
 # ============================================================================

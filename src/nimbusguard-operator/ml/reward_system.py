@@ -169,6 +169,19 @@ def _calculate_proactivity_reward(action: ScalingActions, state: EnvironmentStat
     return np.clip(reward, -2.0, 5.0)
 
 
+def get_reward_explanation(components: RewardComponents) -> str:
+    """Generate a human-readable explanation of the reward calculation."""
+    return (
+        f"Total Reward: {components.total_reward:.2f}\n"
+        f"  - Performance: {components.performance_reward:.2f}\n"
+        f"  - Efficiency: {components.efficiency_reward:.2f}\n"
+        f"  - Stability: {components.stability_reward:.2f}\n"
+        f"  - SLA Compliance: {components.sla_reward:.2f}\n"
+        f"  - Cost Optimization: {components.cost_reward:.2f}\n"
+        f"  - Proactivity: {components.proactivity_reward:.2f}"
+    )
+
+
 class RewardSystem:
     """
     An encapsulated and configurable reward system that evaluates scaling decisions
@@ -236,7 +249,7 @@ class RewardSystem:
                 self.reward_weights["proactivity"] * proactivity
         )  #
 
-        return RewardComponents(
+        components = RewardComponents(
             performance_reward=performance,
             efficiency_reward=efficiency,
             stability_reward=stability,
@@ -245,6 +258,12 @@ class RewardSystem:
             proactivity_reward=proactivity,
             total_reward=np.clip(total_reward, -50.0, 50.0)
         )
+
+        # Log the reward explanation for better visibility and debugging
+        explanation = get_reward_explanation(components)
+        LOG.info(f"Reward calculation for action {action.name}:\n{explanation}")
+
+        return components
 
     def _calculate_sla_reward(self, state: EnvironmentState) -> float:
         """Reward for meeting Service Level Agreements. Range: -10 to +10."""
@@ -263,14 +282,3 @@ class RewardSystem:
 
         return np.clip(reward, -10.0, 10.0)
 
-    def get_reward_explanation(self, components: RewardComponents) -> str:
-        """Generate a human-readable explanation of the reward calculation."""
-        return (
-            f"Total Reward: {components.total_reward:.2f}\n"
-            f"  - Performance: {components.performance_reward:.2f}\n"
-            f"  - Efficiency: {components.efficiency_reward:.2f}\n"
-            f"  - Stability: {components.stability_reward:.2f}\n"
-            f"  - SLA Compliance: {components.sla_reward:.2f}\n"
-            f"  - Cost Optimization: {components.cost_reward:.2f}\n"
-            f"  - Proactivity: {components.proactivity_reward:.2f}"
-        )
