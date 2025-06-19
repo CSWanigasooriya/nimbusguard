@@ -47,27 +47,27 @@ class TempoClient:
             # Query service graph for the specified service
             end_time = datetime.now()
             start_time = end_time - timedelta(minutes=lookback_minutes)
-            
+
             async with aiohttp.ClientSession(timeout=self.session_timeout) as session:
                 # Tempo's service graph API endpoint
                 async with session.get(
-                    f"{self.url}/api/v2/search",
-                    params={
-                        "service.name": service_name,
-                        "start": int(start_time.timestamp()),
-                        "end": int(end_time.timestamp()),
-                        "limit": 100
-                    }
+                        f"{self.url}/api/v2/search",
+                        params={
+                            "service.name": service_name,
+                            "start": int(start_time.timestamp()),
+                            "end": int(end_time.timestamp()),
+                            "limit": 100
+                        }
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         traces = data.get("traces", [])
-                        
+
                         if traces:
                             latencies = []
                             error_count = 0
                             total_spans = 0
-                            
+
                             for trace in traces:
                                 trace_id = trace.get("traceID", "")
                                 if trace_id:
@@ -78,33 +78,33 @@ class TempoClient:
                                         latencies.extend(span_metrics["latencies"])
                                         error_count += span_metrics["errors"]
                                         total_spans += span_metrics["total_spans"]
-                            
+
                             # Calculate latency percentiles
                             if latencies:
                                 features["service_graph_latency_p50"] = np.percentile(latencies, 50)
                                 features["service_graph_latency_p95"] = np.percentile(latencies, 95)
                                 features["service_graph_latency_p99"] = np.percentile(latencies, 99)
-                            
+
                             # Calculate error rate
                             if total_spans > 0:
                                 features["dependency_error_rate"] = error_count / total_spans
                                 features["dependency_request_rate"] = len(traces) / lookback_minutes
-                                
+
                                 # Calculate bottleneck score (higher latency = higher bottleneck)
                                 if features["service_graph_latency_p95"] > 0:
                                     features["service_bottleneck_score"] = min(
                                         features["service_graph_latency_p95"] / 1000.0, 1.0
                                     )
-                                
+
                                 # Health score (inverse of error rate)
                                 features["dependency_health_score"] = max(
                                     1.0 - features["dependency_error_rate"], 0.0
                                 )
-                        
+
                         health_status["tempo"] = True
                     else:
                         LOG.warning(f"Tempo returned status {resp.status} for service: {service_name}")
-                        
+
         except asyncio.TimeoutError:
             LOG.error(f"Tempo query timed out for service: {service_name}")
             health_status["tempo"] = False
@@ -132,26 +132,26 @@ class TempoClient:
         latencies = []
         errors = 0
         total_spans = 0
-        
+
         # Navigate trace structure - this may vary based on your Tempo configuration
         batches = trace_data.get("batches", [])
         for batch in batches:
             spans = batch.get("resource", {}).get("spans", [])
             for span in spans:
                 total_spans += 1
-                
+
                 # Extract duration (usually in microseconds)
                 start_time = span.get("startTimeUnixNano", 0)
                 end_time = span.get("endTimeUnixNano", 0)
                 if start_time and end_time:
                     duration_ms = (end_time - start_time) / 1_000_000  # Convert to milliseconds
                     latencies.append(duration_ms)
-                
+
                 # Check for errors in span status
                 status = span.get("status", {})
                 if status.get("code") == 2:  # ERROR status code
                     errors += 1
-        
+
         return {
             "latencies": latencies,
             "errors": errors,
@@ -172,20 +172,20 @@ class TempoClient:
             # This is a simplified anomaly detection
             # In production, you'd want to use more sophisticated methods
             current_metrics = await self.get_service_graph_metrics(service_name, lookback_minutes)
-            
+
             # Simple anomaly scoring based on latency thresholds
             p95_latency = current_metrics.get("service_graph_latency_p95", 0)
             if p95_latency > 1000:  # 1 second threshold
                 features["trace_anomaly_score"] = min(p95_latency / 5000.0, 1.0)
                 features["unusual_latency_patterns"] = 1.0
-            
+
             # Volume anomaly (simplified)
             request_rate = current_metrics.get("dependency_request_rate", 0)
             if request_rate > 100:  # requests per minute threshold
                 features["trace_volume_anomaly"] = min(request_rate / 1000.0, 1.0)
-            
+
             health_status["tempo"] = True
-            
+
         except Exception as e:
             LOG.error(f"Error in trace anomaly detection: {e}", exc_info=True)
             health_status["tempo"] = False

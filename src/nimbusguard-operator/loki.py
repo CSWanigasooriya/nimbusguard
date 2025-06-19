@@ -29,7 +29,7 @@ class LokiClient:
         """
         self.url = url.rstrip('/')
         self.session_timeout = aiohttp.ClientTimeout(total=15)
-        
+
         # Common error patterns to detect
         self.error_patterns = {
             "error": re.compile(r'\berror\b|\bfailed\b|\bexception\b', re.IGNORECASE),
@@ -40,7 +40,8 @@ class LokiClient:
             "oom": re.compile(r'\bout of memory\b|\boom\b', re.IGNORECASE),
         }
 
-    async def get_log_analysis_features(self, app_labels: Dict[str, str], lookback_minutes: int = 5) -> Dict[str, float]:
+    async def get_log_analysis_features(self, app_labels: Dict[str, str], lookback_minutes: int = 5) -> Dict[
+        str, float]:
         """
         Analyzes recent logs to extract error patterns and anomaly features.
         """
@@ -57,24 +58,25 @@ class LokiClient:
             label_selector = self._build_label_selector(app_labels)
             end_time = datetime.now()
             start_time = end_time - timedelta(minutes=lookback_minutes)
-            
+
             # Query logs from Loki
             logs = await self._query_loki_logs(label_selector, start_time, end_time)
-            
+
             if logs:
                 features = self._analyze_log_patterns(logs, lookback_minutes)
                 health_status["loki"] = True
             else:
                 LOG.debug(f"No logs found for labels: {app_labels}")
                 health_status["loki"] = True  # Still healthy, just no data
-                
+
         except Exception as e:
             LOG.error(f"Error in log analysis: {e}", exc_info=True)
             health_status["loki"] = False
 
         return features
 
-    async def get_business_kpi_features(self, app_labels: Dict[str, str], lookback_minutes: int = 10) -> Dict[str, float]:
+    async def get_business_kpi_features(self, app_labels: Dict[str, str], lookback_minutes: int = 10) -> Dict[
+        str, float]:
         """
         Extracts business KPI trends from structured logs.
         """
@@ -88,15 +90,15 @@ class LokiClient:
             label_selector = self._build_label_selector(app_labels)
             end_time = datetime.now()
             start_time = end_time - timedelta(minutes=lookback_minutes)
-            
+
             # Query for business-related logs
             business_query = f'{label_selector} |~ "transaction|user|order|payment"'
             logs = await self._query_loki_logs(business_query, start_time, end_time)
-            
+
             if logs:
                 features = self._extract_business_metrics(logs, lookback_minutes)
                 health_status["loki"] = True
-                
+
         except Exception as e:
             LOG.error(f"Error in business KPI analysis: {e}", exc_info=True)
             health_status["loki"] = False
@@ -113,7 +115,7 @@ class LokiClient:
     async def _query_loki_logs(self, query: str, start_time: datetime, end_time: datetime) -> List[Dict]:
         """Executes a LogQL query and returns log entries."""
         logs = []
-        
+
         try:
             async with aiohttp.ClientSession(timeout=self.session_timeout) as session:
                 params = {
@@ -123,16 +125,16 @@ class LokiClient:
                     "limit": 1000,
                     "direction": "backward"
                 }
-                
+
                 async with session.get(f"{self.url}/loki/api/v1/query_range", params=params) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         result = data.get("data", {}).get("result", [])
-                        
+
                         for stream in result:
                             stream_labels = stream.get("stream", {})
                             values = stream.get("values", [])
-                            
+
                             for timestamp_ns, log_line in values:
                                 logs.append({
                                     "timestamp": int(timestamp_ns) // 1_000_000,  # Convert to milliseconds
@@ -141,7 +143,7 @@ class LokiClient:
                                 })
                     else:
                         LOG.warning(f"Loki returned status {resp.status} for query: {query}")
-                        
+
         except asyncio.TimeoutError:
             LOG.error(f"Loki query timed out for: {query}")
             health_status["loki"] = False
@@ -167,16 +169,16 @@ class LokiClient:
         critical_errors = 0
         timeout_errors = 0
         http_errors = 0
-        
+
         # Analyze each log message
         for log_entry in logs:
             message = log_entry.get("message", "").lower()
-            
+
             # Count different types of errors
             for error_type, pattern in self.error_patterns.items():
                 if pattern.search(message):
                     error_counts[error_type] += 1
-                    
+
                     if error_type in ["error", "oom"]:
                         critical_errors += 1
                     elif error_type == "timeout":
@@ -189,7 +191,7 @@ class LokiClient:
         critical_error_rate = critical_errors / total_logs if total_logs > 0 else 0.0
         timeout_error_rate = timeout_errors / total_logs if total_logs > 0 else 0.0
         http_error_rate = http_errors / total_logs if total_logs > 0 else 0.0
-        
+
         # Calculate anomaly score based on error concentrations
         anomaly_score = 0.0
         if total_logs > 10:  # Only calculate if we have sufficient data
@@ -210,15 +212,15 @@ class LokiClient:
         business_events = []
         transaction_errors = 0
         total_transactions = 0
-        
+
         # Business event patterns
         success_pattern = re.compile(r'\bsuccess\b|\bcompleted\b|\bok\b', re.IGNORECASE)
         error_pattern = re.compile(r'\bfailed\b|\berror\b|\brejected\b', re.IGNORECASE)
         transaction_pattern = re.compile(r'\btransaction\b|\border\b|\bpayment\b', re.IGNORECASE)
-        
+
         for log_entry in logs:
             message = log_entry.get("message", "")
-            
+
             if transaction_pattern.search(message):
                 total_transactions += 1
                 if error_pattern.search(message):

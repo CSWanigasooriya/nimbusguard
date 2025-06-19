@@ -1,11 +1,11 @@
-# engine/rules.py - Optimized for a 7-state DQN model
+# engine/rules.py - Corrected to use action history
 # ============================================================================
 # DQN-Based Decision Engine
 # ============================================================================
 
 import logging
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from ml.dqn_agent import DQNAgent
 from ml.state_representation import EnvironmentState
@@ -24,19 +24,17 @@ def _initialize_dqn_agent(spec: Dict[str, Any]) -> DQNAgent:
         ml_config = spec.get("ml_config", {})
         model_path = ml_config.get("model_path", "/models/nimbusguard_dqn.pth")
 
-        # The state dimension is now 11: 7 observability features + 4 scaling context features
         state_dimension = 11
 
         _dqn_agent = DQNAgent(
             state_dim=state_dimension,
-            action_dim=5,  # 5 scaling actions: strong down, down, none, up, strong up
+            action_dim=5,
             epsilon_start=ml_config.get("epsilon_start", 0.1),
             model_path=model_path if os.path.exists(model_path) else None
         )
 
         training_mode = ml_config.get("training_mode", False)
         _dqn_agent.set_training_mode(training_mode)
-
         LOG.info(f"Initialized DQN agent (state_dim={state_dimension}, training_mode={training_mode})")
 
     return _dqn_agent
@@ -47,43 +45,36 @@ def make_decision(
         min_replicas: int,
         max_replicas: int,
         spec: Dict[str, Any],
-        unified_state: Dict[str, Any]
+        unified_state: Dict[str, Any],
+        recent_actions: List[int]  # --- FIXED: Added parameter to accept action history ---
 ) -> Dict[str, Any]:
     """
-    Uses the DQN agent to make a scaling decision based on the 7-feature state.
+    Uses the DQN agent to make a scaling decision, now considering recent action history.
     """
     agent = _initialize_dqn_agent(spec)
 
-    # Check data quality
     confidence = unified_state.get("confidence_score", 0.0)
     ml_config = spec.get("ml_config", {})
     confidence_threshold = ml_config.get("confidence_threshold", 0.3)
-
-    # Log metrics availability
-    if "metrics_availability" in unified_state:
-        metrics = unified_state.get("metrics_availability", {})
-        missing_metrics = [k for k, v in metrics.items() if v is False]
-        if missing_metrics:
-            LOG.warning(f"Missing metrics: {', '.join(missing_metrics)}")
 
     if confidence < confidence_threshold:
         reason = f"Observability confidence ({confidence:.2f}) is below threshold ({confidence_threshold})."
         return _fallback_to_safety_decision(current_replicas, min_replicas, max_replicas, reason)
 
     try:
-        # Create environment state from the new, focused unified_state
+        # Create environment state, now passing the history from the handler
         current_state = EnvironmentState.from_observability_data(
             unified_state=unified_state,
             current_replicas=current_replicas,
             min_replicas=min_replicas,
             max_replicas=max_replicas,
-            # Other context can be added here if the state representation needs it
+            recent_actions=recent_actions
         )
 
         # Get DQN decision
         action, decision_metadata = agent.select_action(
             state=current_state,
-            force_valid=True  # Enforce replica constraints
+            force_valid=True
         )
 
         replica_change = action.get_replica_change()
@@ -95,17 +86,20 @@ def make_decision(
         elif target_replicas < current_replicas:
             action_str = "scale_down"
 
-        # Fix for boolean decision_type - interpret and convert to descriptive string
-        decision_type = decision_metadata.get('decision_type', False)  # Default to False if missing
-        decision_type_str = "automatic" if decision_type else "standard"
-
+        # The agent provides a descriptive decision type ("exploration" or "exploitation")
+        decision_type_str = decision_metadata.get('decision_type', "unknown")
         reason = f"DQN decision: {action.name} ({decision_type_str}) with confidence {confidence:.2f}"
 
         return {
             "action": action_str,
             "target_replicas": target_replicas,
             "reason": reason,
-            # You can add more detailed ml_decision context if needed
+            # Add ML context for logging and for the handler to update its history
+            "ml_decision": {
+                "decision_type": decision_type_str,
+                "action_value": action.value,
+                "q_values": decision_metadata.get("q_values")
+            }
         }
 
     except Exception as e:
@@ -117,14 +111,8 @@ def _fallback_to_safety_decision(current_replicas: int, min_replicas: int, max_r
     str, Any]:
     """Safety fallback to maintain current state, respecting bounds."""
     LOG.warning(f"Using safety fallback decision: {reason}")
-
     target_replicas = max(min_replicas, min(current_replicas, max_replicas))
     action = "none"
     if target_replicas != current_replicas:
         action = "scale_up" if target_replicas > current_replicas else "scale_down"
-
-    return {
-        "action": action,
-        "target_replicas": target_replicas,
-        "reason": f"Safety Fallback: {reason}",
-    }
+    return {"action": action, "target_replicas": target_replicas, "reason": f"Safety Fallback: {reason}"}

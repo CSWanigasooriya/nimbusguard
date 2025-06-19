@@ -140,9 +140,11 @@ class DoubleDQNModel(nn.Module):
         """Get Q-values from the policy network for action selection."""
         # Validate dimensions before passing to policy_net
         if state.dim() == 1 and state.size(0) != self.state_dim:
-            raise ValueError(f"Input state dimension mismatch in DoubleDQNModel: expected {self.state_dim}, got {state.size(0)}")
+            raise ValueError(
+                f"Input state dimension mismatch in DoubleDQNModel: expected {self.state_dim}, got {state.size(0)}")
         elif state.dim() == 2 and state.size(1) != self.state_dim:
-            raise ValueError(f"Input state dimension mismatch in DoubleDQNModel: expected {self.state_dim}, got {state.size(1)}")
+            raise ValueError(
+                f"Input state dimension mismatch in DoubleDQNModel: expected {self.state_dim}, got {state.size(1)}")
 
         return self.policy_net.get_q_values(state)
 
@@ -150,9 +152,11 @@ class DoubleDQNModel(nn.Module):
         """Get Q-values from the stable target network for loss calculation."""
         # Validate dimensions before passing to target_net
         if state.dim() == 1 and state.size(0) != self.state_dim:
-            raise ValueError(f"Input state dimension mismatch in DoubleDQNModel: expected {self.state_dim}, got {state.size(0)}")
+            raise ValueError(
+                f"Input state dimension mismatch in DoubleDQNModel: expected {self.state_dim}, got {state.size(0)}")
         elif state.dim() == 2 and state.size(1) != self.state_dim:
-            raise ValueError(f"Input state dimension mismatch in DoubleDQNModel: expected {self.state_dim}, got {state.size(1)}")
+            raise ValueError(
+                f"Input state dimension mismatch in DoubleDQNModel: expected {self.state_dim}, got {state.size(1)}")
 
         # The target_net is always in eval mode, so no_grad is implicitly handled
         return self.target_net.get_q_values(state)
