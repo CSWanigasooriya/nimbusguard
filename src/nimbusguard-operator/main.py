@@ -66,7 +66,7 @@ async def evaluate_scaling_on_timer(body, name, namespace, **kwargs):
 
 
 @kopf.on.delete('nimbusguard.io', 'v1alpha1', 'intelligentscaling', optional=True)
-async def on_delete(spec, name, namespace, **_):
+async def on_delete(body, name, namespace, **kwargs):
     """Handles cleanup when a resource is deleted."""
     # 'namespace' is now available to be used directly.
     LOG.info(f"IntelligentScaling resource '{name}' in namespace '{namespace}' has been deleted.")
