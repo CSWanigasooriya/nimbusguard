@@ -1,0 +1,383 @@
+alloy:
+  configMap:
+    content: |-
+      // LOGS: Collect container logs from Kubernetes and send to Loki
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      loki.source.kubernetes "pods" {
+        targets = discovery.kubernetes.pods.targets
+        forward_to = [loki.process.k8s_labels.receiver]
+      }
+
+      loki.process "k8s_labels" {
+        stage.static_labels {
+          values = {
+            cluster = "nimbusguard",
+          }
+        }
+        
+        // Extract trace IDs from logs for correlation
+        stage.regex {
+          expression = ".*traceID=(?P<trace_id>\\w+).*"
+        }
+        
+        stage.labels {
+          values = {
+            trace_id = "",
+          }
+        }
+        
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }
+
+      // METRICS: Enhanced scraping for DQN feature requirements
+
+      // 1. Kubernetes state metrics (for pod/node health)
+      discovery.kubernetes "nodes" {
+        role = "node"
+      }
+
+      discovery.kubernetes "services" {
+        role = "service"
+      }
+
+      discovery.kubernetes "pods_for_metrics" {
+        role = "pod"
+      }
+
+      discovery.kubernetes "endpoints" {
+        role = "endpoints"
+      }
+
+      // 2. Node Exporter metrics (system-level features)
+      discovery.relabel "node_exporter" {
+        targets = discovery.kubernetes.endpoints.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_service_name"]
+          regex = "node-exporter"
+          action = "keep"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_endpoint_port_name"]
+          regex = "metrics"
+          action = "keep"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          action = "replace"
+          target_label = "namespace"
+        }
+      }
+
+      prometheus.scrape "node_exporter" {
+        targets = discovery.relabel.node_exporter.output
+        forward_to = [prometheus.remote_write.default.receiver]
+        scrape_interval = "15s"
+        job_name = "node-exporter"
+      }
+
+      // 3. kube-state-metrics (Kubernetes resource state)
+      discovery.relabel "kube_state_metrics" {
+        targets = discovery.kubernetes.endpoints.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_service_name"]
+          regex = "kube-state-metrics"
+          action = "keep"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_endpoint_port_name"]
+          regex = "http-metrics"
+          action = "keep"
+        }
+      }
+
+      prometheus.scrape "kube_state_metrics" {
+        targets = discovery.relabel.kube_state_metrics.output
+        forward_to = [prometheus.remote_write.default.receiver]
+        scrape_interval = "15s"
+        job_name = "kube-state-metrics"
+      }
+
+      // 4. cAdvisor metrics (container-level metrics)
+      discovery.relabel "cadvisor" {
+        targets = discovery.kubernetes.nodes.targets
+
+        rule {
+          source_labels = ["__address__"]
+          regex = "(.+):(.+)"
+          target_label = "__address__"
+          replacement = "${1}:10250"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_node_name"]
+          action = "replace"
+          target_label = "node"
+        }
+
+        rule {
+          action = "replace"
+          target_label = "__metrics_path__"
+          replacement = "/stats/summary"
+        }
+      }
+
+      prometheus.scrape "cadvisor" {
+        targets = discovery.relabel.cadvisor.output
+        forward_to = [prometheus.remote_write.default.receiver]
+        scrape_interval = "30s"
+        job_name = "kubernetes-cadvisor"
+        bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        tls_config {
+          ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+          insecure_skip_verify = true
+        }
+      }
+
+      // 5. Monitoring services (Prometheus, Tempo, Loki themselves)
+      discovery.relabel "monitoring_services" {
+        targets = discovery.kubernetes.services.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_service_annotation_prometheus_io_scrape"]
+          regex = "true"
+          action = "keep"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          regex = "monitoring"
+          action = "keep"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_service_annotation_prometheus_io_path"]
+          action = "replace"
+          target_label = "__metrics_path__"
+          regex = "(.+)"
+          replacement = "${1}"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_service_annotation_prometheus_io_path"]
+          regex = ""
+          action = "replace"
+          target_label = "__metrics_path__"
+          replacement = "/metrics"
+        }
+
+        rule {
+          source_labels = ["__address__", "__meta_kubernetes_service_annotation_prometheus_io_port"]
+          action = "replace"
+          regex = "([^:]+)(?::\\d+)?;(\\d+)"
+          replacement = "${1}:${2}"
+          target_label = "__address__"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_service_name"]
+          action = "replace"
+          target_label = "job"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          action = "replace"
+          target_label = "namespace"
+        }
+      }
+
+      prometheus.scrape "monitoring_services" {
+        targets = discovery.relabel.monitoring_services.output
+        forward_to = [prometheus.remote_write.default.receiver]
+        scrape_interval = "15s"
+      }
+
+      // 6. Application pods with prometheus.io/scrape annotation
+      discovery.relabel "app_pods" {
+        targets = discovery.kubernetes.pods_for_metrics.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"]
+          regex = "true"
+          action = "keep"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_path"]
+          action = "replace"
+          target_label = "__metrics_path__"
+          regex = "(.+)"
+          replacement = "${1}"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_path"]
+          regex = ""
+          action = "replace"
+          target_label = "__metrics_path__"
+          replacement = "/metrics"
+        }
+
+        rule {
+          source_labels = ["__address__", "__meta_kubernetes_pod_annotation_prometheus_io_port"]
+          action = "replace"
+          regex = "([^:]+)(?::\\d+)?;(\\d+)"
+          replacement = "${1}:${2}"
+          target_label = "__address__"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          action = "replace"
+          target_label = "pod"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          action = "replace"
+          target_label = "namespace"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          action = "replace"
+          target_label = "job"
+          replacement = "${1}"
+        }
+
+        // Add labels for DQN feature mapping
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          action = "replace"
+          target_label = "app"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_version"]
+          action = "replace"
+          target_label = "version"
+        }
+      }
+
+      prometheus.scrape "app_pods" {
+        targets = discovery.relabel.app_pods.output
+        forward_to = [prometheus.remote_write.default.receiver]
+        scrape_interval = "15s"
+      }
+
+      // Send all metrics to Prometheus via remote_write
+      prometheus.remote_write "default" {
+        endpoint {
+          url = "http://prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
+        }
+
+        // Add external labels for better identification
+        external_labels = {
+          cluster = "nimbusguard",
+          collector = "alloy",
+        }
+      }
+
+      // TRACES: Receive OTLP traces and send to Tempo
+      otelcol.receiver.otlp "default" {
+        grpc {
+          endpoint = "0.0.0.0:4317"
+        }
+        http {
+          endpoint = "0.0.0.0:4318"
+        }
+        output {
+          traces = [otelcol.processor.k8sattributes.default.input]
+        }
+      }
+
+      otelcol.processor.k8sattributes "default" {
+        passthrough = false
+        extract {
+          metadata = [
+            "k8s.pod.name",
+            "k8s.namespace.name",
+            "k8s.deployment.name",
+            "k8s.container.name",
+            "k8s.node.name",
+            "k8s.pod.uid",
+            "k8s.replicaset.name",
+          ]
+        }
+        pod_association {
+          source {
+            from = "connection"
+          }
+        }
+        output {
+          traces = [otelcol.processor.batch.default.input]
+        }
+      }
+
+      otelcol.processor.batch "default" {
+        timeout = "1s"
+        send_batch_size = 1024
+        output {
+          traces = [otelcol.exporter.otlp.tempo.input]
+        }
+      }
+
+      otelcol.exporter.otlp "tempo" {
+        client {
+          endpoint = "tempo.monitoring.svc.cluster.local:4317"
+          tls {
+            insecure = true
+          }
+        }
+      }
+
+  # Enhanced service configuration
+  service:
+    type: ClusterIP
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "12345"
+      prometheus.io/path: "/metrics"
+
+  # Increased resource limits for enhanced scraping
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+  # Add necessary service account permissions
+  serviceAccount:
+    create: true
+    annotations: {}
+
+  rbac:
+    create: true
+    rules:
+      - apiGroups: [""]
+        resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["extensions", "apps"]
+        resources: ["deployments", "replicasets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["metrics.k8s.io"]
+        resources: ["nodes", "pods"]
+        verbs: ["get", "list"]
+      - nonResourceURLs: ["/metrics", "/stats/summary"]
+        verbs: ["get"]

@@ -1,9 +1,22 @@
+# Core FastAPI and Server
 fastapi==0.109.2
 uvicorn==0.27.1
 pydantic==2.6.1
+
+# Kafka Consumer
+kafka-python==2.0.2
+
+# Monitoring and Utility
 prometheus-client==0.19.0
 python-dotenv==1.0.1
 pyyaml==6.0.1
 psutil==5.9.8
 numpy==1.26.4
-kafka-python 
+
+# --- OpenTelemetry Tracing ---
+# The following packages were added to enable OTLP trace generation
+opentelemetry-api==1.24.0
+opentelemetry-sdk==1.24.0
+opentelemetry-exporter-otlp==1.24.0
+opentelemetry-instrumentation-fastapi==0.45b0
+opentelemetry-instrumentation-requests==0.45b0

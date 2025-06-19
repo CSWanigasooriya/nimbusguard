@@ -1,9 +1,11 @@
-import threading
 import logging
+import threading
 import time
+
 from kafka import KafkaConsumer, errors
 
 logger = logging.getLogger(__name__)
+
 
 class ScalingEventConsumer:
     def __init__(self, topic='scaling-events', bootstrap_servers='kafka:9092', group_id='background-consumer'):
@@ -46,4 +48,4 @@ class ScalingEventConsumer:
                 consumer.close()
             except errors.NoBrokersAvailable:
                 logger.warning('No Kafka brokers available, retrying in 5 seconds...')
-                time.sleep(5) 
+                time.sleep(5)

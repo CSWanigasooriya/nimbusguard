@@ -1,13 +1,14 @@
-import time
-import threading
-import psutil
 import logging
-import os
-import numpy as np
 import math
-from typing import Optional, List
+import os
+import threading
+import time
+
+import numpy as np
+import psutil
 
 logger = logging.getLogger(__name__)
+
 
 def get_container_memory_usage() -> int:
     """Get the current memory usage of the container in bytes"""
@@ -23,6 +24,7 @@ def get_container_memory_usage() -> int:
         except Exception:
             # Fallback to process memory
             return psutil.Process(os.getpid()).memory_info().rss
+
 
 def get_container_memory_limit() -> int:
     # Try cgroup v2 first
@@ -44,6 +46,7 @@ def get_container_memory_limit() -> int:
     # Fallback to system total
     return psutil.virtual_memory().total
 
+
 class MemoryWorkloadGenerator:
     def __init__(self):
         self._is_running = False
@@ -53,7 +56,7 @@ class MemoryWorkloadGenerator:
         self._start_time = 0.0
         self._allocated = []
         self._total_memory = get_container_memory_limit()
-        
+
         logger.info("MemoryWorkloadGenerator initialized", extra={
             "total_memory": self._total_memory,
             "pid": os.getpid()
@@ -63,7 +66,7 @@ class MemoryWorkloadGenerator:
         """Log the memory usage of the current process"""
         current_usage = get_container_memory_usage()
         memory_percent = (current_usage / self._total_memory) * 100
-        
+
         logger.info("Memory usage metrics", extra={
             "memory_percent": memory_percent,
             "memory_usage_bytes": current_usage,
@@ -76,32 +79,32 @@ class MemoryWorkloadGenerator:
         # _start_time is now set in generate_load, so use it for end_time calculation  
         end_time = self._start_time + duration
         self._is_running = True
-        
+
         while self._is_running and time.time() < end_time:
             elapsed = time.time() - self._start_time
             # Calculate current target using exponential growth
             current_target = (target_usage) * (1 - math.exp(-3 * elapsed / duration))
             target_bytes = int((current_target / 100.0) * self._total_memory)
-            
+
             # Calculate how much memory to allocate/deallocate
             current_bytes = sum(len(chunk) for chunk in self._allocated)
             bytes_to_allocate = target_bytes - current_bytes
-            
+
             if bytes_to_allocate > 0:
                 # Allocate more memory
                 try:
-                    new_chunks = [bytearray(1024*1024) for _ in range(bytes_to_allocate // (1024*1024))]
+                    new_chunks = [bytearray(1024 * 1024) for _ in range(bytes_to_allocate // (1024 * 1024))]
                     self._allocated.extend(new_chunks)
                 except MemoryError:
                     pass
             elif bytes_to_allocate < 0:
                 # Deallocate memory
                 bytes_to_remove = abs(bytes_to_allocate)
-                chunks_to_remove = bytes_to_remove // (1024*1024)
+                chunks_to_remove = bytes_to_remove // (1024 * 1024)
                 self._allocated = self._allocated[:-chunks_to_remove] if chunks_to_remove > 0 else self._allocated
-            
+
             time.sleep(0.5)
-            
+
         self._allocated = []  # Release memory
         self._is_running = False
 
@@ -250,4 +253,4 @@ class MemoryWorkloadGenerator:
                     return int(val)
         except Exception:
             pass
-        return psutil.virtual_memory().vms 
+        return psutil.virtual_memory().vms

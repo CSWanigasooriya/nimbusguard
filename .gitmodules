@@ -1,3 +1,6 @@
 [submodule "kubernetes-manifests"]
 	path = kubernetes-manifests
 	url = https://github.com/CSWanigasooriya/nimbusguard-k8s.git
+[submodule "helm-chart"]
+	path = helm-chart
+	url = https://github.com/CSWanigasooriya/nimbusguard-helm-chart.git

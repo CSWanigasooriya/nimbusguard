@@ -2,12 +2,14 @@
 Health check endpoints for Kubernetes probes
 """
 
-from fastapi import APIRouter
-from pydantic import BaseModel
-import psutil
 import os
 
+import psutil
+from fastapi import APIRouter
+from pydantic import BaseModel
+
 router = APIRouter()
+
 
 class HealthStatus(BaseModel):
     status: str
@@ -17,9 +19,12 @@ class HealthStatus(BaseModel):
     memory_usage_mb: float
     cpu_percent: float
 
+
 # Track startup time
 import time
+
 startup_time = time.time()
+
 
 @router.get("/health")
 async def health_check():
@@ -30,6 +35,7 @@ async def health_check():
         "timestamp": time.time()
     }
 
+
 @router.get("/ready")
 async def readiness_check():
     """Kubernetes readiness probe endpoint"""
@@ -37,9 +43,9 @@ async def readiness_check():
         # Check if the application is ready to serve traffic
         process = psutil.Process(os.getpid())
         memory_info = process.memory_info()
-        
+
         uptime = time.time() - startup_time
-        
+
         return HealthStatus(
             status="ready",
             service="nimbusguard-consumer-workload",
@@ -52,6 +58,7 @@ async def readiness_check():
             "status": "not_ready",
             "error": str(e)
         }
+
 
 @router.get("/live")
 async def liveness_check():
@@ -68,4 +75,4 @@ async def liveness_check():
         return {
             "status": "dead",
             "error": str(e)
-        } 
+        }

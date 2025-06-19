@@ -1,11 +1,13 @@
-import time
-import threading
-import psutil
 import logging
-import os
 import math
+import os
+import threading
+import time
+
+import psutil
 
 logger = logging.getLogger(__name__)
+
 
 def get_container_cpu_limit():
     # Try cgroup v2
@@ -19,7 +21,8 @@ def get_container_cpu_limit():
         pass
     # Try cgroup v1
     try:
-        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "r") as f1, open("/sys/fs/cgroup/cpu/cpu.cfs_period_us", "r") as f2:
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "r") as f1, open("/sys/fs/cgroup/cpu/cpu.cfs_period_us",
+                                                                          "r") as f2:
             quota = int(f1.read().strip())
             period = int(f2.read().strip())
             if quota == -1:
@@ -29,6 +32,7 @@ def get_container_cpu_limit():
         pass
     # Fallback
     return os.cpu_count() or 1
+
 
 class CPUWorkloadGenerator:
     def __init__(self):
@@ -43,12 +47,13 @@ class CPUWorkloadGenerator:
         # _start_time is now set in generate_load, so use it for end_time calculation
         end_time = self._start_time + duration
         self._is_running = True
-        
+
         while self._is_running and time.time() < end_time:
             elapsed = time.time() - self._start_time
             # Calculate current target using exponential growth
-            current_target = self._initial_usage + (target_usage - self._initial_usage) * (1 - math.exp(-3 * elapsed / duration))
-            
+            current_target = self._initial_usage + (target_usage - self._initial_usage) * (
+                    1 - math.exp(-3 * elapsed / duration))
+
             busy_time = current_target / 100.0
             idle_time = 1.0 - busy_time
             start = time.time()
@@ -104,4 +109,4 @@ class CPUWorkloadGenerator:
 
     @property
     def max_cpu_percentage(self):
-        return get_container_cpu_limit() * 100 
+        return get_container_cpu_limit() * 100
