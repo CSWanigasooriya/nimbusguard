@@ -189,7 +189,9 @@ deploy-keda-scaling:
 deploy-operator-only:
 	@echo "🤖 Deploying NimbusGuard operator..."
 	@PROJECT_DIR=$$(pwd); \
-	sed "s|\$${NIMBUSGUARD_PROJECT_PATH}|$$PROJECT_DIR|g" \
+	DOCKER_DESKTOP_PATH="/tmp/nimbusguard-models"; \
+	mkdir -p /tmp/nimbusguard-models; \
+	sed "s|\$${NIMBUSGUARD_PROJECT_PATH}|$$DOCKER_DESKTOP_PATH|g" \
 		kubernetes-manifests/components/operator/operator.yaml > \
 		/tmp/nimbusguard-operator.yaml; \
 	kubectl apply -f /tmp/nimbusguard-operator.yaml; \
