@@ -31,7 +31,8 @@ def _initialize_dqn_agent(spec: Dict[str, Any]) -> DQNAgent:
             state_dim=state_dimension,
             action_dim=5,
             epsilon_start=ml_config.get("epsilon_start", 0.1),
-            model_path=model_path if os.path.exists(model_path) else None
+            save_frequency=ml_config.get("save_frequency", 100),
+            model_path=model_path
         )
 
         training_mode = ml_config.get("training_mode", False)
