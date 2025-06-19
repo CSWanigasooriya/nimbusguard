@@ -1,4 +1,4 @@
-.PHONY: k8s-dev create-operator-secret stop-forward install-keda uninstall-keda reinstall-keda forward
+.PHONY: k8s-dev create-operator-secret stop-forward install-keda uninstall-keda reinstall-keda forward prepare-local-models
 
 # Stop port forwarding
 stop-forward:
@@ -103,60 +103,110 @@ reset-k8s-resources:
 	@kubectl delete -k kubernetes-manifests/monitoring || true
 	@echo "✅ All resources deleted!"
 
-# Kubernetes Development - FIXED ORDER
+# Kubernetes Development - Infrastructure + Component Selection
 k8s-dev:
 	@echo "🚀 Starting Kubernetes development environment..."
-	@echo "Choose deployment mode:"
-	@echo "  1) KEDA only (no operator)"
-	@echo "  2) Operator only (no KEDA)"
-	@echo "  3) Both KEDA and Operator (default)"
-	@read -p "Enter choice [1-3, default 3]: " choice; \
+	@echo "📋 Setting up common infrastructure..."
+	$(MAKE) setup-infrastructure
+	@echo ""
+	@echo "🎯 Choose scaling components to deploy (workloads always included):"
+	@echo "  1) Workloads only (no auto-scaling)"
+	@echo "  2) Workloads + KEDA (traditional auto-scaling)"
+	@echo "  3) Workloads + Operator (ML-based scaling)"
+	@echo "  4) Workloads + KEDA + Operator (both scaling methods - default)"
+	@read -p "Enter choice [1-4, default 4]: " choice; \
+	echo "[COMPONENTS] Deploying workloads (always required)..."; \
+	$(MAKE) deploy-workloads; \
 	if [ "$$choice" = "1" ]; then \
-	  echo "[MODE] Deploying KEDA only..."; \
-	  $(MAKE) install-keda; \
-	  echo "   Applying base manifests (namespaces + CRDs)..."; \
-	  kubectl apply -k kubernetes-manifests/base; \
-	  echo "   Creating operator secrets..."; \
-	  $(MAKE) create-operator-secret; \
-	  echo "   Installing Alloy if not present..."; \
-	  if ! helm status alloy -n monitoring > /dev/null 2>&1; then \
-	    $(MAKE) install-alloy; \
-	  else \
-	    echo "✅ Alloy already installed."; \
-	  fi; \
-	  echo "   Applying base and KEDA component manifests..."; \
-	  kubectl apply -k kubernetes-manifests/components/base; \
-	  kubectl apply -k kubernetes-manifests/components/keda; \
-	  echo "   Deploying monitoring stack..."; \
-	  kubectl apply -k kubernetes-manifests/monitoring; \
-	  $(MAKE) wait-pods; \
-	  $(MAKE) setup-port-forwarding; \
+	  echo "[SCALING] No additional scaling components selected"; \
 	elif [ "$$choice" = "2" ]; then \
-	  echo "[MODE] Deploying Operator only..."; \
-	  $(MAKE) deploy-operator; \
-	  echo "   Applying operator component manifests..."; \
-	  kubectl apply -k kubernetes-manifests/components/base; \
-	  kubectl apply -k kubernetes-manifests/components/operator; \
-	  echo "   Deploying monitoring stack..."; \
-	  kubectl apply -k kubernetes-manifests/monitoring; \
-	  $(MAKE) wait-pods; \
-	  $(MAKE) setup-port-forwarding; \
-	elif [ "$$choice" = "3" ] || [ -z "$$choice" ]; then \
-	  echo "[MODE] Deploying both KEDA and Operator..."; \
+	  echo "[SCALING] Adding KEDA auto-scaling..."; \
 	  $(MAKE) install-keda; \
-	  $(MAKE) deploy-operator; \
-	  echo "   Applying all component manifests..."; \
-	  kubectl apply -k kubernetes-manifests/components/base; \
-	  kubectl apply -k kubernetes-manifests/components/keda; \
-	  kubectl apply -k kubernetes-manifests/components/operator; \
-	  echo "   Deploying monitoring stack..."; \
-	  kubectl apply -k kubernetes-manifests/monitoring; \
-	  $(MAKE) wait-pods; \
-	  $(MAKE) setup-port-forwarding; \
+	  $(MAKE) deploy-keda-scaling; \
+	elif [ "$$choice" = "3" ]; then \
+	  echo "[SCALING] Adding ML-based operator scaling..."; \
+	  $(MAKE) deploy-operator-only; \
+	elif [ "$$choice" = "4" ] || [ -z "$$choice" ]; then \
+	  echo "[SCALING] Adding both KEDA and Operator scaling..."; \
+	  $(MAKE) install-keda; \
+	  $(MAKE) deploy-operator-only; \
+	  $(MAKE) deploy-keda-scaling; \
 	else \
-	  echo "Invalid choice. Exiting."; \
+	  echo "❌ Invalid choice. Exiting."; \
 	  exit 1; \
+	fi; \
+	echo ""; \
+	$(MAKE) deploy-monitoring; \
+	$(MAKE) wait-pods; \
+	$(MAKE) setup-port-forwarding
+
+# Common infrastructure setup (always required)
+setup-infrastructure:
+	@echo "🏗️  Building Docker images..."
+	@DOCKER_BUILDKIT=1 docker build \
+		-t nimbusguard/base:latest \
+		-f docker/base.Dockerfile .
+	@DOCKER_BUILDKIT=1 docker build \
+		-t nimbusguard/consumer-workload:latest \
+		-f src/consumer-workload/Dockerfile \
+		src/consumer-workload
+	@DOCKER_BUILDKIT=1 docker build \
+		-t nimbusguard/load-generator:latest \
+		-f src/load-generator/Dockerfile \
+		src/load-generator
+	@DOCKER_BUILDKIT=1 docker build \
+		-t nimbusguard/nimbusguard-operator:latest \
+		-f src/nimbusguard-operator/Dockerfile \
+		src/nimbusguard-operator
+	@echo "✅ All images built!"
+	@echo "📦 Applying base manifests (namespaces + CRDs)..."
+	@kubectl apply -k kubernetes-manifests/base
+	@echo "🔑 Creating operator secrets..."
+	@$(MAKE) create-operator-secret
+	@echo "📊 Installing Alloy (observability pipeline)..."
+	@if ! helm status alloy -n monitoring > /dev/null 2>&1; then \
+		$(MAKE) install-alloy; \
+	else \
+		echo "✅ Alloy already installed."; \
 	fi
+	@echo "📁 Preparing local models directory..."
+	@$(MAKE) prepare-local-models
+	@echo "✅ Infrastructure setup complete!"
+
+# Deploy just the workloads (Kafka + Consumer + Load Generator)
+deploy-workloads:
+	@echo "🚀 Deploying workload components..."
+	@kubectl apply -k kubernetes-manifests/components/base
+	@echo "✅ Workloads deployed!"
+
+# Deploy KEDA scaling components
+deploy-keda-scaling:
+	@echo "📈 Deploying KEDA scaling components..."
+	@kubectl apply -k kubernetes-manifests/components/keda
+	@echo "✅ KEDA scaling deployed!"
+
+# Deploy only the operator (without workloads)
+deploy-operator-only:
+	@echo "🤖 Deploying NimbusGuard operator..."
+	@PROJECT_DIR=$$(pwd); \
+	sed "s|\$${NIMBUSGUARD_PROJECT_PATH}|$$PROJECT_DIR|g" \
+		kubernetes-manifests/components/operator/operator.yaml > \
+		/tmp/nimbusguard-operator.yaml; \
+	kubectl apply -f /tmp/nimbusguard-operator.yaml; \
+	rm -f /tmp/nimbusguard-operator.yaml
+	@echo "✅ Operator deployed!"
+
+# Deploy monitoring stack
+deploy-monitoring:
+	@echo "📊 Deploying monitoring stack..."
+	@kubectl apply -k kubernetes-manifests/monitoring
+	@echo "✅ Monitoring deployed!"
+
+# Legacy deploy-operator target (calls new structure)
+deploy-operator:
+	@echo "🚀 Using new infrastructure + operator deployment..."
+	$(MAKE) setup-infrastructure
+	$(MAKE) deploy-operator-only
 
 wait-pods:
 	@echo "   Waiting for pods to be ready..."
@@ -186,35 +236,13 @@ setup-port-forwarding:
 	@echo "   Prometheus:        http://localhost:9090"
 	@echo "   Grafana:           http://localhost:3000 (admin/admin)"
 
-deploy-operator:
-	@echo "🏗️  Building base image..."
-	@DOCKER_BUILDKIT=1 docker build \
-		-t nimbusguard/base:latest \
-		-f docker/base.Dockerfile .
-	@echo "🏗️  Building workload images..."
-	@DOCKER_BUILDKIT=1 docker build \
-		-t nimbusguard/consumer-workload:latest \
-		-f src/consumer-workload/Dockerfile \
-		src/consumer-workload
-	@DOCKER_BUILDKIT=1 docker build \
-		-t nimbusguard/load-generator:latest \
-		-f src/load-generator/Dockerfile \
-		src/load-generator
-	@DOCKER_BUILDKIT=1 docker build \
-		-t nimbusguard/nimbusguard-operator:latest \
-		-f src/nimbusguard-operator/Dockerfile \
-		src/nimbusguard-operator
-	@echo "✅ All images built!"
-	@echo "   Applying base manifests (namespaces + CRDs)..."
-	@kubectl apply -k kubernetes-manifests/base
-	@echo "   Creating operator secrets..."
-	@$(MAKE) create-operator-secret
-	@echo "   Installing Alloy if not present..."
-	@if ! helm status alloy -n monitoring > /dev/null 2>&1; then \
-		$(MAKE) install-alloy; \
-	else \
-		echo "✅ Alloy already installed."; \
-	fi
+# Prepare local models directory for development
+prepare-local-models:
+	@echo "📁 Preparing local models directory..."
+	@PROJECT_DIR=$$(pwd); \
+	mkdir -p "$$PROJECT_DIR/models"; \
+	chmod 777 "$$PROJECT_DIR/models"; \
+	echo "✅ Models directory ready at: $$PROJECT_DIR/models"
 
 # Forward all relevant ports for local development
 forward:
