@@ -72,14 +72,14 @@ async def _try_prometheus_query(client: PrometheusClient, query: str, timeout: f
 
 def _initialize_feature_config() -> Dict[str, Dict[str, Any]]:
     """
-    Defines the 7 core features for the DQN agent with fallback configurations.
+    Defines the 7 core features for the DQN agent with simplified configuration.
+    Removed non-functional fallback queries that return no data.
     """
     return {
         "core_metrics": {
             "cpu_usage": {
                 "query": "avg(nimbusguard_cpu_usage_percent)",
                 "fallback_queries": [
-                    "avg(rate(container_cpu_usage_seconds_total{pod=~'consumer-workload.*'}[5m])) * 100",
                     "avg(node_cpu_seconds_total{mode='idle'}) * 100"
                 ],
                 "default": 30.0,  # Conservative default
@@ -87,34 +87,25 @@ def _initialize_feature_config() -> Dict[str, Dict[str, Any]]:
             },
             "memory_usage": {
                 "query": "avg(nimbusguard_memory_usage_percent)",
-                "fallback_queries": [
-                    "avg(container_memory_usage_bytes{pod=~'consumer-workload.*'} / container_spec_memory_limit_bytes{pod=~'consumer-workload.*'}) * 100"
-                ],
+                "fallback_queries": [],
                 "default": 40.0,
                 "scale": 100.0,
             },
             "request_rate": {
                 "query": "sum(rate(nimbusguard_http_requests_total[2m]))",
-                "fallback_queries": [
-                    "sum(rate(http_requests_total{job='consumer-workload'}[2m]))",
-                    "sum(rate(nginx_http_requests_total[2m]))"
-                ],
+                "fallback_queries": [],
                 "default": 5.0,  # Low default request rate
                 "scale": 100.0,
             },
             "response_time_p95": {
                 "query": "histogram_quantile(0.95, sum(rate(nimbusguard_http_request_duration_seconds_bucket[5m])) by (le))",
-                "fallback_queries": [
-                    "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job='consumer-workload'}[5m])) by (le))"
-                ],
+                "fallback_queries": [],
                 "default": 0.1,  # 100ms default
                 "scale": 1.0,
             },
             "error_rate": {
-                "query": '(sum(rate(nimbusguard_http_requests_total{status=~"5.."}[2m])) / sum(rate(nimbusguard_http_requests_total[2m])))',
-                "fallback_queries": [
-                    '(sum(rate(http_requests_total{status=~"5..",job="consumer-workload"}[2m])) / sum(rate(http_requests_total{job="consumer-workload"}[2m])))'
-                ],
+                "query": '(sum(rate(nimbusguard_http_requests_total{status=~"5.."}[2m])) or vector(0)) / (sum(rate(nimbusguard_http_requests_total[2m])) or vector(1))',
+                "fallback_queries": [],
                 "default": 0.01,  # 1% default error rate
                 "scale": 0.05,
             },
@@ -128,10 +119,7 @@ def _initialize_feature_config() -> Dict[str, Dict[str, Any]]:
             },
             "queue_size": {
                 "query": "sum(nimbusguard_queue_size)",
-                "fallback_queries": [
-                    "sum(kafka_consumer_lag_sum{consumer_group='background-consumer'})",
-                    "sum(rabbitmq_queue_messages_ready)"
-                ],
+                "fallback_queries": [],
                 "default": 10.0,  # Small default queue
                 "scale": 100.0,
             },

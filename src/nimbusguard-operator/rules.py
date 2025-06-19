@@ -7,6 +7,7 @@ import logging
 import os
 from typing import Dict, Any, Optional, List
 
+import numpy as np
 from ml.dqn_agent import DQNAgent
 from ml.state_representation import EnvironmentState
 
@@ -87,8 +88,15 @@ def make_decision(
             action_str = "scale_down"
 
         # The agent provides a descriptive decision type ("exploration" or "exploitation")
-        decision_type_str = decision_metadata.get('decision_type', "unknown")
-        reason = f"DQN decision: {action.name} ({decision_type_str}) with confidence {confidence:.2f}"
+        decision_type_str = "Exploit" if decision_metadata.get('decision_type', True) else "Explore"
+        q_values = decision_metadata.get("q_values", [])
+        max_q = max(q_values) if q_values else 0.0
+        
+        # Ensure max_q is a scalar value, not a list
+        if isinstance(max_q, (list, np.ndarray)):
+            max_q = float(max_q[0]) if len(max_q) > 0 else 0.0
+        
+        reason = f"DQN decision: {action.name} ({decision_type_str}) | Max Q-value: {max_q:.3f} | Confidence: {confidence:.2f}"
 
         return {
             "action": action_str,
@@ -98,7 +106,8 @@ def make_decision(
             "ml_decision": {
                 "decision_type": decision_type_str,
                 "action_value": action.value,
-                "q_values": decision_metadata.get("q_values")
+                "q_values": decision_metadata.get("q_values"),
+                "max_q_value": max_q
             }
         }
 
