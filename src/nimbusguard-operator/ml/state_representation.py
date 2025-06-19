@@ -57,9 +57,9 @@ class EnvironmentState:
 
         # --- (4 features) --- Add scaling context
         ml_features.extend([
-            self.current_replicas / max(self.max_replicas, 1), # Normalized current replicas
-            self.min_replicas / max(self.max_replicas, 1),     # Normalized min replicas
-            self.max_replicas / 100.0, # Normalize against a hypothetical max of 100
+            self.current_replicas / max(self.max_replicas, 1),  # Normalized current replicas
+            self.min_replicas / max(self.max_replicas, 1),  # Normalized min replicas
+            self.max_replicas / 100.0,  # Normalize against a hypothetical max of 100
             (self.current_replicas - self.min_replicas) / (self.max_replicas - self.min_replicas + 1e-6)
         ])
 
@@ -68,17 +68,17 @@ class EnvironmentState:
 
     @classmethod
     def from_observability_data(cls,
-                               unified_state: Dict[str, Any],
-                               current_replicas: int,
-                               min_replicas: int = 1,
-                               max_replicas: int = 10,
-                               time_since_last_scale: float = 0.0,
-                               recent_actions: List[int] = None) -> 'EnvironmentState':
+                                unified_state: Dict[str, Any],
+                                current_replicas: int,
+                                min_replicas: int = 1,
+                                max_replicas: int = 10,
+                                time_since_last_scale: float = 0.0,
+                                recent_actions: List[int] = None) -> 'EnvironmentState':
         """Create EnvironmentState from the new focused ObservabilityCollector output."""
         # Ensure feature vector has exactly 7 elements, padding if necessary
         feature_vector = unified_state.get("feature_vector", [0.0] * 7)
         if len(feature_vector) != 7:
-             feature_vector = (feature_vector + [0.0] * 7)[:7]
+            feature_vector = (feature_vector + [0.0] * 7)[:7]
 
         return cls(
             timestamp=time.time(),

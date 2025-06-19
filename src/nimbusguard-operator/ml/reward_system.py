@@ -281,4 +281,3 @@ class RewardSystem:
         reward += 5.0 if err_percent < self.sla_thresholds["error_rate_sla_percent"] else -5.0
 
         return np.clip(reward, -10.0, 10.0)
-
