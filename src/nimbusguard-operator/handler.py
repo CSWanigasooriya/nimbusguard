@@ -11,24 +11,27 @@ import kubernetes
 
 from config import health_status
 from prometheus import PrometheusClient
+from observability import ObservabilityCollector
 from rules import make_decision, extract_metric_name
 
 LOG = logging.getLogger(__name__)
 
 
-async def _fetch_metrics(metrics_config: Dict[str, Any]) -> Dict[str, float]:
-    """Fetches all required metrics from Prometheus."""
+async def _fetch_unified_observability_data(metrics_config: Dict[str, Any], target_labels: Dict[str, str]) -> Dict[str, Any]:
+    """Fetches comprehensive observability data from all sources (Prometheus, Tempo, Loki)."""
+    # Get URLs from config with defaults
     prometheus_url = metrics_config.get("prometheus_url", "http://prometheus-operated.default.svc:9090")
-    client = PrometheusClient(prometheus_url)
-    metrics = {}
-    for metric_conf in metrics_config.get("metrics", []):
-        query = metric_conf.get("query")
-        if query:
-            value = await client.query(query)
-            if value is not None:
-                name = extract_metric_name(query)
-                metrics[name] = value
-    return metrics
+    tempo_url = metrics_config.get("tempo_url", "http://tempo.default.svc:3100")
+    loki_url = metrics_config.get("loki_url", "http://loki.default.svc:3100")
+    
+    # Initialize unified observability collector
+    collector = ObservabilityCollector(prometheus_url, tempo_url, loki_url)
+    
+    # Collect unified state with enhanced features
+    service_name = target_labels.get("app", "unknown-service")
+    unified_state = await collector.collect_unified_state(metrics_config, target_labels, service_name)
+    
+    return unified_state
 
 
 class OperatorHandler:
@@ -36,6 +39,7 @@ class OperatorHandler:
 
     def __init__(self):
         self.apps_api: Optional[kubernetes.client.AppsV1Api] = None
+        self.observability_collector: Optional[ObservabilityCollector] = None
 
     async def initialize(self):
         """Initializes the Kubernetes API clients."""
@@ -70,16 +74,27 @@ class OperatorHandler:
         if current_replicas is None:
             raise kopf.PermanentError(f"No deployment found for labels {target_labels} in {target_namespace}.")
 
-        # 2. Fetch metrics from Prometheus
-        metrics = await _fetch_metrics(metrics_config)
-
-        # 3. Make a scaling decision
+        # 2. Fetch unified observability data from all sources
+        unified_state = await _fetch_unified_observability_data(metrics_config, target_labels)
+        
+        # Extract legacy metrics for backward compatibility with existing rules
+        legacy_metrics = unified_state.get("raw_metrics", {}).get("prometheus", {})
+        
+        # 3. Make a scaling decision (enhanced with observability insights)
         decision = make_decision(
-            metrics=metrics,
+            metrics=legacy_metrics,
             current_replicas=current_replicas,
             metric_configs=metrics_config.get("metrics", []),
             min_replicas=min_replicas,
-            max_replicas=max_replicas
+            max_replicas=max_replicas,
+            # Enhanced decision context for future ML integration
+            enhanced_context={
+                "feature_vector": unified_state.get("feature_vector", []),
+                "feature_names": unified_state.get("feature_names", []),
+                "health_score": unified_state.get("health_score", 0.0),
+                "confidence_score": unified_state.get("confidence_score", 0.0),
+                "data_sources_available": unified_state.get("data_sources_available", {})
+            }
         )
 
         # 4. Execute the decision if necessary
