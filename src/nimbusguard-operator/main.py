@@ -4,6 +4,8 @@
 # ============================================================================
 
 import logging
+import signal
+import sys
 from datetime import datetime
 
 import kopf
@@ -11,6 +13,7 @@ import kopf
 # Import components from our structured package
 from config import setup_logging, health_status
 from handler import OperatorHandler
+from rules import _dqn_agent
 
 # --- Initial Setup ---
 setup_logging()
@@ -22,10 +25,27 @@ operator_handler = OperatorHandler()
 # Kopf Framework Handlers
 # ============================================================================
 
+def signal_handler(signum, frame):
+    """Handle graceful shutdown signals to save models."""
+    LOG.info(f"Received signal {signum}, saving models before shutdown...")
+    try:
+        global _dqn_agent
+        if _dqn_agent and _dqn_agent.model_path:
+            _dqn_agent.save_model(_dqn_agent.model_path)
+            LOG.info("Successfully saved DQN model before shutdown")
+    except Exception as e:
+        LOG.error(f"Failed to save model during shutdown: {e}")
+    sys.exit(0)
+
+
 @kopf.on.startup()
 async def startup(logger, **kwargs):
     """Runs once when the operator starts."""
     try:
+        # Set up signal handlers for graceful shutdown
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+        
         await operator_handler.initialize()
         LOG.info("NimbusGuard Operator started successfully.")
     except Exception as e:

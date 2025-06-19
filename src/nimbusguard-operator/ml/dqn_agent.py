@@ -13,12 +13,24 @@ from typing import Dict, Any, Optional, Tuple
 import numpy as np
 import torch
 import torch.optim as optim
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 from .dqn_model import DoubleDQNModel, PrioritizedReplayBuffer
 from .reward_system import RewardSystem, RewardComponents
 from .state_representation import EnvironmentState, ScalingActions
 
 LOG = logging.getLogger(__name__)
+
+# DQN Metrics for Grafana visualization
+dqn_epsilon = Gauge('nimbusguard_dqn_epsilon', 'Current epsilon value for exploration/exploitation')
+dqn_training_steps = Counter('nimbusguard_dqn_training_steps_total', 'Total number of DQN training steps')
+dqn_decisions = Counter('nimbusguard_dqn_decisions_total', 'Total decisions made', ['action', 'decision_type'])
+dqn_rewards = Histogram('nimbusguard_dqn_rewards', 'Reward values', ['reward_type'], 
+                       buckets=(-2.0, -1.0, -0.5, -0.1, 0.0, 0.1, 0.5, 1.0, 2.0, 5.0))
+dqn_q_values = Histogram('nimbusguard_dqn_q_values', 'Q-values from decisions', 
+                        buckets=(-10.0, -5.0, -1.0, 0.0, 1.0, 5.0, 10.0, 20.0, 50.0))
+dqn_loss = Gauge('nimbusguard_dqn_training_loss', 'Current training loss')
+dqn_memory_utilization = Gauge('nimbusguard_dqn_memory_utilization_percent', 'Replay buffer utilization')
 
 
 class DQNAgent:
@@ -37,6 +49,7 @@ class DQNAgent:
                  batch_size: int = 32,
                  memory_size: int = 100000,
                  target_update_freq: int = 1000,
+                 save_frequency: int = 100,
                  device: Optional[torch.device] = None,
                  model_path: Optional[str] = None):
         """
@@ -50,6 +63,8 @@ class DQNAgent:
         self.epsilon_decay = epsilon_decay
         self.batch_size = batch_size
         self.target_update_freq = target_update_freq
+        self.save_frequency = save_frequency
+        self.model_path = model_path
 
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         LOG.info(f"DQN Agent using device: {self.device}")
@@ -69,6 +84,15 @@ class DQNAgent:
             self.load_model(model_path)
         else:
             LOG.info("No pre-trained model found. Initializing DQN Agent with random weights.")
+        
+        # Start metrics server on port 8090 (only start once)
+        if not hasattr(DQNAgent, '_metrics_server_started'):
+            try:
+                start_http_server(8090)
+                DQNAgent._metrics_server_started = True
+                LOG.info("Started Prometheus metrics server on port 8090")
+            except Exception as e:
+                LOG.warning(f"Failed to start metrics server: {e}")
 
     def select_action(self,
                       state: EnvironmentState,
@@ -121,6 +145,44 @@ class DQNAgent:
         if training and self.epsilon > self.epsilon_end:
             self.epsilon *= self.epsilon_decay
 
+        # Record metrics for Grafana visualization
+        dqn_epsilon.set(self.epsilon)
+        decision_type_str = "exploration" if decision_metadata.get('decision_type') == False else "exploitation"
+        dqn_decisions.labels(action=action.name, decision_type=decision_type_str).inc()
+        
+        if decision_metadata.get("q_values"):
+            q_values_list = decision_metadata["q_values"]
+            # Debug logging to understand the data structure
+            LOG.info(f"q_values_list type: {type(q_values_list)}, value: {q_values_list}")
+            
+            # Handle both scalar and list cases
+            if isinstance(q_values_list, list):
+                if len(q_values_list) > 0:
+                    # If it's a nested list (batch format), flatten and get max
+                    if isinstance(q_values_list[0], list):
+                        max_q = float(max(max(row) for row in q_values_list))
+                    else:
+                        max_q = float(max(q_values_list))
+                else:
+                    max_q = 0.0
+            else:
+                max_q = float(q_values_list)
+            
+            # Additional safety check before observing
+            LOG.info(f"max_q type: {type(max_q)}, value: {max_q}")
+            
+            # Ensure max_q is definitely a scalar float
+            if isinstance(max_q, (list, tuple, np.ndarray)):
+                LOG.warning(f"max_q is still not scalar: {type(max_q)}, converting to first element")
+                max_q = float(max_q[0]) if len(max_q) > 0 else 0.0
+            
+            try:
+                dqn_q_values.observe(float(max_q))
+            except Exception as e:
+                LOG.error(f"Failed to observe max_q: {e}, max_q={max_q}, type={type(max_q)}")
+                # Skip the observation if it fails
+                pass
+
         self.total_decisions += 1
         return action, decision_metadata
 
@@ -144,6 +206,12 @@ class DQNAgent:
 
         self.memory.push(state_vec, action.value, reward_components.total_reward, next_state_vec, done,
                          priority=td_error + 1e-6)
+        
+        # Record reward metrics for Grafana visualization
+        dqn_rewards.labels(reward_type='total').observe(reward_components.total_reward)
+        dqn_rewards.labels(reward_type='performance').observe(reward_components.performance_reward)
+        dqn_rewards.labels(reward_type='efficiency').observe(reward_components.efficiency_reward)
+        dqn_rewards.labels(reward_type='stability').observe(reward_components.stability_reward)
 
     def train_step(self) -> Optional[Dict[str, float]]:
         """Performs one training step by sampling from the replay buffer."""
@@ -178,6 +246,22 @@ class DQNAgent:
         if self.training_step_count % self.target_update_freq == 0:
             self.policy_net.update_target_network()
             LOG.info(f"Updated target network at step {self.training_step_count}")
+
+        # Auto-save model periodically during training
+        if self.model_path and self.training_step_count % self.save_frequency == 0:
+            try:
+                self.save_model(self.model_path)
+                LOG.info(f"Auto-saved model at training step {self.training_step_count}")
+            except Exception as e:
+                LOG.warning(f"Failed to auto-save model: {e}")
+
+        # Record training metrics for Grafana visualization
+        dqn_training_steps.inc()
+        dqn_loss.set(loss.item())
+        
+        # Update memory utilization
+        utilization = (len(self.memory) / self.memory.capacity) * 100
+        dqn_memory_utilization.set(utilization)
 
         self.loss_history.append(loss.item())
         return {"loss": loss.item(), "epsilon": self.epsilon}
@@ -258,4 +342,11 @@ class DQNAgent:
         self.policy_net.train(training)
         if not training:
             self.epsilon = self.epsilon_end
+            # Save model when switching to evaluation mode
+            if self.model_path:
+                try:
+                    self.save_model(self.model_path)
+                    LOG.info(f"Saved model when switching to evaluation mode")
+                except Exception as e:
+                    LOG.warning(f"Failed to save model when switching to evaluation mode: {e}")
         LOG.info(f"DQN Agent set to {'TRAINING' if training else 'EVALUATION'} mode.")
