@@ -24,14 +24,14 @@ class ScalingActions(Enum):
 
 def get_feature_dimension() -> int:
     """Returns the total feature dimension for the DQN input."""
-    return 20
+    return 11
 
 
 @dataclass
 class EnvironmentState:
     """
     A lean state representation based on 7 core observability features plus context.
-    The total dimension of the DQN input is 20.
+    The total dimension of the DQN input is 11.
     """
     # Core metadata
     timestamp: float
@@ -49,22 +49,11 @@ class EnvironmentState:
 
     def to_dqn_input(self) -> np.ndarray:
         """
-        Convert to a 20-dimensional DQN-ready input vector.
+        Convert to an 11-dimensional DQN-ready input vector.
+        Contains 7 core observability features plus 4 scaling context features.
         """
-        # --- (7 features) ---
+        # --- (7 features) --- Core observability metrics
         ml_features = list(self.feature_vector)
-
-        # --- (4 features) --- Add temporal and health context
-        current_time = time.time()
-        time_of_day = (current_time % (24 * 3600)) / (24 * 3600)
-        day_of_week = time.gmtime(current_time).tm_wday / 6.0 # Normalize 0-6 to 0-1
-
-        ml_features.extend([
-            time_of_day,
-            day_of_week,
-            min(self.time_since_last_scale / 3600.0, 1.0), # Normalize hours
-            np.mean(self.feature_vector) # A simple health score proxy
-        ])
 
         # --- (4 features) --- Add scaling context
         ml_features.extend([
@@ -74,11 +63,7 @@ class EnvironmentState:
             (self.current_replicas - self.min_replicas) / (self.max_replicas - self.min_replicas + 1e-6)
         ])
 
-        # --- (5 features) --- Add recent scaling action history
-        normalized_actions = [action / 4.0 for action in self.recent_scaling_actions[-5:]]
-        ml_features.extend(normalized_actions)
-
-        # Total: 7 + 4 + 4 + 5 = 20 features
+        # Total: 7 + 4 = 11 features
         return np.array(ml_features, dtype=np.float32)
 
     @classmethod
