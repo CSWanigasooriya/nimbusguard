@@ -75,8 +75,24 @@ clean-base-manifests:
 create-operator-secret:
 	@echo "$(BLUE)🔐 Creating operator secrets...$(NC)"
 	@if ! kubectl get secret operator-secrets -n nimbusguard >/dev/null 2>&1; then \
+		if [ -z "$$OPENAI_API_KEY" ]; then \
+			echo "$(YELLOW)🔑 OpenAI API Key Setup$(NC)"; \
+			echo "$(BLUE)For intelligent scaling decisions, NimbusGuard needs an OpenAI API key.$(NC)"; \
+			echo "$(BLUE)You can get one from: https://platform.openai.com/api-keys$(NC)"; \
+			echo ""; \
+			read -p "Enter your OpenAI API key (or press Enter to use placeholder): " openai_key; \
+			if [ -z "$$openai_key" ]; then \
+				openai_key="placeholder"; \
+				echo "$(YELLOW)⚠️  Using placeholder - operator will run in demo mode$(NC)"; \
+			else \
+				echo "$(GREEN)✅ OpenAI API key configured$(NC)"; \
+			fi; \
+		else \
+			openai_key="$$OPENAI_API_KEY"; \
+			echo "$(GREEN)✅ Using OpenAI API key from environment$(NC)"; \
+		fi; \
 		kubectl create secret generic operator-secrets \
-			--from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-placeholder}" \
+			--from-literal=OPENAI_API_KEY="$$openai_key" \
 			--from-literal=LANGSMITH_API_KEY="${LANGSMITH_API_KEY:-placeholder}" \
 			-n nimbusguard || echo "$(YELLOW)⚠️  Secret creation failed, may already exist$(NC)"; \
 	else \

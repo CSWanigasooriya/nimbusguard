@@ -36,14 +36,28 @@ spec:
           value: "http://prometheus.monitoring.svc.cluster.local:9090"
         - name: COLLECTION_HOURS
           value: "1"  # Collect last 1 hour for quick testing
-        - name: MODEL_PATH
-          value: "/models"
         - name: KSERVE_MODEL_NAME
           value: "nimbusguard-dqn"
         - name: TRAINING_MODE
           value: "manual"
         - name: MIN_SAMPLES
           value: "10"  # Lower threshold for testing
+        # External dataset configuration
+        - name: USE_EXTERNAL_DATASET
+          value: "true"
+        # MinIO configuration
+        - name: USE_MINIO
+          value: "true"
+        - name: MINIO_ENDPOINT
+          value: "minio-api.minio.svc.cluster.local:9000"
+        - name: MINIO_ACCESS_KEY
+          value: "nimbusguard"
+        - name: MINIO_SECRET_KEY
+          value: "nimbusguard123"
+        - name: MINIO_BUCKET
+          value: "datasets"
+        - name: EXTERNAL_DATASET_PATH
+          value: "/datasets"
         resources:
           requests:
             cpu: 500m
@@ -51,20 +65,6 @@ spec:
           limits:
             cpu: 1
             memory: 2Gi
-        volumeMounts:
-        - name: model-storage
-          mountPath: /models
-        - name: training-logs
-          mountPath: /logs
-      volumes:
-      - name: model-storage
-        hostPath:
-          path: /Users/chamathwanigasooriya/Documents/FYP/nimbusguard/models
-          type: DirectoryOrCreate
-      - name: training-logs
-        hostPath:
-          path: /Users/chamathwanigasooriya/Documents/FYP/nimbusguard/logs
-          type: DirectoryOrCreate
 """
     
     print(f"🚀 Starting manual training job at {datetime.now()}")
@@ -88,7 +88,7 @@ spec:
         print("⏳ Waiting for training to complete...")
         
         while True:
-            # Check job status - first check if job exists and get its status
+            # Check job status
             status_result = subprocess.run(
                 ['kubectl', 'get', 'job', job_name, '-n', 'nimbusguard-serving', '-o', 'jsonpath={.status.conditions[?(@.type=="Complete")].status}'],
                 capture_output=True,
@@ -196,6 +196,16 @@ def main():
         print("Make sure you've deployed the Kubeflow components first.")
         sys.exit(1)
     
+    # Check if MinIO is available
+    try:
+        subprocess.run(['kubectl', 'get', 'svc', 'minio-api', '-n', 'minio'], 
+                      check=True, capture_output=True)
+        print("✅ MinIO service found")
+    except subprocess.CalledProcessError:
+        print("❌ MinIO service not found!")
+        print("Make sure you've deployed MinIO first: make deploy-minio")
+        sys.exit(1)
+    
     # Run training
     if run_training_job():
         print("\n✅ Training completed!")
@@ -208,7 +218,7 @@ def main():
         check_model_update()
         
         print("\n🎉 Manual training process completed!")
-        print("💡 The model should now be updated with new training data.")
+        print("💡 The model should now be updated with new training data in MinIO.")
         print("💡 Check the operator logs to see if it's using the new model.")
         
     else:

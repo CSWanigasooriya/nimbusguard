@@ -132,6 +132,58 @@ health-check-metrics:
 	  echo "$(RED)❌ Cannot query metrics$(NC)"
 
 # =============================================================================
+# Dashboard Access
+# =============================================================================
+
+kubeflow-dashboard: ## Access Kubeflow Pipelines and Katib UIs
+	@echo "$(BLUE)🎛️ Setting up Kubeflow Dashboard access...$(NC)"
+	@echo "$(YELLOW)Checking for existing Kubeflow port forwards...$(NC)"
+	@pkill -f "kubectl port-forward.*ml-pipeline-ui" || true
+	@pkill -f "kubectl port-forward.*katib-ui" || true
+	@sleep 2
+	@echo "$(YELLOW)Setting up port forwarding to Kubeflow UIs...$(NC)"
+	@kubectl port-forward svc/ml-pipeline-ui 8082:80 -n kubeflow > /dev/null 2>&1 &
+	@kubectl port-forward svc/katib-ui 8083:80 -n kubeflow > /dev/null 2>&1 &
+	@sleep 3
+	@echo "$(GREEN)✅ Kubeflow UIs available:$(NC)"
+	@echo "  $(BLUE)Pipelines UI:$(NC) http://localhost:8082"
+	@echo "  $(BLUE)Katib UI:$(NC)     http://localhost:8083/katib/"
+	@echo ""
+	@echo "$(BLUE)💡 Features available:$(NC)"
+	@echo "  • $(BLUE)Pipelines (8082):$(NC) Create and manage ML workflows"
+	@echo "  • $(BLUE)Katib (8083):$(NC)     Hyperparameter optimization experiments"
+	@echo "  • View experiment results and metrics"
+	@echo "  • Monitor training job progress"
+
+minio-console: ## Open MinIO web console
+	@echo "$(BLUE)🌐 Setting up MinIO Console access...$(NC)"
+	@echo "$(YELLOW)Checking for existing MinIO console port forward...$(NC)"
+	@pkill -f "kubectl port-forward.*minio-console" || true
+	@sleep 2
+	@echo "$(YELLOW)Setting up port forwarding to MinIO Console...$(NC)"
+	@kubectl port-forward svc/minio-console 9001:9001 -n minio > /dev/null 2>&1 &
+	@sleep 3
+	@echo "$(GREEN)✅ MinIO Console available at: http://localhost:9001$(NC)"
+	@echo "$(YELLOW)Credentials: nimbusguard / nimbusguard123$(NC)"
+	@open http://localhost:9001 2>/dev/null || echo "$(YELLOW)Please visit: http://localhost:9001$(NC)"
+
+dashboards: ## Access all dashboards (Kubeflow, MinIO, Grafana, Prometheus)
+	@echo "$(BLUE)🎛️ Setting up all dashboard access...$(NC)"
+	@$(MAKE) setup-port-forwarding
+	@$(MAKE) kubeflow-dashboard
+	@$(MAKE) minio-console
+	@echo ""
+	@echo "$(GREEN)🌐 All Dashboards Ready:$(NC)"
+	@echo "  $(BLUE)Kubeflow Pipelines:$(NC) http://localhost:8082"
+	@echo "  $(BLUE)Kubeflow Katib:$(NC)     http://localhost:8083/katib/"
+	@echo "  $(BLUE)MinIO Console:$(NC)      http://localhost:9001"
+	@echo "  $(BLUE)Grafana:$(NC)            http://localhost:3000"
+	@echo "  $(BLUE)Prometheus:$(NC)         http://localhost:9090"
+	@echo "  $(BLUE)Consumer Workload:$(NC)  http://localhost:8080"
+	@echo "  $(BLUE)Load Generator:$(NC)     http://localhost:8081"
+	@echo "  $(BLUE)Operator:$(NC)           http://localhost:9080"
+
+# =============================================================================
 # Development Helpers
 # =============================================================================
 
@@ -146,6 +198,51 @@ quick-test:
 	@sleep 5
 	@curl -sf "http://localhost:9090/api/v1/query?query=nimbusguard_cpu_utilization" >/dev/null 2>&1 && \
 		echo "$(GREEN)✅ Metrics collection works$(NC)" || echo "$(RED)❌ Metrics collection failed$(NC)"
+
+# =============================================================================
+# Training Data Collection
+# =============================================================================
+
+collect-training-data: ## Collect comprehensive training data using load generator and system metrics
+	@echo "$(BLUE)📊 Starting comprehensive training data collection...$(NC)"
+	@echo "$(YELLOW)This will run various load patterns and collect system metrics$(NC)"
+	@echo "$(YELLOW)Estimated duration: ~45 minutes$(NC)"
+	@echo ""
+	@echo "$(BLUE)Prerequisites:$(NC)"
+	@echo "  • All services must be running (run 'make k8s-dev' first)"
+	@echo "  • Port forwarding must be active"
+	@echo ""
+	@read -p "Continue? (y/N): " confirm && [ "$$confirm" = "y" ] || exit 1
+	@echo ""
+	@echo "$(GREEN)🚀 Starting data collection...$(NC)"
+	@cd scripts && python3 collect_training_data.py
+
+collect-training-data-quick: ## Quick training data collection (shorter duration for testing)
+	@echo "$(BLUE)📊 Starting quick training data collection...$(NC)"
+	@echo "$(YELLOW)This is a shorter version for testing purposes$(NC)"
+	@echo "$(YELLOW)Estimated duration: ~10 minutes$(NC)"
+	@cd scripts && python3 -c "
+import asyncio
+import sys
+sys.path.append('.')
+from collect_training_data import TrainingDataCollector
+
+class QuickCollector(TrainingDataCollector):
+    def __init__(self):
+        super().__init__()
+        # Shorter load patterns for quick testing
+        self.load_patterns = [
+            {'name': 'low_test', 'pattern': 'constant', 'intensity': 20, 'duration': 60},
+            {'name': 'high_test', 'pattern': 'constant', 'intensity': 80, 'duration': 60},
+            {'name': 'spike_test', 'pattern': 'spike', 'intensity': 90, 'duration': 30},
+        ]
+
+async def main():
+    collector = QuickCollector()
+    await collector.collect_comprehensive_dataset()
+
+asyncio.run(main())
+"
 
 restart-all:
 	@echo "$(BLUE)🔄 Restarting all components...$(NC)"

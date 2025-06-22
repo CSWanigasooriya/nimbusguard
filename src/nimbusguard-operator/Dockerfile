@@ -1,7 +1,7 @@
-# NimbusGuard KServe-Only Operator
+# NimbusGuard DQN Operator
 # ============================================================================
-# Lightweight operator image for KServe-only mode
-# No PyTorch or local model dependencies
+# Lightweight operator image for KServe-based DQN agent
+# Uses KServe for model serving, no local PyTorch dependencies
 # ============================================================================
 
 FROM nimbusguard/base:latest
@@ -17,12 +17,12 @@ RUN id -u operator >/dev/null 2>&1 || useradd -r -g operator -m operator && \
     mkdir -p /app/logs /tmp/logs && \
     chown -R operator:operator /app/logs /tmp/logs
 
-# Copy the KServe-only operator code
+# Copy the DQN operator code
 COPY --chown=operator:operator . .
 
 USER operator
 
-# Set environment variables for KServe-only mode
+# Set environment variables for DQN mode
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
@@ -30,7 +30,7 @@ ENV PYTHONPATH=/app
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:9080/healthz || exit 1
 
-# Run the KServe-only operator
+# Run the DQN operator
 CMD ["kopf", "run", \
      "--standalone", \
      "--liveness=http://0.0.0.0:9080/healthz", \

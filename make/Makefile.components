@@ -216,6 +216,44 @@ check-all-components: check-workloads check-operator check-keda check-kubeflow #
 	@echo "$(GREEN)✅ Component status check complete!$(NC)"
 
 # =============================================================================
+# Storage Components (MinIO)
+# =============================================================================
+
+deploy-minio: ## Deploy MinIO object storage
+	@echo "$(BLUE)🗄️ Deploying MinIO object storage...$(NC)"
+	@kubectl apply -k kubernetes-manifests/components/storage
+	@echo "$(GREEN)✅ MinIO deployed! Waiting for pods to be ready...$(NC)"
+	@kubectl wait --for=condition=ready pod -l app=minio -n minio --timeout=120s || true
+	@echo "$(BLUE)📊 MinIO Console available at: http://localhost:30901$(NC)"
+	@echo "$(YELLOW)💡 Credentials: nimbusguard / nimbusguard123$(NC)"
+
+minio-status: ## Check MinIO deployment status
+	@echo "$(BLUE)📊 MinIO Status:$(NC)"
+	@kubectl get pods -l app=minio -n minio -o wide
+	@echo ""
+	@kubectl get svc -l app=minio -n minio
+	@echo ""
+	@echo "$(BLUE)🌐 Access URLs:$(NC)"
+	@echo "  Console (Web UI): $(YELLOW)http://localhost:30901$(NC)"
+	@echo "  API Endpoint:     $(YELLOW)http://localhost:9000$(NC)"
+	@echo "  Credentials:      $(YELLOW)nimbusguard / nimbusguard123$(NC)"
+
+upload-dataset: ## Upload training dataset to MinIO
+	@echo "$(BLUE)📤 Uploading dataset to MinIO...$(NC)"
+	@if [ ! -f "datasets/TrainData.csv" ]; then \
+	  echo "$(RED)❌ Dataset not found! Please ensure datasets/TrainData.csv exists$(NC)"; \
+	  exit 1; \
+	fi
+	@echo "$(YELLOW)Note: Upload will be handled by the training pipeline automatically$(NC)"
+	@echo "$(YELLOW)Datasets are mounted directly into training pods via ConfigMaps$(NC)"
+	@echo "$(GREEN)✅ Dataset ready for training! Use 'kubectl apply -f kubernetes-manifests/components/kubeflow/continuous-training.yaml' to start training$(NC)"
+
+clean-minio: ## Clean MinIO deployment
+	@echo "$(RED)🗑️  Cleaning MinIO...$(NC)"
+	@kubectl delete -k kubernetes-manifests/components/storage --ignore-not-found=true
+	@echo "$(GREEN)✅ MinIO cleaned!$(NC)"
+
+# =============================================================================
 # Component Cleanup
 # =============================================================================
 
