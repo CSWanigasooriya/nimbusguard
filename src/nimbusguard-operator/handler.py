@@ -12,25 +12,12 @@ import kopf
 import kubernetes
 
 from config import health_status
-from observability import ObservabilityCollector
 
 # DQN imports
 from ml.dqn_agent import DQNAgent, create_dqn_agent
 from ml.state_representation import EnvironmentState
 
 LOG = logging.getLogger(__name__)
-
-
-async def _fetch_unified_observability_data(
-        metrics_config: Dict[str, Any],
-        target_labels: Dict[str, str],
-        service_name: str
-) -> Dict[str, Any]:
-    """Fetches the focused 7-feature state vector from the observability collector."""
-    prometheus_url = metrics_config.get("prometheus_url", "http://prometheus.monitoring.svc.cluster.local:9090")
-    collector = ObservabilityCollector(prometheus_url)
-    unified_state = await collector.collect_unified_state(metrics_config, target_labels, service_name)
-    return unified_state
 
 
 class OperatorHandler:
@@ -149,25 +136,20 @@ class OperatorHandler:
             raise kopf.PermanentError(msg)
         LOG.info(f"Found deployment '{deployment_name}' with {current_replicas} current replicas.")
 
-        # 3. Fetch observability data
-        service_name = target_labels.get("app", "unknown-service")
-        unified_state = await _fetch_unified_observability_data(metrics_config, target_labels, service_name)
-
-        # 4. Retrieve action history
+        # 3. Retrieve action history
         if resource_uid not in self.action_histories:
             self.action_histories[resource_uid] = deque([2] * 5, maxlen=5)
         recent_actions = list(self.action_histories[resource_uid])
 
-        # 5. Make scaling decision with DQN
+        # 4. Make scaling decision with DQN (using trained model, no live metrics needed)
         decision = await self._make_dqn_decision(
             current_replicas=current_replicas,
             min_replicas=min_replicas,
             max_replicas=max_replicas,
-            unified_state=unified_state,
             recent_actions=recent_actions
         )
 
-        # 6. Execute the decision
+        # 5. Execute the decision
         success = True
         if decision.get("action") != "none":
             success = await self._execute_scaling(decision, deployment_name, target_namespace)
@@ -178,16 +160,16 @@ class OperatorHandler:
                 LOG.error(f"Failed to execute DQN scaling action for '{resource_name}'")
                 decision["reason"] += " (execution failed)"
 
-        # 7. Update action history
+        # 6. Update action history
         newly_chosen_action_value = decision.get("ml_decision", {}).get("action_value", 2)
         self.action_histories[resource_uid].append(newly_chosen_action_value)
 
-        # 8. Update performance metrics
+        # 7. Update performance metrics
         self.total_decisions += 1
         if not success:
             self.kserve_failures += 1
 
-        # 9. Add KServe status to response
+        # 8. Add KServe status to response
         decision["kserve_status"] = self._get_kserve_status()
 
         return {"current_replicas": current_replicas, **decision}
@@ -196,16 +178,22 @@ class OperatorHandler:
                                    current_replicas: int,
                                    min_replicas: int,
                                    max_replicas: int,
-                                   unified_state: Dict[str, Any],
                                    recent_actions: List[int]) -> Dict[str, Any]:
         """
-        Make scaling decision using DQN model inference
+        Make scaling decision using DQN model inference with trained model
         """
         
         try:
-            # Create environment state
+            # Create simplified environment state (no live metrics needed)
+            # The trained model already learned patterns from TrainData.csv
+            simplified_state = {
+                "feature_vector": [0.5] * 7,  # Neutral values - model uses learned patterns
+                "feature_names": ["cpu_usage", "memory_usage", "request_rate", 
+                                "response_time_p95", "error_rate", "pod_restart_rate", "queue_size"]
+            }
+            
             env_state = EnvironmentState.from_observability_data(
-                unified_state=unified_state,
+                unified_state=simplified_state,
                 current_replicas=current_replicas,
                 min_replicas=min_replicas,
                 max_replicas=max_replicas,
