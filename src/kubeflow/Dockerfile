@@ -12,13 +12,14 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy Kubeflow-specific source code
 COPY src/kubeflow/experiments/katib_training.py /app/katib_training.py
 COPY src/kubeflow/serving/transformer.py /app/transformer.py
+COPY src/kubeflow/continuous_training.py /app/continuous_training.py
 COPY src/nimbusguard-operator /app/nimbusguard-operator
 
 # Set working directory
 WORKDIR /app
 
 # Make scripts executable
-RUN chmod +x /app/katib_training.py /app/transformer.py
+RUN chmod +x /app/katib_training.py /app/transformer.py /app/continuous_training.py
 
 # Set environment variables
 ENV PYTHONPATH=/app

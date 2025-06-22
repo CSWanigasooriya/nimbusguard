@@ -147,6 +147,9 @@ kubeflow-install: ## Install Kubeflow components (Katib, KServe, Pipelines)
 		(echo "$(YELLOW)⚠️  Failed to install KServe runtimes, retrying...$(NC)" && sleep 30 && \
 		 kubectl apply --server-side --force-conflicts -f "https://github.com/kserve/kserve/releases/download/v0.11.2/kserve-runtimes.yaml" --timeout=120s) || \
 		echo "$(YELLOW)⚠️  KServe runtimes installation failed, but continuing...$(NC)"
+	@echo "$(YELLOW)Configuring KServe for RawDeployment mode...$(NC)"
+	@kubectl apply -f kubernetes-manifests/components/kubeflow/kserve-config.yaml || echo "$(YELLOW)⚠️  KServe config failed, may need manual application$(NC)"
+	@kubectl rollout restart deployment/kserve-controller-manager -n kserve || echo "$(YELLOW)⚠️  KServe controller restart failed$(NC)"
 	@echo "$(GREEN)✅ KServe installation completed (certificate issues are expected and will resolve automatically)$(NC)"
 	@echo "$(GREEN)✅ Kubeflow components installed!$(NC)"
 
