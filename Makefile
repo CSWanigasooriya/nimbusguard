@@ -104,6 +104,8 @@ setup-kubeflow-environment:
 	@echo "$(BLUE)[KUBEFLOW] Deploying workloads with Kubeflow integration...$(NC)"
 	@$(MAKE) deploy-workloads
 	@$(MAKE) deploy-kubeflow-operator
+	@echo "$(BLUE)[KUBEFLOW] Deploying Kubeflow ML components (including model storage)...$(NC)"
+	@$(MAKE) deploy-kubeflow
 	@echo "$(BLUE)[KUBEFLOW] Setting up model serving...$(NC)"
 	@$(MAKE) kubeflow-serving
 	@echo "$(GREEN)✅ Kubeflow environment ready!$(NC)"
