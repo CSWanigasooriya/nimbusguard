@@ -1,7 +1,7 @@
 # NimbusGuard Main Makefile
 # Orchestrates high-level workflows using modular makefiles
 
-.PHONY: k8s-dev help setup-kubeflow-environment clean clean-all deploy-kserve-only
+.PHONY: k8s-dev help setup-kubeflow-environment clean clean-all
 
 # Include all modular makefiles
 include make/Makefile.infrastructure
@@ -42,6 +42,16 @@ help:
 	@echo "  $(YELLOW)kubeflow-experiments$(NC) Run hyperparameter tuning"
 	@echo "  $(YELLOW)kubeflow-serving$(NC)     Deploy model serving"
 	@echo "  $(YELLOW)kubeflow-status$(NC)      Check Kubeflow status"
+	@echo ""
+	@echo "$(GREEN)🗄️ Storage & Data:$(NC)"
+	@echo "  $(YELLOW)deploy-minio$(NC)         Deploy MinIO object storage"
+	@echo "  $(YELLOW)minio-status$(NC)         Check MinIO status"
+	@echo "  $(YELLOW)upload-dataset$(NC)       Upload training dataset to MinIO"
+	@echo ""
+	@echo "$(GREEN)🎛️ Dashboards & UI:$(NC)"
+	@echo "  $(YELLOW)kubeflow-dashboard$(NC)   Access Kubeflow Pipelines & Katib UIs"
+	@echo "  $(YELLOW)minio-console$(NC)        Access MinIO web console"
+	@echo "  $(YELLOW)dashboards$(NC)           Access all dashboards (Kubeflow, MinIO, Grafana)"
 	@echo ""
 	@echo "$(GREEN)🆘 Help & Info:$(NC)"
 	@echo "  $(YELLOW)info$(NC)                 Show detailed command info"
@@ -89,7 +99,9 @@ k8s-dev:
 	echo ""; \
 	$(MAKE) deploy-monitoring; \
 	$(MAKE) wait-pods; \
-	$(MAKE) setup-port-forwarding
+	$(MAKE) dashboards; \
+	echo ""; \
+	$(MAKE) show-completion-summary
 
 # =============================================================================
 # High-Level Workflow Orchestration
@@ -106,6 +118,8 @@ setup-kubeflow-environment:
 	@$(MAKE) deploy-kubeflow-operator
 	@echo "$(BLUE)[KUBEFLOW] Deploying Kubeflow ML components (including model storage)...$(NC)"
 	@$(MAKE) deploy-kubeflow
+	@echo "$(BLUE)[STORAGE] Setting up MinIO object storage...$(NC)"
+	@$(MAKE) deploy-minio
 	@echo "$(BLUE)[KUBEFLOW] Setting up model serving...$(NC)"
 	@$(MAKE) kubeflow-serving
 	@echo "$(GREEN)✅ Kubeflow environment ready!$(NC)"
@@ -161,6 +175,41 @@ clean-all: ## Clean everything including Kubeflow
 	else \
 	  echo "$(YELLOW)Cleanup cancelled.$(NC)"; \
 	fi
+
+# =============================================================================
+# Completion Summary
+# =============================================================================
+
+show-completion-summary:
+	@echo "$(GREEN)🎉 NimbusGuard Development Environment Ready!$(NC)"
+	@echo ""
+	@echo "$(BLUE)🌐 Available Dashboards:$(NC)"
+	@echo "  $(GREEN)• Kubeflow Pipelines:$(NC) http://localhost:8082 (ML workflows)"
+	@echo "  $(GREEN)• Kubeflow Katib:$(NC)     http://localhost:8083/katib/ (Hyperparameter tuning)"
+	@echo "  $(GREEN)• MinIO Console:$(NC)      http://localhost:30901 (Object storage - nimbusguard/nimbusguard123)"
+	@echo "  $(GREEN)• Grafana:$(NC)            http://localhost:3000 (Monitoring - admin/admin)"
+	@echo "  $(GREEN)• Prometheus:$(NC)         http://localhost:9090 (Metrics)"
+	@echo "  $(GREEN)• Consumer Workload:$(NC)  http://localhost:8080 (API endpoints)"
+	@echo "  $(GREEN)• Load Generator:$(NC)     http://localhost:8081 (Load controls)"
+	@echo "  $(GREEN)• NimbusGuard Operator:$(NC) http://localhost:9080 (Operator API)"
+	@echo ""
+	@echo "$(BLUE)🚀 Quick Commands:$(NC)"
+	@echo "  $(YELLOW)make dashboards$(NC)       - Access all dashboards at once"
+	@echo "  $(YELLOW)make status$(NC)           - Check system health"
+	@echo "  $(YELLOW)make health-check$(NC)     - Validate endpoints"
+	@echo "  $(YELLOW)make quick-test$(NC)       - Run integration test"
+	@echo ""
+	@echo "$(BLUE)📊 ML Operations:$(NC)"
+	@echo "  $(YELLOW)make kubeflow-status$(NC)  - Check ML pipeline status"
+	@echo "  $(YELLOW)make minio-status$(NC)     - Check object storage"
+	@echo "  $(YELLOW)make upload-dataset$(NC)   - Prepare datasets for training"
+	@echo ""
+	@echo "$(YELLOW)💡 Notes:$(NC)"
+	@echo "  • Kubeflow Pipelines: Ready immediately"
+	@echo "  • Kubeflow Katib: Access via /katib/ path"
+	@echo "  • MinIO Console: NodePort service (may need a moment to be accessible)"
+	@echo ""
+	@echo "$(GREEN)✨ Your intelligent Kubernetes scaling platform is ready for action!$(NC)"
 
 # Reinstall helpers (legacy)
 reinstall-keda: uninstall-keda install-keda

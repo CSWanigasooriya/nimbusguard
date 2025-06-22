@@ -3,10 +3,9 @@
 # ML Package for NimbusGuard DQN Implementation
 # ============================================================================
 
-# Removed DQNAgent import to avoid metric collision with KServeOnlyDQNAgent
-# from .dqn_agent import DQNAgent
-from .dqn_model import DQNModel
+# DQN exports
+from .dqn_agent import DQNAgent, create_dqn_agent
 from .reward_system import RewardSystem
 from .state_representation import EnvironmentState, ScalingActions
 
-__all__ = ['DQNModel', 'RewardSystem', 'EnvironmentState', 'ScalingActions']
+__all__ = ['DQNAgent', 'create_dqn_agent', 'RewardSystem', 'EnvironmentState', 'ScalingActions']

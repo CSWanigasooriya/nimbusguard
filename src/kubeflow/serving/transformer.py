@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -18,6 +19,15 @@ import torch
 import torch.nn as nn
 from aiohttp import web
 from prometheus_client import Counter, Histogram, Gauge, start_http_server
+
+# MinIO/S3 support
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+    S3_AVAILABLE = True
+except ImportError:
+    S3_AVAILABLE = False
+    logging.warning("boto3 not available - S3/MinIO model loading disabled")
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +69,14 @@ class NimbusGuardTransformer:
         self.prometheus_endpoint = os.getenv('PROMETHEUS_ENDPOINT', 
                                            'http://prometheus.monitoring.svc.cluster.local:9090')
         
+        # MinIO configuration
+        self.use_minio = os.getenv('USE_MINIO', 'false').lower() == 'true' and S3_AVAILABLE
+        self.s3_client = None
+        self.bucket_name = None
+        
+        if self.use_minio:
+            self._init_s3_client()
+        
         # Model management
         self.model = None
         self.model_metadata = {}
@@ -77,13 +95,97 @@ class NimbusGuardTransformer:
         # Load initial model
         self.load_latest_model()
         
-        logger.info("NimbusGuard Transformer initialized")
+        logger.info(f"NimbusGuard Transformer initialized (MinIO: {self.use_minio})")
+    
+    def _init_s3_client(self):
+        """Initialize S3/MinIO client"""
+        try:
+            self.s3_client = boto3.client(
+                's3',
+                endpoint_url=f"http://{os.getenv('MINIO_ENDPOINT', 'minio-api.minio.svc.cluster.local:9000')}",
+                aws_access_key_id=os.getenv('MINIO_ACCESS_KEY', 'nimbusguard'),
+                aws_secret_access_key=os.getenv('MINIO_SECRET_KEY', 'nimbusguard123'),
+                region_name=os.getenv('MINIO_REGION', 'us-east-1')
+            )
+            self.bucket_name = os.getenv('MINIO_BUCKET', 'models')
+            logger.info(f"S3 client initialized for bucket: {self.bucket_name}")
+        except Exception as e:
+            logger.error(f"Failed to initialize S3 client: {e}")
+            self.use_minio = False
     
     def load_latest_model(self) -> bool:
-        """Load the latest trained model"""
+        """Load the latest trained model from MinIO (no fallback)"""
         try:
             start_time = time.time()
             
+            if self.use_minio:
+                # Use MinIO only - fail if not available
+                success = self._load_model_from_minio()
+                if success:
+                    load_time = time.time() - start_time
+                    model_load_time.observe(load_time)
+                    self.last_model_check = time.time()
+                    return True
+                else:
+                    logger.error("Failed to load from MinIO - no fallback configured")
+                    raise Exception("MinIO model loading failed and fallback is disabled")
+            else:
+                # Local storage mode
+                return self._load_model_from_local()
+            
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}")
+            if self.model is None:
+                logger.info("Creating mock model as fallback")
+                self.model = self.create_mock_model()
+                self.model_metadata = {'version': 0, 'type': 'mock'}
+            return False
+    
+    def _load_model_from_minio(self) -> bool:
+        """Load model from MinIO S3 storage"""
+        try:
+            model_key = f"{self.model_name}/latest/model.pth"
+            
+            logger.info(f"Loading model from MinIO: s3://{self.bucket_name}/{model_key}")
+            
+            # Download model to temporary file
+            with tempfile.NamedTemporaryFile(suffix='.pth') as temp_file:
+                self.s3_client.download_file(self.bucket_name, model_key, temp_file.name)
+                
+                # Load model checkpoint
+                checkpoint = torch.load(temp_file.name, map_location='cpu')
+                
+                # Create and load model
+                self.model = DQNModel(
+                    state_dim=checkpoint.get('state_dim', self.state_dim),
+                    action_dim=checkpoint.get('action_dim', self.action_dim)
+                )
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.model.eval()
+                
+                # Update metadata
+                self.model_metadata = checkpoint.get('metadata', {})
+                current_version = self.model_metadata.get('model_version', 0)
+                model_version.set(current_version)
+                
+                logger.info(f"Loaded model version {current_version} from MinIO")
+                logger.info(f"Model trained on {self.model_metadata.get('total_samples', 0)} samples")
+                
+                return True
+                
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                logger.warning(f"No model found in MinIO: s3://{self.bucket_name}/{model_key}")
+            else:
+                logger.error(f"MinIO error: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error loading model from MinIO: {e}")
+            return False
+    
+    def _load_model_from_local(self) -> bool:
+        """Load model from local file system"""
+        try:
             model_dir = self.model_path / self.model_name
             latest_path = model_dir / 'latest' / 'model.pth'
             
@@ -107,20 +209,15 @@ class NimbusGuardTransformer:
             # Update metadata
             self.model_metadata = checkpoint.get('metadata', {})
             current_version = self.model_metadata.get('model_version', 0)
-            
-            # Update metrics
-            load_time = time.time() - start_time
-            model_load_time.observe(load_time)
             model_version.set(current_version)
             
-            logger.info(f"Loaded model version {current_version} in {load_time:.2f}s")
+            logger.info(f"Loaded model version {current_version} from local storage")
             logger.info(f"Model trained on {self.model_metadata.get('total_samples', 0)} samples")
             
-            self.last_model_check = time.time()
             return True
             
         except Exception as e:
-            logger.error(f"Failed to load model: {e}")
+            logger.error(f"Failed to load model from local storage: {e}")
             if self.model is None:
                 logger.info("Creating mock model as fallback")
                 self.model = self.create_mock_model()
@@ -146,15 +243,21 @@ class NimbusGuardTransformer:
         """Check if a new model version is available"""
         if time.time() - self.last_model_check > self.model_check_interval:
             try:
-                model_dir = self.model_path / self.model_name
-                latest_path = model_dir / 'latest' / 'model.pth'
+                new_version = None
                 
-                if latest_path.exists():
-                    # Check if model has been updated
-                    checkpoint = torch.load(latest_path, map_location='cpu')
-                    new_version = checkpoint.get('metadata', {}).get('model_version', 0)
+                if self.use_minio:
+                    # Check MinIO only - fail if not available
+                    new_version = self._check_minio_model_version()
+                    if new_version is None:
+                        logger.error("Failed to check MinIO for model updates - no fallback configured")
+                        raise Exception("MinIO model version check failed and fallback is disabled")
+                else:
+                    # Local storage mode
+                    new_version = self._check_local_model_version()
+                
+                # Load new model if version is newer
+                if new_version is not None:
                     current_version = self.model_metadata.get('model_version', 0)
-                    
                     if new_version > current_version:
                         logger.info(f"New model version {new_version} available, loading...")
                         self.load_latest_model()
@@ -164,13 +267,47 @@ class NimbusGuardTransformer:
             
             self.last_model_check = time.time()
     
+    def _check_minio_model_version(self) -> Optional[int]:
+        """Check model version in MinIO"""
+        try:
+            model_key = f"{self.model_name}/latest/model.pth"
+            
+            # Download just the metadata to check version
+            with tempfile.NamedTemporaryFile(suffix='.pth') as temp_file:
+                self.s3_client.download_file(self.bucket_name, model_key, temp_file.name)
+                checkpoint = torch.load(temp_file.name, map_location='cpu')
+                return checkpoint.get('metadata', {}).get('model_version', 0)
+                
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'NoSuchKey':
+                logger.warning(f"MinIO version check error: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Error checking MinIO model version: {e}")
+            return None
+    
+    def _check_local_model_version(self) -> Optional[int]:
+        """Check model version in local storage"""
+        try:
+            model_dir = self.model_path / self.model_name
+            latest_path = model_dir / 'latest' / 'model.pth'
+            
+            if latest_path.exists():
+                checkpoint = torch.load(latest_path, map_location='cpu')
+                return checkpoint.get('metadata', {}).get('model_version', 0)
+            
+        except Exception as e:
+            logger.warning(f"Error checking local model version: {e}")
+        
+        return None
+    
     async def collect_current_state(self) -> List[float]:
-        """Collect current cluster state from Prometheus"""
+        """Collect current cluster state from Prometheus and create compatible state vector"""
         try:
             async with aiohttp.ClientSession() as session:
                 metrics = {}
                 
-                # Real-time queries for current state
+                # Real-time queries for current state - focused on the 4 core metrics
                 queries = {
                     'cpu_utilization': 'avg(rate(container_cpu_usage_seconds_total{namespace="nimbusguard"}[5m]))',
                     'memory_utilization': 'avg(container_memory_working_set_bytes{namespace="nimbusguard"}) / avg(container_spec_memory_limit_bytes{namespace="nimbusguard"})',
@@ -205,28 +342,73 @@ class NimbusGuardTransformer:
                         logger.warning(f"Failed to collect {metric_name}: {e}")
                         metrics[metric_name] = 0.0
                 
-                # Create 11-dimensional state vector
-                state_vector = [
-                    min(max(metrics.get('cpu_utilization', 0.0), 0.0), 1.0),
-                    min(max(metrics.get('memory_utilization', 0.0), 0.0), 1.0),
-                    min(max(metrics.get('network_io_rate', 0.0) / 1e6, 0.0), 1.0),
-                    min(max(metrics.get('request_rate', 0.0) / 100, 0.0), 1.0),
-                    min(max(metrics.get('pod_count', 1.0) / 10, 0.0), 1.0),
-                    min(max(metrics.get('response_time_p95', 0.0), 0.0), 1.0),
-                    min(max(metrics.get('error_rate', 0.0), 0.0), 1.0),
-                    min(max(metrics.get('queue_depth', 0.0) / 1000, 0.0), 1.0),
-                    min(max(metrics.get('cpu_throttling', 0.0), 0.0), 1.0),
-                    min(max(metrics.get('memory_pressure', 0.0), 0.0), 1.0),
-                    min(max(metrics.get('node_utilization', 0.0), 0.0), 1.0)
-                ]
-                
-                logger.debug(f"Collected state vector: {state_vector}")
-                return state_vector
+                # Create state vector using the same logic as TrainData.csv processing
+                return self._create_traindata_compatible_state_vector(metrics)
                 
         except Exception as e:
             logger.error(f"State collection error: {e}")
             # Return default state if collection fails
             return [0.5] * self.state_dim
+    
+    def _create_traindata_compatible_state_vector(self, metrics: Dict[str, float]) -> List[float]:
+        """Create state vector compatible with TrainData.csv training format"""
+        
+        # Map Prometheus metrics to TrainData.csv equivalent
+        # CPU: Use actual CPU utilization (0-1 range, convert to 1-3 range equivalent)
+        cpu_raw = metrics.get('cpu_utilization', 0.0)
+        cpu_traindata_equiv = 1.0 + (cpu_raw * 2.0)  # Map 0-1 to 1-3 range
+        cpu_normalized = min(max((cpu_traindata_equiv - 1.0) / 2.0, 0.0), 1.0)
+        
+        # Network: Use network I/O rate (normalize to 0-1 range like PackRecv_Mean)
+        network_raw = metrics.get('network_io_rate', 0.0) / 1e6  # Convert to MB/s
+        network_normalized = min(max(network_raw, 0.0), 1.0)
+        
+        # Pod count: Use actual pod count (normalize to 0-1 range)
+        pods_raw = metrics.get('pod_count', 1.0)
+        pods_normalized = min(max(pods_raw / 20.0, 0.0), 1.0)
+        
+        # Stress rate: Derive from request rate and error rate
+        request_rate = metrics.get('request_rate', 0.0)
+        error_rate = metrics.get('error_rate', 0.0)
+        stress_normalized = min(max((request_rate / 100.0) + error_rate, 0.0), 1.0)
+        
+        # Create 11-dimensional state vector using the same logic as training
+        # This matches exactly with _extract_traindata_state_vector in data_preprocessing.py
+        state_vector = [
+            cpu_normalized,                                    # [0] CPU utilization (primary metric)
+            cpu_normalized * 0.8,                             # [1] Memory utilization (correlated with CPU)
+            network_normalized,                               # [2] Network I/O rate (from network metrics)
+            stress_normalized * 100.0 / 1000,                # [3] Request rate (derived from stress)
+            pods_normalized,                                  # [4] Pod count (from pod metrics)
+            self._calculate_response_time_inference(cpu_normalized, pods_normalized), # [5] Response time (derived)
+            self._calculate_error_rate_inference(cpu_normalized, stress_normalized),  # [6] Error rate (derived)
+            stress_normalized * 0.5,                          # [7] Queue depth (derived from stress)
+            max(0.0, cpu_normalized - 0.7),                  # [8] CPU throttling (when CPU > 70%)
+            cpu_normalized * 0.9,                             # [9] Memory pressure (correlated with CPU)
+            (cpu_normalized + network_normalized) / 2.0       # [10] Node utilization (combined metric)
+        ]
+        
+        # Ensure all values are in [0, 1] range
+        state_vector = [min(max(val, 0.0), 1.0) for val in state_vector]
+        
+        logger.debug(f"TrainData-compatible state vector: {state_vector}")
+        logger.debug(f"Core metrics - CPU: {cpu_normalized:.3f}, Network: {network_normalized:.3f}, Pods: {pods_normalized:.3f}, Stress: {stress_normalized:.3f}")
+        
+        return state_vector
+    
+    def _calculate_response_time_inference(self, cpu_util: float, pod_ratio: float) -> float:
+        """Calculate estimated response time - matches training logic"""
+        # Higher CPU and lower pod count = higher response time
+        base_response = cpu_util
+        pod_factor = max(0.1, 1.0 - pod_ratio)  # Fewer pods = higher response time
+        return min(base_response * pod_factor, 1.0)
+    
+    def _calculate_error_rate_inference(self, cpu_util: float, stress: float) -> float:
+        """Calculate estimated error rate - matches training logic"""
+        # High CPU + high stress = higher error rate
+        if cpu_util > 0.8 and stress > 0.5:
+            return min(cpu_util * stress * 0.1, 1.0)
+        return 0.0
     
     def create_state_vector(self, cluster_state: Dict[str, Any]) -> List[float]:
         """Create DQN state vector from provided cluster state"""

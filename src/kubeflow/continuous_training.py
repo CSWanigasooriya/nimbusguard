@@ -232,19 +232,9 @@ def train_dqn_model(training_data):
         if epoch % 20 == 0:
             logger.info(f"Epoch {epoch}/{epochs}, Loss: {loss.item():.4f}")
     
-    # Save model in KServe expected format
-    model_path = os.getenv('MODEL_PATH', '/models')
+    # Save model using the model loader from model-storage.yaml
     model_name = os.getenv('KSERVE_MODEL_NAME', 'nimbusguard-dqn')
-    
-    # Create directory structure expected by KServe
-    model_dir = f"{model_path}/{model_name}"
-    latest_dir = f"{model_dir}/latest"
-    os.makedirs(latest_dir, exist_ok=True)
-    
-    # Also save timestamped version for history
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    timestamped_dir = f"{model_dir}/{timestamp}"
-    os.makedirs(timestamped_dir, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     
     # Prepare model checkpoint with metadata
     checkpoint = {
@@ -259,6 +249,93 @@ def train_dqn_model(training_data):
             'model_type': 'DQN'
         }
     }
+    
+    # Use the model storage functions from model-storage.yaml
+    try:
+        # Import the model loader functions
+        sys.path.append('/app')
+        
+        # Check storage mode
+        use_minio = os.getenv('USE_MINIO', 'false').lower() == 'true'
+        
+        if use_minio:
+            logger.info("💾 Saving model to MinIO...")
+            success = save_model_to_minio(model, model_name, timestamp)
+            if success:
+                logger.info(f"✅ Model saved to MinIO: {model_name}:{timestamp}")
+            else:
+                logger.error("❌ Failed to save to MinIO - no fallback configured")
+                raise Exception("MinIO model saving failed and fallback is disabled")
+        else:
+            logger.info("💾 Saving model to local storage...")
+            save_model_locally(checkpoint, model_name, timestamp)
+            
+    except Exception as e:
+        logger.error(f"Model saving error: {e}")
+        # Re-raise the exception instead of falling back
+        raise
+    
+    return True
+
+def save_model_to_minio(model, model_name: str, version: str) -> bool:
+    """Save model to MinIO using the same logic as model-storage.yaml"""
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+        import tempfile
+        
+        # Initialize S3 client
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=f"http://{os.getenv('MINIO_ENDPOINT', 'minio-api.minio.svc.cluster.local:9000')}",
+            aws_access_key_id=os.getenv('MINIO_ACCESS_KEY', 'nimbusguard'),
+            aws_secret_access_key=os.getenv('MINIO_SECRET_KEY', 'nimbusguard123'),
+            region_name=os.getenv('MINIO_REGION', 'us-east-1')
+        )
+        bucket = os.getenv('MINIO_BUCKET', 'models')
+        
+        # Prepare checkpoint
+        checkpoint = {
+            'model_state_dict': model.state_dict(),
+            'state_dim': 11,
+            'action_dim': 5,
+            'metadata': {
+                'model_version': int(version),
+                'training_timestamp': version,
+                'model_type': 'DQN'
+            }
+        }
+        
+        # Save to temporary file and upload
+        with tempfile.NamedTemporaryFile(suffix='.pth') as temp_file:
+            torch.save(checkpoint, temp_file.name)
+            
+            # Upload both timestamped and latest versions
+            timestamped_key = f"{model_name}/{version}/model.pth"
+            latest_key = f"{model_name}/latest/model.pth"
+            
+            s3_client.upload_file(temp_file.name, bucket, timestamped_key)
+            s3_client.upload_file(temp_file.name, bucket, latest_key)
+            
+            logger.info(f"Model uploaded to s3://{bucket}/{model_name}/")
+            return True
+            
+    except Exception as e:
+        logger.error(f"MinIO save error: {e}")
+        return False
+
+def save_model_locally(checkpoint: dict, model_name: str, timestamp: str):
+    """Save model to local storage as fallback"""
+    model_path = os.getenv('MODEL_PATH', '/models')
+    
+    # Create directory structure expected by KServe
+    model_dir = f"{model_path}/{model_name}"
+    latest_dir = f"{model_dir}/latest"
+    os.makedirs(latest_dir, exist_ok=True)
+    
+    # Also save timestamped version for history
+    timestamped_dir = f"{model_dir}/{timestamp}"
+    os.makedirs(timestamped_dir, exist_ok=True)
     
     # Save timestamped version
     timestamped_file = f"{timestamped_dir}/model.pth"
@@ -278,10 +355,149 @@ def train_dqn_model(training_data):
         os.remove(latest_symlink)
     os.symlink(os.path.basename(old_format_file), latest_symlink)
     
-    logger.info(f"Model saved to {latest_file}")
+    logger.info(f"Model saved locally to {latest_file}")
     logger.info(f"Latest model symlink: {latest_symlink}")
+
+def collect_training_data():
+    """Collect training data from configured source (no fallback)"""
     
-    return True
+    # Check for external dataset configuration
+    external_dataset_path = os.getenv('EXTERNAL_DATASET_PATH', '/datasets')
+    use_external = os.getenv('USE_EXTERNAL_DATASET', 'true').lower() == 'true'
+    use_minio = os.getenv('USE_MINIO', 'false').lower() == 'true'
+    
+    if use_external:
+        if use_minio:
+            logger.info("🗂️ Using external dataset from MinIO")
+            return load_external_dataset(external_dataset_path)
+        elif os.path.exists(external_dataset_path):
+            logger.info(f"🗂️ Using external dataset from: {external_dataset_path}")
+            return load_external_dataset(external_dataset_path)
+        else:
+            logger.error(f"External dataset path does not exist: {external_dataset_path}")
+            raise FileNotFoundError(f"External dataset not found: {external_dataset_path}")
+    else:
+        logger.info("📊 Using Prometheus metrics")
+        return collect_prometheus_metrics()
+
+def load_external_dataset(dataset_path: str):
+    """Load and process external Kubernetes dataset"""
+    try:
+        # Import the data processor
+        sys.path.append('/app')
+        from data_preprocessing import KubernetesDatasetProcessor
+        
+        # Check if we should use MinIO/S3
+        use_minio = os.getenv('USE_MINIO', 'false').lower() == 'true'
+        
+        if use_minio:
+            logger.info("🗄️ Using MinIO S3 storage for datasets")
+            
+            # MinIO configuration
+            s3_config = {
+                'endpoint_url': f"http://{os.getenv('MINIO_ENDPOINT', 'minio-api.minio.svc.cluster.local:9000')}",
+                'access_key': os.getenv('MINIO_ACCESS_KEY', 'nimbusguard'),
+                'secret_key': os.getenv('MINIO_SECRET_KEY', 'nimbusguard123'),
+                'bucket_name': os.getenv('MINIO_BUCKET', 'datasets'),
+                'region': 'us-east-1'
+            }
+            
+            processor = KubernetesDatasetProcessor(
+                dataset_path="", 
+                use_s3=True, 
+                s3_config=s3_config
+            )
+            
+            # Load from S3 - fail if not available
+            logger.info("📦 Loading dataset from MinIO S3...")
+            train_df = processor.load_training_data("TrainData.csv")
+            data = processor.process_for_dqn_training(train_df)
+        else:
+            logger.info("📁 Using local filesystem for datasets")
+            
+            # Check for comprehensive training data first (from collect_training_data.py)
+            comprehensive_files = []
+            if os.path.exists(dataset_path):
+                comprehensive_files = [f for f in os.listdir(dataset_path) 
+                                     if f.startswith('comprehensive_training_data_') and f.endswith('.csv')]
+            
+            if comprehensive_files:
+                # Use the most recent comprehensive dataset
+                latest_file = sorted(comprehensive_files)[-1]
+                logger.info(f"📊 Found comprehensive training dataset: {latest_file}")
+                
+                # Load comprehensive dataset directly (already processed)
+                import pandas as pd
+                df = pd.read_csv(os.path.join(dataset_path, latest_file))
+                
+                # Extract states, actions, rewards from comprehensive dataset
+                state_columns = [f'state_{i}_' for i in range(11)]  # state_0_, state_1_, etc.
+                state_cols = [col for col in df.columns if any(col.startswith(sc) for sc in state_columns)]
+                
+                if len(state_cols) == 11 and 'action' in df.columns and 'reward' in df.columns:
+                    logger.info(f"✅ Using comprehensive dataset with {len(df)} samples")
+                    
+                    # Extract data in the right format
+                    states = df[sorted(state_cols)].values.astype(np.float32)
+                    actions = df['action'].values.astype(np.int32)
+                    rewards = df['reward'].values.astype(np.float32)
+                    
+                    data = {
+                        'states': states,
+                        'actions': actions,
+                        'rewards': rewards,
+                        'metadata': {
+                            'source_dataset': latest_file,
+                            'processed_samples': len(states),
+                            'state_dim': 11,
+                            'action_dim': 5,
+                            'processing_timestamp': datetime.now().isoformat(),
+                            'dataset_type': 'comprehensive_collected'
+                        }
+                    }
+                else:
+                    logger.error(f"❌ Comprehensive dataset missing required columns")
+                    raise ValueError("Invalid comprehensive dataset format")
+            else:
+                # Fallback to TrainData.csv processing
+                logger.info("📄 No comprehensive dataset found, using TrainData.csv")
+                processor = KubernetesDatasetProcessor(dataset_path)
+                
+                # Try to load processed data first
+                processed_path = f"{dataset_path}/processed_training_data.npz"
+                if os.path.exists(processed_path):
+                    logger.info("📦 Loading pre-processed dataset...")
+                    data = processor.load_processed_data(processed_path)
+                else:
+                    # Process raw dataset
+                    logger.info("🔄 Processing raw dataset...")
+                    train_df = processor.load_training_data()
+                    data = processor.process_for_dqn_training(train_df)
+                    
+                    # Save for future use
+                    processor.save_processed_data(data, processed_path)
+        
+        # Convert to expected format
+        training_data = []
+        states = data['states']
+        actions = data['actions']
+        rewards = data['rewards']
+        
+        for i in range(len(states)):
+            training_data.append({
+                'timestamp': int(time.time()) + i,  # Sequential timestamps
+                'state': states[i].tolist(),
+                'action': int(actions[i]),
+                'reward': float(rewards[i])
+            })
+        
+        logger.info(f"✅ Loaded {len(training_data)} samples from external dataset")
+        return training_data
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to load external dataset: {e}")
+        # Re-raise the exception instead of falling back
+        raise
 
 def main():
     """Main training function"""
@@ -289,7 +505,7 @@ def main():
     logger.info("=" * 50)
     
     # Collect training data
-    training_data = collect_prometheus_metrics()
+    training_data = collect_training_data()
     if not training_data:
         logger.error("Failed to collect training data")
         sys.exit(1)

@@ -13,6 +13,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY src/kubeflow/experiments/katib_training.py /app/katib_training.py
 COPY src/kubeflow/serving/transformer.py /app/transformer.py
 COPY src/kubeflow/continuous_training.py /app/continuous_training.py
+COPY src/kubeflow/data_preprocessing.py /app/data_preprocessing.py
 COPY src/nimbusguard-operator /app/nimbusguard-operator
 
 # Set working directory

@@ -1,6 +1,6 @@
-# engine/handler.py - KServe-Only Implementation
+# engine/handler.py - DQN Implementation
 # ============================================================================
-# Kubernetes Interaction and Orchestration with KServe-only ML Pipeline
+# Kubernetes Interaction and Orchestration with KServe ML Pipeline
 # ============================================================================
 
 import logging
@@ -14,8 +14,8 @@ import kubernetes
 from config import health_status
 from observability import ObservabilityCollector
 
-# KServe-only imports
-from ml.kserve_dqn_agent import KServeOnlyDQNAgent, create_kserve_only_agent
+# DQN imports
+from ml.dqn_agent import DQNAgent, create_dqn_agent
 from ml.state_representation import EnvironmentState
 
 LOG = logging.getLogger(__name__)
@@ -35,8 +35,7 @@ async def _fetch_unified_observability_data(
 
 class OperatorHandler:
     """
-    KServe-only handler for ML pipeline management with model serving capabilities.
-    No local model support - all operations go through KServe endpoints.
+    Handler for ML pipeline management with KServe model serving capabilities.
     """
 
     def __init__(self):
@@ -44,8 +43,8 @@ class OperatorHandler:
         self.apps_api: Optional[kubernetes.client.AppsV1Api] = None
         self.action_histories: Dict[str, deque] = {}
         
-        # KServe-only configuration
-        self.kserve_agent: Optional[KServeOnlyDQNAgent] = None
+        # DQN configuration
+        self.dqn_agent: Optional[DQNAgent] = None
         self.kserve_enabled = False
         self.kserve_endpoint: Optional[str] = None
         
@@ -69,28 +68,28 @@ class OperatorHandler:
             health_status["kubernetes"] = True
             LOG.info("Kubernetes client initialized successfully.")
             
-            # Initialize KServe-only integration
-            await self._initialize_kserve_only()
+            # Initialize DQN integration
+            await self._initialize_dqn()
             
         except Exception as e:
             LOG.critical(f"Handler initialization failed: {e}", exc_info=True)
             health_status["kubernetes"] = False
             raise
 
-    async def _initialize_kserve_only(self):
-        """Initialize KServe-only components and model serving."""
+    async def _initialize_dqn(self):
+        """Initialize DQN components and model serving."""
         try:
             # Get KServe endpoint from environment
             import os
             kserve_endpoint = os.getenv('KSERVE_ENDPOINT')
             
             if not kserve_endpoint:
-                LOG.error("KSERVE_ENDPOINT environment variable is required for KServe-only mode")
+                LOG.error("KSERVE_ENDPOINT environment variable is required")
                 health_status["kserve"] = False
                 return
                 
-            # KServe configuration
-            kserve_config = {
+            # DQN configuration
+            dqn_config = {
                 'kserve_endpoint': kserve_endpoint,
                 'model_name': os.getenv('KSERVE_MODEL_NAME', 'nimbusguard-dqn'),
                 'state_dim': 11,
@@ -99,27 +98,27 @@ class OperatorHandler:
                 'health_check_interval': int(os.getenv('KSERVE_HEALTH_CHECK_INTERVAL', '300'))
             }
             
-            self.kserve_agent = await create_kserve_only_agent(kserve_config)
+            self.dqn_agent = await create_dqn_agent(dqn_config)
             self.kserve_enabled = True
             self.kserve_endpoint = kserve_endpoint
             
             health_status["kserve"] = True
             health_status["ml_decision_engine"] = True
             
-            LOG.info("KServe-only integration initialized successfully")
+            LOG.info("DQN integration initialized successfully")
             LOG.info(f"Model serving endpoint: {self.kserve_endpoint}")
-            LOG.info(f"Confidence threshold: {kserve_config['confidence_threshold']}")
+            LOG.info(f"Confidence threshold: {dqn_config['confidence_threshold']}")
             
         except Exception as e:
-            LOG.error(f"KServe initialization failed: {e}")
+            LOG.error(f"DQN initialization failed: {e}")
             health_status["kserve"] = False
             health_status["ml_decision_engine"] = False
             self.kserve_enabled = False
-            # In KServe-only mode, this is a critical failure
-            raise RuntimeError(f"KServe initialization failed: {e}")
+            # This is a critical failure
+            raise RuntimeError(f"DQN initialization failed: {e}")
 
     async def evaluate_scaling_logic(self, body: Dict[str, Any], namespace: str) -> Dict[str, Any]:
-        """KServe-only evaluation loop for scaling decisions."""
+        """DQN evaluation loop for scaling decisions."""
         spec = body.get("spec", {})
         meta = body.get("metadata", {})
         resource_uid = meta.get("uid")
@@ -134,11 +133,11 @@ class OperatorHandler:
         min_replicas = spec.get("minReplicas", 1)
         max_replicas = spec.get("maxReplicas", 10)
 
-        LOG.info(f"Evaluating scaling for '{resource_name}' (uid: {resource_uid}) using KServe-only mode.")
+        LOG.info(f"Evaluating scaling for '{resource_name}' (uid: {resource_uid}) using DQN.")
 
-        # 1. Ensure KServe agent is available
-        if not self.kserve_enabled or not self.kserve_agent:
-            error_msg = "KServe agent not available - operator requires KServe endpoint configuration"
+        # 1. Ensure DQN agent is available
+        if not self.kserve_enabled or not self.dqn_agent:
+            error_msg = "DQN agent not available - operator requires KServe endpoint configuration"
             LOG.error(error_msg)
             raise kopf.PermanentError(error_msg)
 
@@ -159,8 +158,8 @@ class OperatorHandler:
             self.action_histories[resource_uid] = deque([2] * 5, maxlen=5)
         recent_actions = list(self.action_histories[resource_uid])
 
-        # 5. Make scaling decision with KServe
-        decision = await self._make_kserve_decision(
+        # 5. Make scaling decision with DQN
+        decision = await self._make_dqn_decision(
             current_replicas=current_replicas,
             min_replicas=min_replicas,
             max_replicas=max_replicas,
@@ -173,10 +172,10 @@ class OperatorHandler:
         if decision.get("action") != "none":
             success = await self._execute_scaling(decision, deployment_name, target_namespace)
             if success:
-                LOG.info(f"Successfully executed KServe scaling action for '{resource_name}'")
+                LOG.info(f"Successfully executed DQN scaling action for '{resource_name}'")
                 self.successful_decisions += 1
             else:
-                LOG.error(f"Failed to execute KServe scaling action for '{resource_name}'")
+                LOG.error(f"Failed to execute DQN scaling action for '{resource_name}'")
                 decision["reason"] += " (execution failed)"
 
         # 7. Update action history
@@ -193,14 +192,14 @@ class OperatorHandler:
 
         return {"current_replicas": current_replicas, **decision}
 
-    async def _make_kserve_decision(self,
+    async def _make_dqn_decision(self,
                                    current_replicas: int,
                                    min_replicas: int,
                                    max_replicas: int,
                                    unified_state: Dict[str, Any],
                                    recent_actions: List[int]) -> Dict[str, Any]:
         """
-        Make scaling decision using KServe-only model inference
+        Make scaling decision using DQN model inference
         """
         
         try:
@@ -213,8 +212,8 @@ class OperatorHandler:
                 recent_actions=recent_actions
             )
             
-            # Use KServe for prediction
-            action, metadata = await self.kserve_agent.select_action(
+            # Use DQN for prediction
+            action, metadata = await self.dqn_agent.select_action(
                 state=env_state,
                 force_valid=True
             )
@@ -228,7 +227,7 @@ class OperatorHandler:
                 "action": "scale_up" if target_replicas > current_replicas else 
                          ("scale_down" if target_replicas < current_replicas else "none"),
                 "target_replicas": target_replicas,
-                "reason": f"KServe DQN decision: {action.name} (confidence: {metadata.get('confidence', 0.0):.3f})",
+                "reason": f"DQN decision: {action.name} (confidence: {metadata.get('confidence', 0.0):.3f})",
                 "ml_decision": {
                     "action_name": action.name,
                     "action_value": action.value,
@@ -239,17 +238,17 @@ class OperatorHandler:
                 }
             }
             
-            LOG.info(f"KServe decision: {action.name} -> {target_replicas} replicas "
+            LOG.info(f"DQN decision: {action.name} -> {target_replicas} replicas "
                     f"(confidence: {metadata.get('confidence', 0.0):.3f})")
             
             return decision
             
         except Exception as e:
-            LOG.error(f"KServe decision failed: {e}")
+            LOG.error(f"DQN decision failed: {e}")
             return {
                 "action": "none",
                 "target_replicas": current_replicas,
-                "reason": f"KServe decision failed: {str(e)}",
+                "reason": f"DQN decision failed: {str(e)}",
                 "ml_decision": {
                     "action_name": "NO_ACTION",
                     "action_value": 2,
@@ -279,8 +278,8 @@ class OperatorHandler:
             "success_rate": (self.successful_decisions / self.total_decisions) if self.total_decisions > 0 else 0.0
         }
         
-        if self.kserve_agent:
-            status.update(self.kserve_agent.get_kserve_metrics())
+        if self.dqn_agent:
+            status.update(self.dqn_agent.get_kserve_metrics())
             
         return status
 
@@ -289,14 +288,14 @@ class OperatorHandler:
         metrics = {
             "kserve_integration": {
                 "enabled": self.kserve_enabled,
-                "agent_available": self.kserve_agent is not None,
+                "agent_available": self.dqn_agent is not None,
                 "serving_endpoint": self.kserve_endpoint
             }
         }
         
-        if self.kserve_agent:
-            metrics["kserve"] = self.kserve_agent.get_kserve_metrics()
-            metrics["dqn_performance"] = self.kserve_agent.get_performance_metrics()
+        if self.dqn_agent:
+            metrics["kserve"] = self.dqn_agent.get_kserve_metrics()
+            metrics["dqn_performance"] = self.dqn_agent.get_performance_metrics()
             
         return metrics
 
