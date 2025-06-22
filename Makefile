@@ -1,263 +1,165 @@
-.PHONY: k8s-dev create-operator-secret stop-forward install-keda uninstall-keda reinstall-keda forward prepare-local-models
+# NimbusGuard Main Makefile
+# Orchestrates high-level workflows using modular makefiles
 
-# Stop port forwarding
-stop-forward:
-	@echo "🛑 Stopping port forwarding..."
-	@pkill -f "kubectl port-forward" || true
-	@echo "✅ Port forwarding stopped"
+.PHONY: k8s-dev help setup-kubeflow-environment clean clean-all deploy-kserve-only
 
-# Create operator secret
-create-operator-secret:
-	@echo "🔑 Setting up operator secrets..."
-	@read -p "Enter your OpenAI API key (or press Enter to skip): " api_key; \
-	if [ -n "$$api_key" ]; then \
-		kubectl create secret generic operator-secrets \
-			--namespace nimbusguard \
-			--from-literal=openai_api_key="$$api_key" \
-			--dry-run=client -o yaml | kubectl apply -f -; \
-		echo "✅ OpenAI API key configured!"; \
-	else \
-		kubectl create secret generic operator-secrets \
-			--namespace nimbusguard \
-			--from-literal=openai_api_key="" \
-			--dry-run=client -o yaml | kubectl apply -f -; \
-		echo "⚠️  No OpenAI API key provided - operator will use basic decision making"; \
-	fi
+# Include all modular makefiles
+include make/Makefile.infrastructure
+include make/Makefile.components
+include make/Makefile.monitoring
+include make/Makefile.dev
 
-# Uninstall KEDA
-uninstall-keda:
-	@echo "🗑️  Uninstalling old KEDA..."
-	@helm uninstall keda -n keda 2>/dev/null || true
-	@kubectl delete namespace keda --ignore-not-found=true
-	@kubectl delete apiservice v1beta1.external.metrics.k8s.io --ignore-not-found=true
-	@kubectl delete crd scaledobjects.keda.sh --ignore-not-found=true
-	@kubectl delete crd scaledjobs.keda.sh --ignore-not-found=true
-	@kubectl delete crd triggerauthentications.keda.sh --ignore-not-found=true
-	@kubectl delete crd clustertriggerauthentications.keda.sh --ignore-not-found=true
-	@echo "⏳ Waiting for cleanup..."
-	@sleep 10
-	@echo "✅ KEDA uninstalled!"
+# Colors for better output
+RED := \033[0;31m
+GREEN := \033[0;32m
+YELLOW := \033[0;33m
+BLUE := \033[0;34m
+NC := \033[0m # No Color
 
-# Install KEDA (compatible version for Kubernetes v1.33+)
-install-keda:
-	@echo "🚀 Installing KEDA..."
-	@helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
-	@helm repo update
-	@kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
-	@helm upgrade --install keda kedacore/keda \
-		--version 2.17.1 \
-		--namespace keda \
-		--wait \
-		--timeout 300s \
-		--set installCRDs=true \
-		--set operator.replicaCount=1 \
-		--set metricsServer.replicaCount=1 \
-		--set metricsServer.useHostNetwork=false \
-		--set metricsServer.port=6443 \
-		--set operator.grpcPort=9666 \
-		--set certs.autoGenerate=true \
-		--set certs.certDir=/certs \
-		--set certs.certSecretName=kedaorg-certs \
-		--set certs.caSecretName=kedaorg-ca \
-		--force
-	@echo "⏳ Waiting for KEDA to be ready..."
-	@kubectl wait --for=condition=ready pod -l app=keda-operator -n keda --timeout=300s || echo "⚠️  KEDA operator not ready yet"
-	@kubectl wait --for=condition=ready pod -l app=keda-operator-metrics-apiserver -n keda --timeout=300s || echo "⚠️  KEDA metrics server not ready yet"
-	@kubectl wait --for=condition=ready pod -l app=keda-admission-webhooks -n keda --timeout=300s || echo "⚠️  KEDA webhooks not ready yet"
-	@echo "✅ KEDA installed successfully!"
+# =============================================================================
+# Main Help
+# =============================================================================
 
-# Reinstall KEDA with correct version
-reinstall-keda: uninstall-keda install-keda
-
-# Uninstall Alloy
-uninstall-alloy:
-	@echo "🗑️  Uninstalling old Alloy..."
-	@helm uninstall alloy -n monitoring 2>/dev/null || true
-	@kubectl delete namespace monitoring --ignore-not-found=true
-	@echo "⏳ Waiting for cleanup..."
-	@sleep 10
-	@echo "✅ Alloy uninstalled!"
-
-# Install Alloy (using Helm)
-install-alloy:
-	@echo "🚀 Installing Grafana Alloy..."
-	@helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true
-	@helm repo update
-	@helm upgrade --install alloy grafana/alloy \
-		--namespace monitoring \
-		--create-namespace \
-		--wait \
-		--timeout 300s \
-		-f helm/values-alloy.yaml
-	@echo "⏳ Waiting for Alloy to be ready..."
-	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=alloy -n monitoring --timeout=300s
-	@echo "✅ Alloy installed successfully!"
-
-# Reinstall Alloy with correct version
-reinstall-alloy: uninstall-alloy install-alloy
-
-# Reset Kubernetes resources
-reset-k8s-resources:
-	@echo "🗑️  Deleting all resources from base and monitoring kustomize..."
-	@kubectl delete -k kubernetes-manifests/base || true
-	@kubectl delete -k kubernetes-manifests/monitoring || true
-	@echo "✅ All resources deleted!"
-
-# Kubernetes Development - Infrastructure + Component Selection
-k8s-dev:
-	@echo "🚀 Starting Kubernetes development environment..."
-	@echo "📋 Setting up common infrastructure..."
-	$(MAKE) setup-infrastructure
+help:
+	@echo "$(BLUE)🚀 NimbusGuard Development Environment$(NC)"
 	@echo ""
-	@echo "🎯 Choose scaling components to deploy (workloads always included):"
-	@echo "  1) Workloads only (no auto-scaling)"
-	@echo "  2) Workloads + KEDA (traditional auto-scaling)"
-	@echo "  3) Workloads + Operator (ML-based scaling)"
-	@echo "  4) Workloads + KEDA + Operator (both scaling methods - default)"
-	@read -p "Enter choice [1-4, default 4]: " choice; \
-	echo "[COMPONENTS] Deploying workloads (always required)..."; \
-	$(MAKE) deploy-workloads; \
+	@echo "$(GREEN)🎯 Quick Start:$(NC)"
+	@echo "  $(YELLOW)k8s-dev$(NC)              Interactive setup with scaling options"
+	@echo ""
+	@echo "$(GREEN)📋 Development:$(NC)"
+	@echo "  $(YELLOW)forward$(NC)              Setup port forwarding"
+	@echo "  $(YELLOW)status$(NC)               Show system status"
+	@echo "  $(YELLOW)health-check$(NC)         Check endpoint health"
+	@echo "  $(YELLOW)quick-test$(NC)           Run integration test"
+	@echo ""
+	@echo "$(GREEN)🧹 Cleanup:$(NC)"
+	@echo "  $(YELLOW)clean$(NC)                Clean up NimbusGuard resources"
+	@echo "  $(YELLOW)clean-all$(NC)            Clean everything including Kubeflow"
+	@echo ""
+	@echo "$(GREEN)🔧 Kubeflow ML Operations:$(NC)"
+	@echo "  $(YELLOW)kubeflow-install$(NC)     Install Kubeflow components"
+	@echo "  $(YELLOW)kubeflow-pipelines$(NC)   Deploy training pipelines"
+	@echo "  $(YELLOW)kubeflow-experiments$(NC) Run hyperparameter tuning"
+	@echo "  $(YELLOW)kubeflow-serving$(NC)     Deploy model serving"
+	@echo "  $(YELLOW)kubeflow-status$(NC)      Check Kubeflow status"
+	@echo ""
+	@echo "$(GREEN)🆘 Help & Info:$(NC)"
+	@echo "  $(YELLOW)info$(NC)                 Show detailed command info"
+	@echo "  $(YELLOW)debug-info$(NC)           System debug information"
+	@echo "  $(YELLOW)kubeflow-help$(NC)        Show Kubeflow-specific commands"
+	@echo ""
+	@echo "$(BLUE)💡 Getting Started:$(NC)"
+	@echo "  $(GREEN)1.$(NC) Run: $(YELLOW)make k8s-dev$(NC)"
+	@echo "  $(GREEN)2.$(NC) Choose your scaling setup (Traditional KEDA or Kubeflow ML)"
+	@echo "  $(GREEN)3.$(NC) Access services via port forwarding"
+
+# =============================================================================
+# Main Development Entry Point
+# =============================================================================
+
+k8s-dev:
+	@echo "$(BLUE)🚀 Welcome to NimbusGuard Development Environment$(NC)"
+	@echo ""
+	@echo "$(BLUE)📋 Choose your scaling approach:$(NC)"
+	@echo "  $(GREEN)1)$(NC) $(BLUE)Traditional Scaling$(NC) (workloads + KEDA)"
+	@echo "     • Workload components (Kafka, Consumer, Load Generator)"
+	@echo "     • KEDA-based auto-scaling with metrics"
+	@echo "     • Rule-based scaling policies"
+	@echo "     • ⚡ Fast setup, proven scaling approach"
+	@echo ""
+	@echo "  $(GREEN)2)$(NC) $(BLUE)Kubeflow ML Pipeline$(NC) (distributed training & serving)"
+	@echo "     • Workload components + Kubeflow operator"
+	@echo "     • Automated training pipelines with Kubeflow"
+	@echo "     • Hyperparameter optimization with Katib"
+	@echo "     • Production model serving with KServe"
+	@echo "     • Complete MLOps workflow with intelligent scaling"
+	@echo "     • 🚀 Production-ready, enterprise ML features"
+	@echo ""
+	@read -p "Enter choice [1-2, default 2]: " choice; \
+	echo "$(BLUE)[SETUP] Setting up common infrastructure...$(NC)"; \
+	$(MAKE) setup-infrastructure; \
+	echo ""; \
 	if [ "$$choice" = "1" ]; then \
-	  echo "[SCALING] No additional scaling components selected"; \
-	elif [ "$$choice" = "2" ]; then \
-	  echo "[SCALING] Adding KEDA auto-scaling..."; \
-	  $(MAKE) install-keda; \
-	  $(MAKE) deploy-keda-scaling; \
-	elif [ "$$choice" = "3" ]; then \
-	  echo "[SCALING] Adding ML-based operator scaling..."; \
-	  $(MAKE) deploy-operator-only; \
-	elif [ "$$choice" = "4" ] || [ -z "$$choice" ]; then \
-	  echo "[SCALING] Adding both KEDA and Operator scaling..."; \
-	  $(MAKE) install-keda; \
-	  $(MAKE) deploy-operator-only; \
-	  $(MAKE) deploy-keda-scaling; \
+	  echo "$(BLUE)[SCALING] ⚡ Setting up traditional KEDA scaling...$(NC)"; \
+	  $(MAKE) deploy-traditional-scaling; \
 	else \
-	  echo "❌ Invalid choice. Exiting."; \
-	  exit 1; \
+	  echo "$(BLUE)[ML] 🚀 Setting up Kubeflow ML Pipeline environment...$(NC)"; \
+	  $(MAKE) setup-kubeflow-environment; \
 	fi; \
 	echo ""; \
 	$(MAKE) deploy-monitoring; \
 	$(MAKE) wait-pods; \
 	$(MAKE) setup-port-forwarding
 
-# Common infrastructure setup (always required)
-setup-infrastructure:
-	@echo "🏗️  Building Docker images..."
-	@DOCKER_BUILDKIT=1 docker build \
-		-t nimbusguard/base:latest \
-		-f docker/base.Dockerfile .
-	@DOCKER_BUILDKIT=1 docker build \
-		-t nimbusguard/consumer-workload:latest \
-		-f src/consumer-workload/Dockerfile \
-		src/consumer-workload
-	@DOCKER_BUILDKIT=1 docker build \
-		-t nimbusguard/load-generator:latest \
-		-f src/load-generator/Dockerfile \
-		src/load-generator
-	@DOCKER_BUILDKIT=1 docker build \
-		-t nimbusguard/nimbusguard-operator:latest \
-		-f src/nimbusguard-operator/Dockerfile \
-		src/nimbusguard-operator
-	@echo "✅ All images built!"
-	@echo "📦 Applying base manifests (namespaces + CRDs)..."
-	@kubectl apply -k kubernetes-manifests/base
-	@echo "🔑 Creating operator secrets..."
-	@$(MAKE) create-operator-secret
-	@echo "📊 Installing Alloy (observability pipeline)..."
-	@if ! helm status alloy -n monitoring > /dev/null 2>&1; then \
-		$(MAKE) install-alloy; \
-	else \
-		echo "✅ Alloy already installed."; \
-	fi
-	@echo "📁 Preparing local models directory..."
-	@$(MAKE) prepare-local-models
-	@echo "✅ Infrastructure setup complete!"
+# =============================================================================
+# High-Level Workflow Orchestration
+# =============================================================================
 
-# Deploy just the workloads (Kafka + Consumer + Load Generator)
-deploy-workloads:
-	@echo "🚀 Deploying workload components..."
-	@kubectl apply -k kubernetes-manifests/components/base
-	@echo "✅ Workloads deployed!"
+# Kubeflow environment setup (called from k8s-dev)
+setup-kubeflow-environment:
+	@echo "$(BLUE)[KUBEFLOW] Installing Kubeflow components...$(NC)"
+	@$(MAKE) kubeflow-install
+	@echo "$(BLUE)[KUBEFLOW] Building ML pipeline images...$(NC)"
+	@$(MAKE) kubeflow-build-images
+	@echo "$(BLUE)[KUBEFLOW] Deploying workloads with Kubeflow integration...$(NC)"
+	@$(MAKE) deploy-workloads
+	@$(MAKE) deploy-kubeflow-operator
+	@echo "$(BLUE)[KUBEFLOW] Setting up model serving...$(NC)"
+	@$(MAKE) kubeflow-serving
+	@echo "$(GREEN)✅ Kubeflow environment ready!$(NC)"
 
-# Deploy KEDA scaling components
-deploy-keda-scaling:
-	@echo "📈 Deploying KEDA scaling components..."
-	@kubectl apply -k kubernetes-manifests/components/keda
-	@echo "✅ KEDA scaling deployed!"
+# Traditional scaling setup (workloads + KEDA only)
+deploy-traditional-scaling:
+	@echo "$(BLUE)[SCALING] Setting up traditional KEDA-based scaling...$(NC)"
+	@$(MAKE) deploy-workloads
+	@$(MAKE) install-keda
+	@$(MAKE) deploy-keda-scaling
+	@echo "$(GREEN)✅ Traditional scaling environment ready!$(NC)"
 
-# Deploy only the operator (without workloads)
-deploy-operator-only:
-	@echo "🤖 Deploying NimbusGuard operator..."
-	@PROJECT_DIR=$$(pwd); \
-	DOCKER_DESKTOP_PATH="/tmp/nimbusguard-models"; \
-	mkdir -p /tmp/nimbusguard-models; \
-	sed "s|\$${NIMBUSGUARD_PROJECT_PATH}|$$DOCKER_DESKTOP_PATH|g" \
-		kubernetes-manifests/components/operator/operator.yaml > \
-		/tmp/nimbusguard-operator.yaml; \
-	kubectl apply -f /tmp/nimbusguard-operator.yaml; \
-	rm -f /tmp/nimbusguard-operator.yaml
-	@echo "✅ Operator deployed!"
+# =============================================================================
+# Legacy Targets (for backward compatibility)
+# =============================================================================
 
-# Deploy monitoring stack
-deploy-monitoring:
-	@echo "📊 Deploying monitoring stack..."
-	@kubectl apply -k kubernetes-manifests/monitoring
-	@echo "✅ Monitoring deployed!"
-
-# Legacy deploy-operator target (calls new structure)
+# Legacy deploy-operator target (now redirects to Kubeflow)
 deploy-operator:
-	@echo "🚀 Using new infrastructure + operator deployment..."
+	@echo "$(BLUE)🚀 NimbusGuard now uses Kubeflow-only deployment...$(NC)"
+	@echo "$(YELLOW)Redirecting to Kubeflow setup...$(NC)"
 	$(MAKE) setup-infrastructure
-	$(MAKE) deploy-operator-only
+	$(MAKE) setup-kubeflow-environment
 
-wait-pods:
-	@echo "   Waiting for pods to be ready..."
-	@echo "   (This may take a few minutes for first-time setup...)"
-	@kubectl wait --for=condition=ready pod -l app=kafka -n nimbusguard --timeout=300s || echo "⚠️  Kafka not ready yet"
-	@kubectl wait --for=condition=ready pod -l app=consumer-workload -n nimbusguard --timeout=300s || echo "⚠️  Consumer not ready yet"
-	@kubectl wait --for=condition=ready pod -l app=load-generator -n nimbusguard --timeout=300s || echo "⚠️  Load generator not ready yet"
-	@kubectl wait --for=condition=ready pod -l app=nimbusguard-operator -n nimbusguard --timeout=300s || echo "⚠️  Operator not ready yet"
-	@kubectl wait --for=condition=ready pod -l app=prometheus -n monitoring --timeout=300s || echo "⚠️  Prometheus not ready yet"
-	@kubectl wait --for=condition=ready pod -l app=grafana -n monitoring --timeout=300s || echo "⚠️  Grafana not ready yet"
+# Reset Kubernetes resources (legacy)
+reset-k8s-resources:
+	@echo "$(RED)🗑️  Deleting all resources from base and monitoring kustomize...$(NC)"
+	@kubectl delete -k kubernetes-manifests/base || true
+	@kubectl delete -k kubernetes-manifests/monitoring || true
+	@echo "$(GREEN)✅ All resources deleted!$(NC)"
 
-setup-port-forwarding:
-	@echo "   Setting up port forwarding..."
-	@make stop-forward
-	@kubectl port-forward -n nimbusguard svc/consumer-workload 8080:8080 > /dev/null 2>&1 & \
-	kubectl port-forward -n nimbusguard svc/load-generator 8081:8081 > /dev/null 2>&1 & \
-	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 9080:9080 > /dev/null 2>&1 & \
-	kubectl port-forward -n monitoring svc/prometheus 9090:9090 > /dev/null 2>&1 & \
-	kubectl port-forward -n monitoring svc/grafana 3000:3000 > /dev/null 2>&1 & \
-	sleep 2
-	@echo "   ✅ Environment ready!"
-	@echo ""
-	@echo "   Services available at:"
-	@echo "   Consumer Workload: http://localhost:8080"
-	@echo "   Load Generator:    http://localhost:8081"
-	@echo "   Operator:          http://localhost:9080"
-	@echo "   Prometheus:        http://localhost:9090"
-	@echo "   Grafana:           http://localhost:3000 (admin/admin)"
+# =============================================================================
+# Cleanup Targets  
+# =============================================================================
 
-# Prepare local models directory for development
-prepare-local-models:
-	@echo "📁 Preparing local models directory..."
-	@PROJECT_DIR=$$(pwd); \
-	mkdir -p "$$PROJECT_DIR/models"; \
-	chmod 777 "$$PROJECT_DIR/models"; \
-	echo "✅ Models directory ready at: $$PROJECT_DIR/models"
+clean: ## Clean up NimbusGuard resources only
+	@echo "$(RED)🧹 Cleaning NimbusGuard resources...$(NC)"
+	@$(MAKE) clean-all-components
+	@$(MAKE) clean-monitoring
+	@echo "$(GREEN)✅ NimbusGuard resources cleaned!$(NC)"
 
-# Forward all relevant ports for local development
-forward:
-	@echo "🔀 Setting up port forwarding for all services..."
-	@kubectl port-forward -n nimbusguard svc/consumer-workload 8080:8080 > /dev/null 2>&1 & \
-	kubectl port-forward -n nimbusguard svc/load-generator 8081:8081 > /dev/null 2>&1 & \
-	kubectl port-forward -n nimbusguard svc/nimbusguard-operator 9080:9080 > /dev/null 2>&1 & \
-	kubectl port-forward -n monitoring svc/prometheus 9090:9090 > /dev/null 2>&1 & \
-	kubectl port-forward -n monitoring svc/grafana 3000:3000 > /dev/null 2>&1 & \
-	sleep 2
-	@echo "   ✅ Port forwarding ready!"
-	@echo "   Consumer Workload: http://localhost:8080"
-	@echo "   Load Generator:    http://localhost:8081"
-	@echo "   Operator:          http://localhost:9080"
-	@echo "   Prometheus:        http://localhost:9090"
-	@echo "   Grafana:           http://localhost:3000 (admin/admin)"
+clean-all: ## Clean everything including Kubeflow
+	@echo "$(RED)🧹 Cleaning everything including KEDA and Kubeflow...$(NC)"
+	@read -p "Are you sure you want to clean everything? (y/N): " confirm; \
+	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+	  $(MAKE) clean-all-components; \
+	  $(MAKE) clean-monitoring; \
+	  $(MAKE) clean-base-manifests; \
+	  $(MAKE) clean-images; \
+	  $(MAKE) clean-kubeflow-installation; \
+	  echo "$(RED)Cleaning Kubeflow namespaces...$(NC)"; \
+	  kubectl delete namespace nimbusguard-ml nimbusguard-serving nimbusguard-experiments --ignore-not-found=true; \
+	  echo "$(GREEN)✅ Everything cleaned!$(NC)"; \
+	else \
+	  echo "$(YELLOW)Cleanup cancelled.$(NC)"; \
+	fi
+
+# Reinstall helpers (legacy)
+reinstall-keda: uninstall-keda install-keda
+reinstall-alloy: uninstall-alloy install-alloy

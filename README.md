@@ -33,23 +33,32 @@ This single command will:
 
 ## 📋 Available Commands
 
-### Development Commands
+### Main Commands
 ```bash
 make help          # Show all available commands
-make dev           # Docker development environment
-make k8s-dev       # Kubernetes development (recommended)
+make k8s-dev       # Interactive setup with ML options (recommended)
 ```
 
-### Status Commands
+### Development Commands
 ```bash
+make forward       # Setup port forwarding
 make status        # Show system status with health checks
-make forward       # Setup persistent port forwarding only
+make health-check  # Check endpoint health
+make quick-test    # Run integration test
+```
+
+### Advanced Commands (Kubeflow)
+```bash
+make kubeflow-install     # Install Kubeflow components
+make kubeflow-pipelines   # Deploy training pipelines
+make kubeflow-experiments # Run hyperparameter tuning
+make kubeflow-serving     # Deploy model serving
 ```
 
 ### Cleanup Commands
 ```bash
-make clean         # Clean Docker environment
-make k8s-clean     # Clean Kubernetes environment
+make clean         # Clean NimbusGuard resources
+make clean-all     # Clean everything including Kubeflow
 ```
 
 ## 🌐 Service Access Points
@@ -340,3 +349,25 @@ This project is licensed under the MIT License.
 - [LangGraph](https://github.com/langchain-ai/langgraph) - Multi-agent AI workflows
 - [Prometheus](https://prometheus.io/) - Monitoring and alerting
 - [OpenTelemetry](https://opentelemetry.io/) - Observability framework
+
+---
+
+## 📏 Modular Build System
+
+NimbusGuard uses a modular makefile architecture for better maintainability:
+
+### 📜 Makefile Structure
+- **Main Makefile**: High-level workflows and orchestration  
+- **make/Makefile.infrastructure**: Docker builds, namespaces, secrets
+- **make/Makefile.components**: Workload and operator deployment  
+- **make/Makefile.monitoring**: Observability stack management
+- **make/Makefile.dev**: Port forwarding, status, cleanup
+- **kubeflow/Makefile.kubeflow**: ML pipeline integration
+
+### 🎯 Benefits
+- **📦 Organization**: Related functionality grouped together
+- **🔄 Maintainability**: Changes to one area don't affect others
+- **👥 Team Development**: Different team members can work on different modules
+- **🧪 Testing**: Test individual components in isolation
+
+See [`make/README.md`](make/README.md) for detailed documentation.

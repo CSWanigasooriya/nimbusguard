@@ -21,27 +21,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip setuptools wheel
 
-# Copy all requirements files from services
-COPY src/consumer-workload/requirements.txt /tmp/consumer-requirements.txt
-COPY src/load-generator/requirements.txt /tmp/load-generator-requirements.txt
-COPY src/nimbusguard-operator/requirements.txt /tmp/langgraph-requirements.txt
+# Copy consolidated requirements file
+COPY docker/requirements.txt /tmp/requirements.txt
 
-# Install ALL dependencies from all services
+# Install ALL dependencies from consolidated requirements file
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r /tmp/consumer-requirements.txt && \
-    pip install -r /tmp/load-generator-requirements.txt && \
-    pip install -r /tmp/langgraph-requirements.txt
+    pip install -r /tmp/requirements.txt
 
 # Create virtual environment template with ALL packages
 RUN python -m venv /opt/venv-template
 ENV PATH="/opt/venv-template/bin:$PATH"
 
-# Install everything into the template venv too
+# Install everything into the template venv using the same consolidated requirements
 RUN --mount=type=cache,target=/root/.cache/pip \
     /opt/venv-template/bin/pip install --upgrade pip setuptools wheel && \
-    /opt/venv-template/bin/pip install -r /tmp/consumer-requirements.txt && \
-    /opt/venv-template/bin/pip install -r /tmp/load-generator-requirements.txt && \
-    /opt/venv-template/bin/pip install -r /tmp/langgraph-requirements.txt
+    /opt/venv-template/bin/pip install -r /tmp/requirements.txt
 
 # Label for identification
 LABEL maintainer="NimbusGuard Team"

@@ -1,9 +1,10 @@
-# engine/handler.py - Fixed with proper scaling logic and loop prevention
+# engine/handler.py - KServe-Only Implementation
 # ============================================================================
-# Kubernetes Interaction and Orchestration
+# Kubernetes Interaction and Orchestration with KServe-only ML Pipeline
 # ============================================================================
 
 import logging
+import asyncio
 from collections import deque
 from typing import Dict, Any, Optional, List
 
@@ -12,7 +13,9 @@ import kubernetes
 
 from config import health_status
 from observability import ObservabilityCollector
-from rules import make_decision
+
+# KServe-only imports
+from ml.kserve_dqn_agent import KServeOnlyDQNAgent, create_kserve_only_agent
 from ml.state_representation import EnvironmentState
 
 LOG = logging.getLogger(__name__)
@@ -32,37 +35,91 @@ async def _fetch_unified_observability_data(
 
 class OperatorHandler:
     """
-    Handles all Kubernetes-specific logic and orchestrates the scaling process.
-    This version includes proper scaling logic and loop prevention.
+    KServe-only handler for ML pipeline management with model serving capabilities.
+    No local model support - all operations go through KServe endpoints.
     """
 
     def __init__(self):
-        """Initializes the handler, Kubernetes API client, and action history store."""
+        """Initializes the handler with Kubernetes and KServe integration."""
         self.apps_api: Optional[kubernetes.client.AppsV1Api] = None
         self.action_histories: Dict[str, deque] = {}
-        # DQN Experience Collection - stores (state, action) pairs waiting for next state
-        self.pending_experiences: Dict[str, Dict[str, Any]] = {}
-        # Cooldown logic removed for proactive scaling
+        
+        # KServe-only configuration
+        self.kserve_agent: Optional[KServeOnlyDQNAgent] = None
+        self.kserve_enabled = False
+        self.kserve_endpoint: Optional[str] = None
+        
+        # Performance tracking
+        self.total_decisions = 0
+        self.successful_decisions = 0
+        self.kserve_failures = 0
 
     async def initialize(self):
-        """Initializes the Kubernetes API clients."""
+        """Initializes Kubernetes API clients and KServe integration."""
         try:
+            # Initialize Kubernetes client
             try:
                 kubernetes.config.load_incluster_config()
                 LOG.info("Loaded in-cluster Kubernetes config.")
             except kubernetes.config.ConfigException:
                 kubernetes.config.load_kube_config()
                 LOG.info("Loaded local Kubernetes config (for development).")
+            
             self.apps_api = kubernetes.client.AppsV1Api()
             health_status["kubernetes"] = True
             LOG.info("Kubernetes client initialized successfully.")
+            
+            # Initialize KServe-only integration
+            await self._initialize_kserve_only()
+            
         except Exception as e:
-            LOG.critical(f"Kubernetes client initialization failed: {e}", exc_info=True)
+            LOG.critical(f"Handler initialization failed: {e}", exc_info=True)
             health_status["kubernetes"] = False
             raise
 
+    async def _initialize_kserve_only(self):
+        """Initialize KServe-only components and model serving."""
+        try:
+            # Get KServe endpoint from environment
+            import os
+            kserve_endpoint = os.getenv('KSERVE_ENDPOINT')
+            
+            if not kserve_endpoint:
+                LOG.error("KSERVE_ENDPOINT environment variable is required for KServe-only mode")
+                health_status["kserve"] = False
+                return
+                
+            # KServe configuration
+            kserve_config = {
+                'kserve_endpoint': kserve_endpoint,
+                'model_name': os.getenv('KSERVE_MODEL_NAME', 'nimbusguard-dqn'),
+                'state_dim': 11,
+                'action_dim': 5,
+                'confidence_threshold': float(os.getenv('DQN_CONFIDENCE_THRESHOLD', '0.7')),
+                'health_check_interval': int(os.getenv('KSERVE_HEALTH_CHECK_INTERVAL', '300'))
+            }
+            
+            self.kserve_agent = await create_kserve_only_agent(kserve_config)
+            self.kserve_enabled = True
+            self.kserve_endpoint = kserve_endpoint
+            
+            health_status["kserve"] = True
+            health_status["ml_decision_engine"] = True
+            
+            LOG.info("KServe-only integration initialized successfully")
+            LOG.info(f"Model serving endpoint: {self.kserve_endpoint}")
+            LOG.info(f"Confidence threshold: {kserve_config['confidence_threshold']}")
+            
+        except Exception as e:
+            LOG.error(f"KServe initialization failed: {e}")
+            health_status["kserve"] = False
+            health_status["ml_decision_engine"] = False
+            self.kserve_enabled = False
+            # In KServe-only mode, this is a critical failure
+            raise RuntimeError(f"KServe initialization failed: {e}")
+
     async def evaluate_scaling_logic(self, body: Dict[str, Any], namespace: str) -> Dict[str, Any]:
-        """The main evaluation loop for a given IntelligentScaling resource."""
+        """KServe-only evaluation loop for scaling decisions."""
         spec = body.get("spec", {})
         meta = body.get("metadata", {})
         resource_uid = meta.get("uid")
@@ -77,9 +134,15 @@ class OperatorHandler:
         min_replicas = spec.get("minReplicas", 1)
         max_replicas = spec.get("maxReplicas", 10)
 
-        LOG.info(f"Evaluating scaling for '{resource_name}' (uid: {resource_uid}).")
+        LOG.info(f"Evaluating scaling for '{resource_name}' (uid: {resource_uid}) using KServe-only mode.")
 
-        # 1. Get current state from Kubernetes.
+        # 1. Ensure KServe agent is available
+        if not self.kserve_enabled or not self.kserve_agent:
+            error_msg = "KServe agent not available - operator requires KServe endpoint configuration"
+            LOG.error(error_msg)
+            raise kopf.PermanentError(error_msg)
+
+        # 2. Get current state from Kubernetes
         current_replicas, deployment_name = await self._get_current_replicas(target_labels, target_namespace)
         if current_replicas is None:
             msg = f"No deployment found for labels {target_labels} in namespace '{target_namespace}'."
@@ -87,68 +150,157 @@ class OperatorHandler:
             raise kopf.PermanentError(msg)
         LOG.info(f"Found deployment '{deployment_name}' with {current_replicas} current replicas.")
 
-        # 3. Fetch observability data.
+        # 3. Fetch observability data
         service_name = target_labels.get("app", "unknown-service")
         unified_state = await _fetch_unified_observability_data(metrics_config, target_labels, service_name)
 
-        # 4. Check confidence threshold to prevent actions with poor data quality
-        confidence = unified_state.get("confidence_score", 0.0)
-        confidence_threshold = spec.get("ml_config", {}).get("confidence_threshold", 0.3)
-        
-        if confidence < confidence_threshold:
-            LOG.warning(f"Confidence score ({confidence:.2f}) below threshold ({confidence_threshold}). Skipping scaling decision.")
-            return {
-                "current_replicas": current_replicas,
-                "action": "none", 
-                "target_replicas": current_replicas,
-                "reason": f"Low confidence score: {confidence:.2f} < {confidence_threshold}"
-            }
-
-        # 5. Retrieve this resource's action history from our stateful memory.
+        # 4. Retrieve action history
         if resource_uid not in self.action_histories:
-            self.action_histories[resource_uid] = deque([2] * 5, maxlen=5)  # Initialize with NO_ACTION
+            self.action_histories[resource_uid] = deque([2] * 5, maxlen=5)
         recent_actions = list(self.action_histories[resource_uid])
 
-        # 6. Make a scaling decision, now passing the required 'recent_actions' argument.
-        decision = make_decision(
+        # 5. Make scaling decision with KServe
+        decision = await self._make_kserve_decision(
             current_replicas=current_replicas,
             min_replicas=min_replicas,
             max_replicas=max_replicas,
-            spec=spec,
             unified_state=unified_state,
-            recent_actions=recent_actions  # Pass the history to the decision logic
+            recent_actions=recent_actions
         )
 
-        # 7. Execute the decision if needed.
+        # 6. Execute the decision
+        success = True
         if decision.get("action") != "none":
             success = await self._execute_scaling(decision, deployment_name, target_namespace)
             if success:
-                LOG.info(f"Successfully executed scaling action for '{resource_name}'")
+                LOG.info(f"Successfully executed KServe scaling action for '{resource_name}'")
+                self.successful_decisions += 1
             else:
-                LOG.error(f"Failed to execute scaling action for '{resource_name}'")
+                LOG.error(f"Failed to execute KServe scaling action for '{resource_name}'")
                 decision["reason"] += " (execution failed)"
 
-        # 8. Update the action history with the new decision.
-        newly_chosen_action_value = decision.get("ml_decision", {}).get("action_value", 2)  # Default to NO_ACTION
+        # 7. Update action history
+        newly_chosen_action_value = decision.get("ml_decision", {}).get("action_value", 2)
         self.action_histories[resource_uid].append(newly_chosen_action_value)
 
-        # 9. DQN Experience Collection (Proper Implementation)
-        if spec.get("ml_config", {}).get("training_mode", False):
-            await self._handle_dqn_experience_collection(
-                resource_uid=resource_uid,
-                resource_name=resource_name,
-                spec=spec,
+        # 8. Update performance metrics
+        self.total_decisions += 1
+        if not success:
+            self.kserve_failures += 1
+
+        # 9. Add KServe status to response
+        decision["kserve_status"] = self._get_kserve_status()
+
+        return {"current_replicas": current_replicas, **decision}
+
+    async def _make_kserve_decision(self,
+                                   current_replicas: int,
+                                   min_replicas: int,
+                                   max_replicas: int,
+                                   unified_state: Dict[str, Any],
+                                   recent_actions: List[int]) -> Dict[str, Any]:
+        """
+        Make scaling decision using KServe-only model inference
+        """
+        
+        try:
+            # Create environment state
+            env_state = EnvironmentState.from_observability_data(
                 unified_state=unified_state,
                 current_replicas=current_replicas,
                 min_replicas=min_replicas,
                 max_replicas=max_replicas,
-                recent_actions=recent_actions,
-                decision=decision,
-                execution_success=success if 'success' in locals() else True
+                recent_actions=recent_actions
             )
+            
+            # Use KServe for prediction
+            action, metadata = await self.kserve_agent.select_action(
+                state=env_state,
+                force_valid=True
+            )
+            
+            # Convert to decision format
+            target_replicas = self._calculate_target_replicas(
+                current_replicas, action, min_replicas, max_replicas
+            )
+            
+            decision = {
+                "action": "scale_up" if target_replicas > current_replicas else 
+                         ("scale_down" if target_replicas < current_replicas else "none"),
+                "target_replicas": target_replicas,
+                "reason": f"KServe DQN decision: {action.name} (confidence: {metadata.get('confidence', 0.0):.3f})",
+                "ml_decision": {
+                    "action_name": action.name,
+                    "action_value": action.value,
+                    "confidence": metadata.get("confidence", 0.0),
+                    "prediction_source": metadata.get("prediction_source", "kserve"),
+                    "q_values": metadata.get("q_values", []),
+                    "kserve_metadata": metadata
+                }
+            }
+            
+            LOG.info(f"KServe decision: {action.name} -> {target_replicas} replicas "
+                    f"(confidence: {metadata.get('confidence', 0.0):.3f})")
+            
+            return decision
+            
+        except Exception as e:
+            LOG.error(f"KServe decision failed: {e}")
+            return {
+                "action": "none",
+                "target_replicas": current_replicas,
+                "reason": f"KServe decision failed: {str(e)}",
+                "ml_decision": {
+                    "action_name": "NO_ACTION",
+                    "action_value": 2,
+                    "confidence": 0.0,
+                    "prediction_source": "error",
+                    "error": str(e)
+                }
+            }
 
-        return {"current_replicas": current_replicas, **decision}
+    def _calculate_target_replicas(self, current_replicas: int, action, min_replicas: int, max_replicas: int) -> int:
+        """Calculate target replicas based on action."""
+        from ml.state_representation import ScalingActions
+        
+        # Use the actual replica change method from ScalingActions
+        change = action.get_replica_change()
+        target = current_replicas + change
+        return max(min_replicas, min(max_replicas, target))
 
+    def _get_kserve_status(self) -> Dict[str, Any]:
+        """Get current KServe integration status."""
+        status = {
+            "kserve_enabled": self.kserve_enabled,
+            "kserve_endpoint": self.kserve_endpoint,
+            "total_decisions": self.total_decisions,
+            "successful_decisions": self.successful_decisions,
+            "kserve_failures": self.kserve_failures,
+            "success_rate": (self.successful_decisions / self.total_decisions) if self.total_decisions > 0 else 0.0
+        }
+        
+        if self.kserve_agent:
+            status.update(self.kserve_agent.get_kserve_metrics())
+            
+        return status
+
+    async def get_kserve_metrics(self) -> Dict[str, Any]:
+        """Get comprehensive KServe metrics for monitoring."""
+        metrics = {
+            "kserve_integration": {
+                "enabled": self.kserve_enabled,
+                "agent_available": self.kserve_agent is not None,
+                "serving_endpoint": self.kserve_endpoint
+            }
+        }
+        
+        if self.kserve_agent:
+            metrics["kserve"] = self.kserve_agent.get_kserve_metrics()
+            metrics["dqn_performance"] = self.kserve_agent.get_performance_metrics()
+            
+        return metrics
+
+    # Core Kubernetes operations (unchanged)
     async def _get_current_replicas(self, labels: Dict[str, str], ns: str) -> tuple[Optional[int], Optional[str]]:
         """Finds a deployment by its labels and returns its current replica count and name."""
         if not self.apps_api: 
@@ -216,8 +368,6 @@ class OperatorHandler:
         """
         Verify that a scaling action actually took effect by checking the deployment.
         """
-        import asyncio
-        
         for i in range(max_wait_seconds):
             try:
                 current_replicas, _ = await self._get_current_replicas({"app": name}, ns)
@@ -230,147 +380,3 @@ class OperatorHandler:
                 
         LOG.warning(f"Scaling verification failed: '{name}' did not reach {expected_replicas} replicas in {max_wait_seconds}s")
         return False
-
-    async def _handle_dqn_experience_collection(
-        self, 
-        resource_uid: str,
-        resource_name: str,
-        spec: Dict[str, Any],
-        unified_state: Dict[str, Any],
-        current_replicas: int,
-        min_replicas: int,
-        max_replicas: int,
-        recent_actions: List[int],
-        decision: Dict[str, Any],
-        execution_success: bool
-    ):
-        """
-        Proper DQN experience collection that handles state transitions over time.
-        This is the REAL implementation that properly stores (s, a, r, s') tuples.
-        
-        The key insight: We can't calculate proper rewards immediately because we need to:
-        1. Execute the action 
-        2. Wait for the system to respond (30s evaluation interval)
-        3. Observe the new state 
-        4. Then calculate reward based on the actual state transition
-        """
-        try:
-            from ml.state_representation import EnvironmentState, ScalingActions
-            from rules import _initialize_dqn_agent
-            import time
-            
-            # Create current environment state
-            current_env_state = EnvironmentState.from_observability_data(
-                unified_state=unified_state,
-                current_replicas=current_replicas,
-                min_replicas=min_replicas,
-                max_replicas=max_replicas,
-                recent_actions=recent_actions
-            )
-            
-            newly_chosen_action_value = decision.get("ml_decision", {}).get("action_value", 2)
-            action_taken = ScalingActions(newly_chosen_action_value)
-            
-            # Step 1: Process any pending experience from previous iteration
-            if resource_uid in self.pending_experiences:
-                await self._complete_pending_experience(resource_uid, resource_name, current_env_state, spec)
-            
-            # Step 2: Store current state and action for next iteration
-            # Only if we actually took an action (not NO_ACTION)
-            if action_taken != ScalingActions.NO_ACTION:
-                self.pending_experiences[resource_uid] = {
-                    "previous_state": current_env_state,
-                    "action": action_taken,
-                    "timestamp": time.time(),
-                    "execution_success": execution_success,
-                    "resource_name": resource_name
-                }
-                LOG.info(f"[{resource_name}] Stored experience for action {action_taken.name}, waiting for next state...")
-            else:
-                # For NO_ACTION, we can calculate reward immediately since there's no state change expected
-                agent = _initialize_dqn_agent(spec)
-                reward_components = agent.evaluate_decision(
-                    previous_state=current_env_state,
-                    action=action_taken,
-                    current_state=current_env_state,  # Same state for NO_ACTION
-                    execution_success=execution_success
-                )
-                
-                LOG.info(f"[{resource_name}] NO_ACTION Reward: "
-                        f"Total: {reward_components.total_reward:.2f} | "
-                        f"Performance: {reward_components.performance_reward:.2f} | "
-                        f"Efficiency: {reward_components.efficiency_reward:.2f} | "
-                        f"Stability: {reward_components.stability_reward:.2f}")
-                        
-        except Exception as e:
-            LOG.warning(f"Failed to handle DQN experience collection: {e}")
-
-    async def _complete_pending_experience(
-        self, 
-        resource_uid: str, 
-        resource_name: str, 
-        next_state: EnvironmentState, 
-        spec: Dict[str, Any]
-    ):
-        """
-        Complete a pending experience by calculating reward and storing in replay buffer.
-        This creates the proper (s, a, r, s') tuple for DQN training.
-        
-        This is called when we have:
-        - Previous state (from last evaluation)  
-        - Action taken (from last evaluation)
-        - Current state (from this evaluation)
-        - Can now calculate the reward based on actual state transition!
-        """
-        try:
-            from rules import _initialize_dqn_agent
-            import time
-            
-            pending = self.pending_experiences[resource_uid]
-            previous_state = pending["previous_state"]
-            action = pending["action"]
-            execution_success = pending["execution_success"]
-            time_elapsed = time.time() - pending["timestamp"]
-            
-            # Calculate reward based on actual state transition
-            agent = _initialize_dqn_agent(spec)
-            reward_components = agent.evaluate_decision(
-                previous_state=previous_state,
-                action=action,
-                current_state=next_state,
-                execution_success=execution_success
-            )
-            
-            # Store the complete experience in the agent's replay buffer
-            # This is where the real learning happens!
-            agent.store_experience(
-                state=previous_state,
-                action=action,
-                reward_components=reward_components,
-                next_state=next_state,
-                done=False  # Episodes don't really "end" in continuous control
-            )
-            
-            # Perform training step if enough experiences are collected
-            training_result = agent.train_step()
-            
-            LOG.info(f"[{resource_name}] COMPLETE EXPERIENCE | Action: {action.name} | "
-                    f"Time elapsed: {time_elapsed:.1f}s | "
-                    f"Reward: {reward_components.total_reward:.2f} "
-                    f"(Perf: {reward_components.performance_reward:.2f}, "
-                    f"Eff: {reward_components.efficiency_reward:.2f}, "
-                    f"Stab: {reward_components.stability_reward:.2f})")
-            
-            if training_result:
-                LOG.info(f"[{resource_name}] DQN Training Step | "
-                        f"Loss: {training_result['loss']:.4f} | "
-                        f"Epsilon: {training_result['epsilon']:.3f}")
-            
-            # Remove the completed experience
-            del self.pending_experiences[resource_uid]
-            
-        except Exception as e:
-            LOG.error(f"Failed to complete pending experience: {e}")
-            # Remove the failed experience to avoid getting stuck
-            if resource_uid in self.pending_experiences:
-                del self.pending_experiences[resource_uid]

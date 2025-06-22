@@ -1,3 +1,9 @@
+# NimbusGuard KServe-Only Operator
+# ============================================================================
+# Lightweight operator image for KServe-only mode
+# No PyTorch or local model dependencies
+# ============================================================================
+
 FROM nimbusguard/base:latest
 
 WORKDIR /app
@@ -11,16 +17,20 @@ RUN id -u operator >/dev/null 2>&1 || useradd -r -g operator -m operator && \
     mkdir -p /app/logs /tmp/logs && \
     chown -R operator:operator /app/logs /tmp/logs
 
-# Copy the operator code
+# Copy the KServe-only operator code
 COPY --chown=operator:operator . .
 
 USER operator
 
-# Set environment variables
+# Set environment variables for KServe-only mode
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Run the operator
+# Health check for KServe connectivity
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9080/healthz || exit 1
+
+# Run the KServe-only operator
 CMD ["kopf", "run", \
      "--standalone", \
      "--liveness=http://0.0.0.0:9080/healthz", \
