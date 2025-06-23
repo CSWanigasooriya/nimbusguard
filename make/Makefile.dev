@@ -25,14 +25,7 @@ setup-port-forwarding:
 	kubectl port-forward -n monitoring svc/prometheus 9090:9090 > /dev/null 2>&1 & \
 	kubectl port-forward -n monitoring svc/grafana 3000:3000 > /dev/null 2>&1 & \
 	sleep 2
-	@echo "$(GREEN)   ✅ Environment ready!$(NC)"
-	@echo ""
-	@echo "$(BLUE)   Services available at:$(NC)"
-	@echo "$(GREEN)   📊 Consumer Workload: http://localhost:8080$(NC)"
-	@echo "$(GREEN)   🚀 Load Generator:    http://localhost:8081$(NC)"
-	@echo "$(GREEN)   🤖 Operator:          http://localhost:9080$(NC)"
-	@echo "$(GREEN)   📈 Prometheus:        http://localhost:9090$(NC)"
-	@echo "$(GREEN)   📊 Grafana:           http://localhost:3000 (admin/admin)$(NC)"
+	@echo "$(GREEN)   ✅ Port forwarding setup complete!$(NC)"
 
 stop-forward:
 	@echo "$(RED)🛑 Stopping port forwarding...$(NC)"
@@ -121,7 +114,7 @@ health-check-endpoints:
 	@echo "$(GREEN)Endpoint Health:$(NC)"
 	@curl -sf http://localhost:8080/health >/dev/null 2>&1 && echo "$(GREEN)✅ Consumer Workload$(NC)" || echo "$(RED)❌ Consumer Workload$(NC)"
 	@curl -sf http://localhost:8081/health >/dev/null 2>&1 && echo "$(GREEN)✅ Load Generator$(NC)" || echo "$(RED)❌ Load Generator$(NC)"
-	@curl -sf http://localhost:9080/health >/dev/null 2>&1 && echo "$(GREEN)✅ Operator$(NC)" || echo "$(RED)❌ Operator$(NC)"
+	@curl -sf http://localhost:9080/healthz >/dev/null 2>&1 && echo "$(GREEN)✅ Operator$(NC)" || echo "$(RED)❌ Operator$(NC)"
 	@curl -sf http://localhost:9090/-/healthy >/dev/null 2>&1 && echo "$(GREEN)✅ Prometheus$(NC)" || echo "$(RED)❌ Prometheus$(NC)"
 	@curl -sf http://localhost:3000/api/health >/dev/null 2>&1 && echo "$(GREEN)✅ Grafana$(NC)" || echo "$(RED)❌ Grafana$(NC)"
 
@@ -140,20 +133,24 @@ kubeflow-dashboard: ## Access Kubeflow Pipelines and Katib UIs
 	@echo "$(YELLOW)Checking for existing Kubeflow port forwards...$(NC)"
 	@pkill -f "kubectl port-forward.*ml-pipeline-ui" || true
 	@pkill -f "kubectl port-forward.*katib-ui" || true
+	@pkill -f "kubectl port-forward.*ml-development-environment" || true
 	@sleep 2
 	@echo "$(YELLOW)Setting up port forwarding to Kubeflow UIs...$(NC)"
 	@kubectl port-forward svc/ml-pipeline-ui 8082:80 -n kubeflow > /dev/null 2>&1 &
 	@kubectl port-forward svc/katib-ui 8083:80 -n kubeflow > /dev/null 2>&1 &
+	@kubectl port-forward svc/ml-development-environment 8084:8888 -n nimbusguard-ml-workspace > /dev/null 2>&1 &
 	@sleep 3
-	@echo "$(GREEN)✅ Kubeflow UIs available:$(NC)"
-	@echo "  $(BLUE)Pipelines UI:$(NC) http://localhost:8082"
-	@echo "  $(BLUE)Katib UI:$(NC)     http://localhost:8083/katib/"
-	@echo ""
-	@echo "$(BLUE)💡 Features available:$(NC)"
-	@echo "  • $(BLUE)Pipelines (8082):$(NC) Create and manage ML workflows"
-	@echo "  • $(BLUE)Katib (8083):$(NC)     Hyperparameter optimization experiments"
-	@echo "  • View experiment results and metrics"
-	@echo "  • Monitor training job progress"
+	@echo "$(GREEN)✅ Kubeflow UIs port forwarding setup complete!$(NC)"
+
+ml-development: ## Access ML Development Environment
+	@echo "$(BLUE)💻 Setting up ML Development Environment access...$(NC)"
+	@echo "$(YELLOW)Checking for existing development environment port forward...$(NC)"
+	@pkill -f "kubectl port-forward.*ml-development-environment" || true
+	@sleep 2
+	@echo "$(YELLOW)Setting up port forwarding to ML Development Environment...$(NC)"
+	@kubectl port-forward svc/ml-development-environment 8084:8888 -n nimbusguard-ml-workspace > /dev/null 2>&1 &
+	@sleep 3
+	@echo "$(GREEN)✅ ML Development Environment port forwarding setup complete!$(NC)"
 
 minio-console: ## Open MinIO web console
 	@echo "$(BLUE)🌐 Setting up MinIO Console access...$(NC)"
@@ -163,25 +160,15 @@ minio-console: ## Open MinIO web console
 	@echo "$(YELLOW)Setting up port forwarding to MinIO Console...$(NC)"
 	@kubectl port-forward svc/minio-console 9001:9001 -n minio > /dev/null 2>&1 &
 	@sleep 3
-	@echo "$(GREEN)✅ MinIO Console available at: http://localhost:9001$(NC)"
-	@echo "$(YELLOW)Credentials: nimbusguard / nimbusguard123$(NC)"
-	@open http://localhost:9001 2>/dev/null || echo "$(YELLOW)Please visit: http://localhost:9001$(NC)"
+	@echo "$(GREEN)✅ MinIO Console port forwarding setup complete!$(NC)"
 
 dashboards: ## Access all dashboards (Kubeflow, MinIO, Grafana, Prometheus)
 	@echo "$(BLUE)🎛️ Setting up all dashboard access...$(NC)"
 	@$(MAKE) setup-port-forwarding
 	@$(MAKE) kubeflow-dashboard
+	@$(MAKE) ml-development
 	@$(MAKE) minio-console
-	@echo ""
-	@echo "$(GREEN)🌐 All Dashboards Ready:$(NC)"
-	@echo "  $(BLUE)Kubeflow Pipelines:$(NC) http://localhost:8082"
-	@echo "  $(BLUE)Kubeflow Katib:$(NC)     http://localhost:8083/katib/"
-	@echo "  $(BLUE)MinIO Console:$(NC)      http://localhost:9001"
-	@echo "  $(BLUE)Grafana:$(NC)            http://localhost:3000"
-	@echo "  $(BLUE)Prometheus:$(NC)         http://localhost:9090"
-	@echo "  $(BLUE)Consumer Workload:$(NC)  http://localhost:8080"
-	@echo "  $(BLUE)Load Generator:$(NC)     http://localhost:8081"
-	@echo "  $(BLUE)Operator:$(NC)           http://localhost:9080"
+	@echo "$(GREEN)✅ All dashboard port forwarding setup complete!$(NC)"
 
 # =============================================================================
 # Development Helpers

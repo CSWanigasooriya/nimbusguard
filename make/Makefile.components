@@ -102,7 +102,7 @@ install-keda:
 	@echo "$(BLUE)🚀 Installing KEDA...$(NC)"
 	@helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
 	@helm repo update
-	@kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
+	@echo "$(YELLOW)Using pre-existing KEDA namespace from base manifests$(NC)"
 	@helm upgrade --install keda kedacore/keda \
 		--version 2.17.1 \
 		--namespace keda \
@@ -224,7 +224,7 @@ deploy-minio: ## Deploy MinIO object storage
 	@kubectl apply -k kubernetes-manifests/components/storage
 	@echo "$(GREEN)✅ MinIO deployed! Waiting for pods to be ready...$(NC)"
 	@kubectl wait --for=condition=ready pod -l app=minio -n minio --timeout=120s || true
-	@echo "$(BLUE)📊 MinIO Console available at: http://localhost:30901$(NC)"
+	@echo "$(BLUE)📊 MinIO Console available at: http://localhost:9001$(NC)"
 	@echo "$(YELLOW)💡 Credentials: nimbusguard / nimbusguard123$(NC)"
 
 minio-status: ## Check MinIO deployment status
@@ -234,7 +234,7 @@ minio-status: ## Check MinIO deployment status
 	@kubectl get svc -l app=minio -n minio
 	@echo ""
 	@echo "$(BLUE)🌐 Access URLs:$(NC)"
-	@echo "  Console (Web UI): $(YELLOW)http://localhost:30901$(NC)"
+	@echo "  Console (Web UI): $(YELLOW)http://localhost:9001$(NC)"
 	@echo "  API Endpoint:     $(YELLOW)http://localhost:9000$(NC)"
 	@echo "  Credentials:      $(YELLOW)nimbusguard / nimbusguard123$(NC)"
 

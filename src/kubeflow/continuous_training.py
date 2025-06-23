@@ -283,6 +283,7 @@ def save_model_to_minio(model, model_name: str, version: str) -> bool:
         import boto3
         from botocore.exceptions import ClientError
         import tempfile
+        import torch
         
         # Initialize S3 client
         s3_client = boto3.client(
@@ -292,7 +293,7 @@ def save_model_to_minio(model, model_name: str, version: str) -> bool:
             aws_secret_access_key=os.getenv('MINIO_SECRET_KEY', 'nimbusguard123'),
             region_name=os.getenv('MINIO_REGION', 'us-east-1')
         )
-        bucket = os.getenv('MINIO_BUCKET', 'models')
+        bucket = os.getenv('MINIO_MODEL_BUCKET', 'models')
         
         # Prepare checkpoint
         checkpoint = {

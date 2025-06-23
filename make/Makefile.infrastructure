@@ -155,6 +155,13 @@ kubeflow-install: ## Install Kubeflow components (Katib, KServe, Pipelines)
 	@kubectl apply --server-side --force-conflicts -f "https://github.com/kserve/kserve/releases/download/v0.11.2/kserve.yaml" --timeout=120s || \
 		(echo "$(YELLOW)⚠️  KServe installation encountered expected certificate issues, continuing...$(NC)" && \
 		 echo "$(YELLOW)This is normal during initial setup - the webhook certificates will be configured automatically$(NC)")
+	@echo "$(YELLOW)Setting up KServe webhook certificates...$(NC)"
+	@kubectl apply -f kubernetes-manifests/components/kubeflow/kserve-certificates.yaml --timeout=60s || \
+		(echo "$(YELLOW)⚠️  Kubeflow certificates failed, using fallback method...$(NC)" && \
+		 openssl req -x509 -newkey rsa:2048 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -nodes -subj "/CN=kserve-webhook-server-service.kserve.svc" && \
+		 kubectl create secret tls kserve-webhook-server-cert --cert=/tmp/tls.crt --key=/tmp/tls.key -n kserve --dry-run=client -o yaml | kubectl apply -f - && \
+		 rm -f /tmp/tls.key /tmp/tls.crt && \
+		 echo "$(GREEN)✅ Fallback certificates created successfully$(NC)")
 	@echo "$(YELLOW)Waiting for KServe webhook to be ready...$(NC)"
 	@kubectl wait --for=condition=ready pod -l control-plane=kserve-controller-manager -n kserve --timeout=300s || echo "$(YELLOW)⚠️ KServe webhook not ready after 5 minutes.$(NC)"
 	@sleep 30
@@ -253,6 +260,9 @@ clean-kubeflow-installation: ## Clean up Kubeflow installation
 	@echo "$(YELLOW)Cleaning KServe...$(NC)"
 	@kubectl delete -f "https://github.com/kserve/kserve/releases/download/v0.11.2/kserve-runtimes.yaml" --ignore-not-found=true --timeout=120s || true
 	@kubectl delete -f "https://github.com/kserve/kserve/releases/download/v0.11.2/kserve.yaml" --ignore-not-found=true --timeout=120s || true
+	@kubectl delete certificate serving-cert kserve-serving-ca -n kserve --ignore-not-found=true || true
+	@kubectl delete issuer kserve-selfsigned-issuer -n kserve --ignore-not-found=true || true
+	@kubectl delete secret kserve-webhook-server-cert kserve-serving-ca-secret -n kserve --ignore-not-found=true || true
 	@echo "$(GREEN)✅ Kubeflow components cleaned!$(NC)"
 
 # =============================================================================
