@@ -221,28 +221,7 @@ collect-training-data-quick: ## Quick training data collection (shorter duration
 	@echo "$(BLUE)📊 Starting quick training data collection...$(NC)"
 	@echo "$(YELLOW)This is a shorter version for testing purposes$(NC)"
 	@echo "$(YELLOW)Estimated duration: ~10 minutes$(NC)"
-	@cd scripts && python3 -c "
-import asyncio
-import sys
-sys.path.append('.')
-from collect_training_data import TrainingDataCollector
-
-class QuickCollector(TrainingDataCollector):
-    def __init__(self):
-        super().__init__()
-        # Shorter load patterns for quick testing
-        self.load_patterns = [
-            {'name': 'low_test', 'pattern': 'constant', 'intensity': 20, 'duration': 60},
-            {'name': 'high_test', 'pattern': 'constant', 'intensity': 80, 'duration': 60},
-            {'name': 'spike_test', 'pattern': 'spike', 'intensity': 90, 'duration': 30},
-        ]
-
-async def main():
-    collector = QuickCollector()
-    await collector.collect_comprehensive_dataset()
-
-asyncio.run(main())
-"
+	@cd scripts && python3 -c "import os; os.system('python3 collect_training_data.py --quick')"
 
 restart-all:
 	@echo "$(BLUE)🔄 Restarting all components...$(NC)"
