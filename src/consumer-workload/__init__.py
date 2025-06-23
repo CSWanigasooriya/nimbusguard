@@ -1,3 +1,0 @@
-"""
-NimbusGuard Consumer Workload Application
-"""
