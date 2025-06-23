@@ -1,102 +1,34 @@
 services:
-  consumer-workload:
+  nimbusguard-base:
     build:
-      context: ./src/consumer-workload
+      context: docker
+      dockerfile: base.Dockerfile
+    image: nimbusguard-base:latest
+    command: ["echo", "Base image built successfully"]
+
+  consumer:
+    build:
+      context: src/consumer
       dockerfile: Dockerfile
-      args:
-        BUILDKIT_INLINE_CACHE: 1
-    image: consumer-workload:latest
+    image: nimbusguard-consumer:latest
+    container_name: nimbusguard-consumer
     ports:
-      - "8080:8080"
-    deploy:
-      resources:
-        limits:
-          cpus: '4.0'
-          memory: 2G
-        reservations:
-          cpus: '2.0'
-          memory: 1G
+      - "8000:8000"
     environment:
-      - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
-      - LOG_FILE_PATH=/tmp/logs/app.log
-    # volumes:
-      # Optional: persist logs (uncomment if needed)
-      # - ./logs/consumer-workload:/tmp/logs
-    networks:
-      - nimbusguard
-    depends_on:
-      - kafka
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  load-generator:
-    build:
-      context: ./src/load-generator
-      dockerfile: Dockerfile
-      args:
-        BUILDKIT_INLINE_CACHE: 1
-    image: load-generator:latest
-    ports:
-      - "8081:8081"
-    environment:
-      - CONSUMER_WORKLOAD_URL=http://consumer-workload:8080
-    networks:
-      - nimbusguard
+      start_period: 40s
+    restart: unless-stopped
     depends_on:
-      - consumer-workload
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Kafka for event streaming
-  kafka:
-    image: confluentinc/cp-kafka:7.5.0
-    ports:
-      - "9092:9092"
-      - "29092:29092"
-    environment:
-      CLUSTER_ID: K7DeG7KMS1ucKSgxDZfoAQ
-      KAFKA_KRAFT_MODE: "true"
-      KAFKA_PROCESS_ROLES: "broker,controller"
-      KAFKA_NODE_ID: 1
-      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@localhost:9093"
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
-      KAFKA_LOG4J_OPTS: "-Dlog4j.configuration=file:/opt/kafka/config/custom-log4j.properties"
+      - nimbusguard-base
     volumes:
-      - ./log4j.properties:/opt/kafka/config/custom-log4j.properties:ro
-    networks:
-      - nimbusguard
-
-
-
-  # Basic Prometheus for metrics collection
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'  
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--web.enable-lifecycle'
-    networks:
-      - nimbusguard
+      - ./src/consumer:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 networks:
-  nimbusguard:
-    driver: bridge 
+  default:
+    name: nimbusguard-network 
