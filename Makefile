@@ -1,4 +1,4 @@
-# Simple NimbusGuard Makefile
+# NimbusGuard Makefile
 
 .PHONY: help dev prod run forward status logs restart clean
 
