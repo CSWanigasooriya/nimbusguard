@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # Create FastAPI instance
 app = FastAPI(
@@ -6,6 +7,9 @@ app = FastAPI(
     description="A consumer service for NimbusGuard",
     version="1.0.0"
 )
+
+# Initialize Prometheus metrics instrumentation
+Instrumentator().instrument(app).expose(app)
 
 @app.get("/")
 async def root():
