@@ -132,23 +132,7 @@ deploy-traditional-scaling:
 	@$(MAKE) deploy-keda-scaling
 	@echo "$(GREEN)✅ Traditional scaling environment ready!$(NC)"
 
-# =============================================================================
-# Legacy Targets (for backward compatibility)
-# =============================================================================
 
-# Legacy deploy-operator target (now redirects to Kubeflow)
-deploy-operator:
-	@echo "$(BLUE)🚀 NimbusGuard now uses Kubeflow-only deployment...$(NC)"
-	@echo "$(YELLOW)Redirecting to Kubeflow setup...$(NC)"
-	$(MAKE) setup-infrastructure
-	$(MAKE) setup-kubeflow-environment
-
-# Reset Kubernetes resources (legacy)
-reset-k8s-resources:
-	@echo "$(RED)🗑️  Deleting all resources from base and monitoring kustomize...$(NC)"
-	@kubectl delete -k kubernetes-manifests/base || true
-	@kubectl delete -k kubernetes-manifests/monitoring || true
-	@echo "$(GREEN)✅ All resources deleted!$(NC)"
 
 # =============================================================================
 # Cleanup Targets  
@@ -186,12 +170,13 @@ show-completion-summary:
 	@echo "$(BLUE)🌐 Available Dashboards:$(NC)"
 	@echo "  $(GREEN)• Kubeflow Pipelines:$(NC) http://localhost:8082 (ML workflows)"
 	@echo "  $(GREEN)• Kubeflow Katib:$(NC)     http://localhost:8083/katib/ (Hyperparameter tuning)"
-	@echo "  $(GREEN)• MinIO Console:$(NC)      http://localhost:30901 (Object storage - nimbusguard/nimbusguard123)"
+	@echo "  $(GREEN)• ML Development:$(NC)     http://localhost:8084 (Production ML workspace)"
+	@echo "  $(GREEN)• MinIO Console:$(NC)      http://localhost:9001 (Object storage - nimbusguard/nimbusguard123)"
 	@echo "  $(GREEN)• Grafana:$(NC)            http://localhost:3000 (Monitoring - admin/admin)"
 	@echo "  $(GREEN)• Prometheus:$(NC)         http://localhost:9090 (Metrics)"
 	@echo "  $(GREEN)• Consumer Workload:$(NC)  http://localhost:8080 (API endpoints)"
 	@echo "  $(GREEN)• Load Generator:$(NC)     http://localhost:8081 (Load controls)"
-	@echo "  $(GREEN)• NimbusGuard Operator:$(NC) http://localhost:9080 (Operator API)"
+	@echo "  $(GREEN)• NimbusGuard Operator:$(NC) http://localhost:9080/healthz (Operator API)"
 	@echo ""
 	@echo "$(BLUE)🚀 Quick Commands:$(NC)"
 	@echo "  $(YELLOW)make dashboards$(NC)       - Access all dashboards at once"
@@ -211,6 +196,4 @@ show-completion-summary:
 	@echo ""
 	@echo "$(GREEN)✨ Your intelligent Kubernetes scaling platform is ready for action!$(NC)"
 
-# Reinstall helpers (legacy)
-reinstall-keda: uninstall-keda install-keda
-reinstall-alloy: uninstall-alloy install-alloy
+
