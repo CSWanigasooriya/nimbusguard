@@ -143,7 +143,7 @@ setup: ## Setup development environment (install latest tools)
 	@echo "   • yq: $$(yq --version 2>/dev/null || echo 'not installed')"
 	@echo "   • k9s: $$(k9s version -s 2>/dev/null || echo 'not installed')"
 	@echo ""
-	@echo "🚀 Ready to deploy! Try: make keda-install && make dev"
+	@echo "🚀 Ready to deploy! Try: make dev (KEDA will be auto-installed if needed)"
 
 setup-update: ## Update all existing tools to latest versions
 	@echo "🔄 Updating all tools to latest versions..."
@@ -163,11 +163,13 @@ keda-install: ## Install KEDA using Helm
 			--set operator.replicaCount=1 \
 			--set webhooks.enabled=true \
 			--set prometheus.metricServer.enabled=false; \
+		echo "⏳ Waiting for KEDA operator to be ready..."; \
+		sleep 30; \
 		echo "✅ KEDA installed successfully"; \
 	else \
 		echo "✅ KEDA already installed"; \
 	fi
-	@kubectl get pods -n keda
+	@kubectl get pods -n keda 2>/dev/null || echo "KEDA pods starting..."
 
 keda-uninstall: ## Uninstall KEDA
 	@echo "🗑️  Uninstalling KEDA..."
@@ -199,6 +201,14 @@ build: build-all ## Alias for build-all
 
 dev: build-all ## Build images and deploy to development
 	@echo "🚀 Building images and deploying to development..."
+	@echo "🔍 Checking KEDA installation..."
+	@if ! helm list -n keda | grep -q keda 2>/dev/null; then \
+		echo "⚠️  KEDA not found, installing it first..."; \
+		$(MAKE) keda-install; \
+	else \
+		echo "✅ KEDA already installed"; \
+	fi
+	@echo "🚀 Deploying to development..."
 	kubectl apply -k kubernetes-manifests/overlays/development
 	@echo "✅ Development deployment complete!"
 
