@@ -15,7 +15,7 @@ group "base" {
 }
 
 group "all" {
-  targets = ["nimbusguard-base", "consumer"]
+  targets = ["nimbusguard-base", "consumer", "generator"]
 }
 
 target "_common" {
@@ -48,6 +48,19 @@ target "consumer" {
   tags = [
     "${REGISTRY}/nimbusguard-consumer:${TAG}",
     "${REGISTRY}/nimbusguard-consumer:latest"
+  ]
+  contexts = {
+    nimbusguard-base = "target:nimbusguard-base"
+  }
+}
+
+target "generator" {
+  inherits = ["_common"]
+  context = "src/generator"
+  dockerfile = "Dockerfile"
+  tags = [
+    "${REGISTRY}/nimbusguard-generator:${TAG}",
+    "${REGISTRY}/nimbusguard-generator:latest"
   ]
   contexts = {
     nimbusguard-base = "target:nimbusguard-base"
