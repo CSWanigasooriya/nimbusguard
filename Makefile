@@ -3,6 +3,7 @@
 .PHONY: help build build-base build-consumer build-generator build-all dev prod run forward stop-forward status logs restart clean
 .PHONY: load-test-light load-test-medium load-test-heavy load-test-sustained load-test-burst load-test-memory load-test-cpu
 .PHONY: load-clean load-status
+.PHONY: helm-install helm-upgrade helm-uninstall helm-dev helm-prod helm-test helm-lint helm-template
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-20s %s\n", $$1, $$2}'
@@ -143,7 +144,7 @@ setup: ## Setup development environment (install latest tools)
 	@echo "   • yq: $$(yq --version 2>/dev/null || echo 'not installed')"
 	@echo "   • k9s: $$(k9s version -s 2>/dev/null || echo 'not installed')"
 	@echo ""
-	@echo "🚀 Ready to deploy! Try: make dev (KEDA will be auto-installed if needed)"
+	@echo "🚀 Ready to deploy! Try: make helm-dev (recommended) or make dev (legacy)"
 
 setup-update: ## Update all existing tools to latest versions
 	@echo "🔄 Updating all tools to latest versions..."
@@ -155,6 +156,96 @@ setup-update: ## Update all existing tools to latest versions
 	fi
 	@helm repo update
 	@echo "✅ All tools updated!"
+
+## 🎯 Helm Chart Commands (Recommended)
+
+helm-lint: ## Lint the Helm chart
+	@echo "🔍 Linting Helm chart..."
+	@helm lint helm-chart
+	@echo "✅ Helm chart linting complete"
+
+helm-template: ## Generate Kubernetes manifests from Helm chart (dry-run)
+	@echo "📋 Generating Kubernetes manifests from Helm chart..."
+	@helm template nimbusguard helm-chart --debug
+
+helm-install: build-all ## Install NimbusGuard using Helm chart
+	@echo "🚀 Installing NimbusGuard with Helm..."
+	@echo "🔧 Adding required Helm repositories..."
+	@helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
+	@helm repo update
+	@echo "📦 Installing NimbusGuard..."
+	@helm install nimbusguard helm-chart --create-namespace --wait --timeout=600s
+	@echo "✅ NimbusGuard installed successfully!"
+
+helm-upgrade: build-all ## Upgrade NimbusGuard installation
+	@echo "🔄 Upgrading NimbusGuard with Helm..."
+	@helm upgrade nimbusguard helm-chart --wait --timeout=600s
+	@echo "✅ NimbusGuard upgraded successfully!"
+
+helm-dev: build-all ## Install/upgrade NimbusGuard for development
+	@echo "🚀 Deploying NimbusGuard for development..."
+	@helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
+	@helm repo update
+	@if helm list | grep -q nimbusguard 2>/dev/null; then \
+		echo "🔄 Upgrading existing installation..."; \
+		helm upgrade nimbusguard helm-chart \
+			--set monitoring.grafana.adminPassword=admin \
+			--set consumer.image.tag=latest \
+			--set keda.scaledObject.minReplicaCount=1 \
+			--wait --timeout=600s; \
+	else \
+		echo "📦 Installing fresh deployment..."; \
+		helm install nimbusguard helm-chart \
+			--set monitoring.grafana.adminPassword=admin \
+			--set consumer.image.tag=latest \
+			--set keda.scaledObject.minReplicaCount=1 \
+			--create-namespace --wait --timeout=600s; \
+	fi
+	@echo "✅ Development deployment complete!"
+
+helm-prod: build-all ## Install/upgrade NimbusGuard for production
+	@echo "🚀 Deploying NimbusGuard for production..."
+	@helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
+	@helm repo update
+	@if [ -z "$$GRAFANA_PASSWORD" ]; then \
+		echo "❌ GRAFANA_PASSWORD environment variable is required for production"; \
+		echo "   Set it with: export GRAFANA_PASSWORD=your-secure-password"; \
+		exit 1; \
+	fi
+	@if helm list | grep -q nimbusguard 2>/dev/null; then \
+		echo "🔄 Upgrading existing installation..."; \
+		helm upgrade nimbusguard helm-chart \
+			--set monitoring.grafana.adminPassword=$$GRAFANA_PASSWORD \
+			--set consumer.image.tag=latest \
+			--set keda.scaledObject.minReplicaCount=2 \
+			--set keda.scaledObject.maxReplicaCount=20 \
+			--wait --timeout=600s; \
+	else \
+		echo "📦 Installing fresh deployment..."; \
+		helm install nimbusguard helm-chart \
+			--set monitoring.grafana.adminPassword=$$GRAFANA_PASSWORD \
+			--set consumer.image.tag=latest \
+			--set keda.scaledObject.minReplicaCount=2 \
+			--set keda.scaledObject.maxReplicaCount=20 \
+			--create-namespace --wait --timeout=600s; \
+	fi
+	@echo "✅ Production deployment complete!"
+
+helm-test: ## Run Helm chart tests
+	@echo "🧪 Running Helm chart tests..."
+	@helm test nimbusguard
+	@echo "✅ Helm tests completed!"
+
+helm-uninstall: ## Uninstall NimbusGuard Helm release
+	@echo "🗑️  Uninstalling NimbusGuard..."
+	@helm uninstall nimbusguard 2>/dev/null || echo "NimbusGuard not found"
+	@echo "🗑️  Cleaning up KEDA..."
+	@helm uninstall keda -n keda 2>/dev/null || echo "KEDA not found"
+	@kubectl delete namespace keda --ignore-not-found=true
+	@kubectl delete namespace nimbusguard --ignore-not-found=true
+	@echo "✅ Cleanup complete!"
+
+## 🛠️ Legacy Kubernetes Commands (for reference)
 
 keda-install: ## Install KEDA using Helm
 	@echo "🎯 Installing KEDA..."
@@ -199,7 +290,7 @@ build-all: ## Build all Docker images
 
 build: build-all ## Alias for build-all
 
-dev: build-all ## Build images and deploy to development
+dev: build-all ## Build images and deploy to development (legacy)
 	@echo "🚀 Building images and deploying to development..."
 	@echo "🔍 Checking KEDA installation..."
 	@if ! helm list -n keda | grep -q keda 2>/dev/null; then \
@@ -211,11 +302,12 @@ dev: build-all ## Build images and deploy to development
 	@echo "🚀 Deploying to development..."
 	kubectl apply -k kubernetes-manifests/overlays/development
 	@echo "✅ Development deployment complete!"
+	@echo "💡 Consider using 'make helm-dev' for better deployment management!"
 
-prod: ## Deploy to production  
+prod: ## Deploy to production (legacy)
 	kubectl apply -k kubernetes-manifests/overlays/production
 
-run: ## Dry run deployment
+run: ## Dry run deployment (legacy)
 	kubectl apply -k kubernetes-manifests/overlays/development --dry-run=client
 
 forward: stop-forward ## Port forward ALL services at once
@@ -251,7 +343,7 @@ logs: ## Follow consumer logs
 restart: ## Restart consumer deployment
 	kubectl rollout restart deployment/consumer -n nimbusguard
 
-clean: ## Delete all resources
+clean: ## Delete all resources (legacy)
 	kubectl delete namespace nimbusguard --ignore-not-found=true
 
 ## 🧪 Load Testing Commands
