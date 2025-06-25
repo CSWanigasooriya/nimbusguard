@@ -215,7 +215,7 @@ LOAD_TESTS = {
         cpu_intensity=2,
         memory_size=20,
         duration=5,
-        async_mode="false"
+        async_mode="true"  # Changed to async for realistic behavior
     ),
     
     'medium': LoadTest(
@@ -226,7 +226,7 @@ LOAD_TESTS = {
         cpu_intensity=6,
         memory_size=80,
         duration=15,
-        async_mode="false"
+        async_mode="true"  # Changed to async for realistic behavior
     ),
     
     'heavy': LoadTest(
@@ -237,7 +237,7 @@ LOAD_TESTS = {
         cpu_intensity=9,
         memory_size=150,
         duration=20,
-        async_mode="false"
+        async_mode="true"  # Changed to async for realistic behavior
     ),
     
     'sustained': LoadTest(
@@ -272,7 +272,7 @@ LOAD_TESTS = {
         cpu_intensity=3,
         memory_size=250,
         duration=30,
-        async_mode="false"
+        async_mode="true"  # Changed to async for realistic behavior
     ),
     
     'cpu_stress': LoadTest(
@@ -283,7 +283,7 @@ LOAD_TESTS = {
         cpu_intensity=10,
         memory_size=50,
         duration=25,
-        async_mode="false"
+        async_mode="false"  # Keep one synchronous test for comparison
     )
 }
 
