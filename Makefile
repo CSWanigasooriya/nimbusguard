@@ -262,6 +262,30 @@ keda-install: ## Install KEDA using Helm
 	fi
 	@kubectl get pods -n keda 2>/dev/null || echo "KEDA pods starting..."
 
+# Remove KEDA-managed objects that are no longer present in the manifests (eg, after commenting out the KEDA component)
+keda-prune: ## Prune KEDA ScaledObjects/HPA that no longer exist in manifests
+	@echo "🧹 Deleting ScaledObjects and HPAs managed by KEDA in nimbusguard namespace..."
+	@kubectl delete scaledobject -n nimbusguard --ignore-not-found=true --all
+	@kubectl delete hpa -n nimbusguard -l app.kubernetes.io/managed-by=keda-operator --ignore-not-found=true
+	@echo "✅ Autoscaling disabled – KEDA resources cleaned up"
+
+# Pause and resume autoscaling via annotations
+keda-pause: ## Pause KEDA autoscaling (REPLICAS=<n> to keep n replicas)
+	@echo "⏸️  Pausing KEDA autoscaling..."
+	@if [ -z "$(REPLICAS)" ]; then \
+		kubectl annotate scaledobject -n nimbusguard consumer-scaler autoscaling.keda.sh/paused="true" --overwrite; \
+	else \
+		kubectl annotate scaledobject -n nimbusguard consumer-scaler \
+			autoscaling.keda.sh/paused="true" autoscaling.keda.sh/paused-replicas="$(REPLICAS)" --overwrite; \
+	fi
+	@echo "✅ Autoscaling paused"
+
+keda-resume: ## Resume KEDA autoscaling (remove pause annotations)
+	@echo "▶️  Resuming KEDA autoscaling..."
+	@kubectl annotate scaledobject -n nimbusguard consumer-scaler \
+		autoscaling.keda.sh/paused- autoscaling.keda.sh/paused-replicas- --overwrite
+	@echo "✅ Autoscaling resumed"
+
 keda-uninstall: ## Uninstall KEDA
 	@echo "🗑️  Uninstalling KEDA..."
 	@helm uninstall keda -n keda 2>/dev/null || true
