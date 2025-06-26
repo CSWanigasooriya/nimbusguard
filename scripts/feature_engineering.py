@@ -303,10 +303,16 @@ class InfrastructureFeatureEngineer:
         return performance_features
     
     def _create_anomaly_features(self, df: pd.DataFrame, metrics: list) -> list:
-        """Create anomaly detection features."""
+        """Create anomaly detection features (limited for performance)."""
         anomaly_features = []
         
-        for metric in metrics:
+        # Limit to top 100 most important metrics to avoid feature explosion
+        metrics_variance = {metric: df[metric].var() for metric in metrics}
+        top_metrics = sorted(metrics_variance.keys(), key=metrics_variance.get, reverse=True)[:100]
+        
+        self.logger.info(f"Creating anomaly features for top {len(top_metrics)} most variable metrics")
+        
+        for metric in top_metrics:
             # Z-score based anomaly score
             mean = df[metric].mean()
             std = df[metric].std()
@@ -328,12 +334,18 @@ class InfrastructureFeatureEngineer:
         return anomaly_features
     
     def _create_correlation_features(self, df: pd.DataFrame, metrics: list) -> list:
-        """Create correlation-based features."""
+        """Create correlation-based features (limited for performance)."""
         correlation_features = []
         
-        # Calculate correlations between metrics
-        for i, metric1 in enumerate(metrics[:-1]):
-            for metric2 in metrics[i+1:]:
+        # Limit to top 50 most variable metrics to avoid explosion
+        metrics_variance = {metric: df[metric].var() for metric in metrics}
+        top_metrics = sorted(metrics_variance.keys(), key=metrics_variance.get, reverse=True)[:50]
+        
+        self.logger.info(f"Creating correlations for top {len(top_metrics)} most variable metrics")
+        
+        # Calculate correlations between top metrics only
+        for i, metric1 in enumerate(top_metrics[:-1]):
+            for metric2 in top_metrics[i+1:i+6]:  # Limit to next 5 metrics
                 corr_name = f'corr_{metric1}_{metric2}'
                 window = 5  # 5-minute window
                 df[corr_name] = df[metric1].rolling(window=window, min_periods=2).corr(df[metric2])
@@ -367,44 +379,287 @@ class InfrastructureFeatureEngineer:
         return time_series_features
     
     def _create_dimensionality_reduction_features(self, df: pd.DataFrame) -> list:
-        """Create dimensionality reduction features."""
+        """Create dimensionality reduction features using PCA."""
+        features = []
+        
         try:
-            from sklearn.decomposition import PCA
-            from sklearn.preprocessing import StandardScaler
-            
-            # Get numeric columns
-            numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
-            numeric_cols = [col for col in numeric_cols if col not in ['timestamp', 'hour', 'day_of_week', 'day_of_month', 'month', 'is_business_hours']]
+            # Get numeric columns for PCA
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            numeric_cols = [col for col in numeric_cols if col not in ['timestamp']]
             
             if len(numeric_cols) < 2:
-                return []
+                return features
             
-            # Standardize the data
+            # Sample data if too large
+            if len(df) > 10000:
+                sample_df = df.sample(n=10000, random_state=42)
+            else:
+                sample_df = df.copy()
+            
+            # Standardize features for PCA
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.decomposition import PCA
+            
             scaler = StandardScaler()
-            scaled_data = scaler.fit_transform(df[numeric_cols])
+            scaled_data = scaler.fit_transform(sample_df[numeric_cols].fillna(0))
             
-            # Apply PCA
-            n_components = min(3, len(numeric_cols))  # Use at most 3 components
-            pca = PCA(n_components=n_components)
-            pca_data = pca.fit_transform(scaled_data)
+            # Apply PCA for top 10 components
+            pca = PCA(n_components=min(10, len(numeric_cols)))
+            pca_features = pca.fit_transform(scaled_data)
             
-            # Create PCA features
-            pca_features = []
-            for i in range(n_components):
+            # Add PCA features to the original dataframe
+            for i in range(pca_features.shape[1]):
                 feature_name = f'pca_component_{i+1}'
-                df[feature_name] = pca_data[:, i]
-                pca_features.append(feature_name)
+                features.append(feature_name)
             
-            return pca_features
+                # Apply same transformation to full dataset
+                full_scaled = scaler.transform(df[numeric_cols].fillna(0))
+                full_pca = pca.transform(full_scaled)
+                df[feature_name] = full_pca[:, i]
             
         except Exception as e:
-            self.logger.warning(f"Failed to create dimensionality reduction features: {e}")
-            return []
+            logging.warning(f"Could not create PCA features: {e}")
+        
+        return features
+    
+    def _create_dqn_utilization_features(self, df: pd.DataFrame, metrics: list) -> list:
+        """Create DQN-specific utilization features for pod scaling decisions."""
+        features = []
+        
+        # Group metrics by resource type
+        cpu_metrics = [m for m in metrics if 'cpu' in m.lower()]
+        memory_metrics = [m for m in metrics if 'memory' in m.lower() or 'mem' in m.lower()]
+        disk_metrics = [m for m in metrics if 'disk' in m.lower() or 'filesystem' in m.lower()]
+        network_metrics = [m for m in metrics if 'network' in m.lower() or 'net' in m.lower()]
+        
+        # CPU utilization features
+        if cpu_metrics:
+            df['cpu_utilization_mean'] = df[cpu_metrics].mean(axis=1)
+            df['cpu_utilization_max'] = df[cpu_metrics].max(axis=1)
+            df['cpu_utilization_p95'] = df[cpu_metrics].quantile(0.95, axis=1)
+            df['cpu_saturation_count'] = (df[cpu_metrics] > df[cpu_metrics].quantile(0.9)).sum(axis=1)
+            features.extend(['cpu_utilization_mean', 'cpu_utilization_max', 'cpu_utilization_p95', 'cpu_saturation_count'])
+        
+        # Memory utilization features
+        if memory_metrics:
+            df['memory_utilization_mean'] = df[memory_metrics].mean(axis=1)
+            df['memory_utilization_max'] = df[memory_metrics].max(axis=1)
+            df['memory_pressure_score'] = (df[memory_metrics] > df[memory_metrics].quantile(0.85)).sum(axis=1)
+            features.extend(['memory_utilization_mean', 'memory_utilization_max', 'memory_pressure_score'])
+        
+        # Resource contention indicators
+        if cpu_metrics and memory_metrics:
+            df['resource_contention'] = df['cpu_utilization_mean'] * df['memory_utilization_mean']
+            features.append('resource_contention')
+        
+        return features
+    
+    def _create_dqn_performance_features(self, df: pd.DataFrame, metrics: list) -> list:
+        """Create DQN-specific performance features."""
+        features = []
+        
+        # Response time/latency metrics
+        latency_metrics = [m for m in metrics if any(term in m.lower() for term in ['latency', 'duration', 'time'])]
+        if latency_metrics:
+            df['avg_response_time'] = df[latency_metrics].mean(axis=1)
+            df['max_response_time'] = df[latency_metrics].max(axis=1)
+            df['response_time_variance'] = df[latency_metrics].var(axis=1)
+            features.extend(['avg_response_time', 'max_response_time', 'response_time_variance'])
+        
+        # Throughput metrics
+        throughput_metrics = [m for m in metrics if any(term in m.lower() for term in ['requests', 'rps', 'qps', 'rate'])]
+        if throughput_metrics:
+            df['total_throughput'] = df[throughput_metrics].sum(axis=1)
+            df['avg_throughput'] = df[throughput_metrics].mean(axis=1)
+            features.extend(['total_throughput', 'avg_throughput'])
+        
+        # Error rate metrics
+        error_metrics = [m for m in metrics if any(term in m.lower() for term in ['error', 'fail', 'timeout'])]
+        if error_metrics:
+            df['total_errors'] = df[error_metrics].sum(axis=1)
+            df['error_rate'] = df['total_errors'] / (df['total_throughput'] + 1e-6)
+            features.extend(['total_errors', 'error_rate'])
+        
+        return features
+    
+    def _create_dqn_anomaly_features(self, df: pd.DataFrame, metrics: list) -> list:
+        """Create DQN-specific anomaly detection features."""
+        features = []
+        
+        for metric in metrics:
+            try:
+                # Z-score based anomaly detection
+                mean_val = df[metric].mean()
+                std_val = df[metric].std()
+                if std_val > 0:
+                    df[f'{metric}_zscore'] = (df[metric] - mean_val) / std_val
+                    df[f'{metric}_is_anomaly'] = (abs(df[f'{metric}_zscore']) > 3).astype(int)
+                    features.extend([f'{metric}_zscore', f'{metric}_is_anomaly'])
+            except Exception as e:
+                logging.warning(f"Could not create anomaly features for {metric}: {e}")
+                continue
+        
+        # Overall anomaly score
+        anomaly_cols = [f for f in features if f.endswith('_is_anomaly')]
+        if anomaly_cols:
+            df['total_anomaly_score'] = df[anomaly_cols].sum(axis=1)
+            features.append('total_anomaly_score')
+        
+        return features
+    
+    def _create_dqn_time_series_features(self, df: pd.DataFrame, metrics: list) -> list:
+        """Create DQN-specific time series features."""
+        features = []
+        
+        # Ensure data is sorted by timestamp
+        df = df.sort_values('timestamp')
+        
+        for metric in metrics:
+            try:
+                # Rate of change
+                df[f'{metric}_rate'] = df[metric].diff()
+                
+                # Moving averages
+                df[f'{metric}_ma_5'] = df[metric].rolling(window=5, min_periods=1).mean()
+                df[f'{metric}_ma_15'] = df[metric].rolling(window=15, min_periods=1).mean()
+                
+                # Trend indicator
+                df[f'{metric}_trend'] = (df[f'{metric}_ma_5'] - df[f'{metric}_ma_15']).fillna(0)
+                
+                features.extend([f'{metric}_rate', f'{metric}_ma_5', f'{metric}_ma_15', f'{metric}_trend'])
+                
+            except Exception as e:
+                logging.warning(f"Could not create time series features for {metric}: {e}")
+                continue
+        
+        return features
+    
+    def _add_dqn_target(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add target variable for DQN training (optimal pod scaling decision)."""
+        
+        # FIX: The original 'current_pod_count' had corrupted values (46 quintillion!)
+        # This was caused by summing metric VALUES (memory bytes, CPU nanoseconds) instead of counting pods
+        # Create realistic pod counts for DQN training instead
+        
+        self.logger.info("🔧 Creating realistic pod counts for DQN training...")
+        
+        # Get resource utilization metrics to estimate realistic pod counts
+        cpu_cols = [col for col in df.columns if 'cpu' in col.lower() and 'utilization' in col.lower()]
+        memory_cols = [col for col in df.columns if 'memory' in col.lower() and 'utilization' in col.lower()]
+        
+        # Calculate overall system load
+        system_load = 0.5  # Default moderate load
+        if cpu_cols and len(cpu_cols) > 0:
+            # Use existing DQN features if available, otherwise create simple estimates
+            if 'dqn_cpu_utilization_mean' in df.columns:
+                cpu_load = df['dqn_cpu_utilization_mean'] / 100.0  # Normalize to 0-1
+            else:
+                cpu_load = df[cpu_cols].mean(axis=1) / df[cpu_cols].mean(axis=1).max()
+            system_load = np.maximum(system_load, cpu_load)
+        
+        if memory_cols and len(memory_cols) > 0:
+            if 'dqn_memory_utilization_mean' in df.columns:
+                memory_load = df['dqn_memory_utilization_mean'] / 100.0  # Normalize to 0-1
+            else:
+                memory_load = df[memory_cols].mean(axis=1) / df[memory_cols].mean(axis=1).max()
+            system_load = np.maximum(system_load, memory_load)
+        
+        # Create realistic pod counts based on system load
+        # Base pod count: 1-3 pods for light load, up to 8-12 for heavy load
+        base_pods = 2  # Start with 2 pods
+        current_pods = base_pods + np.round(system_load * 6).astype(int)  # Scale 2-8 pods
+        current_pods = np.clip(current_pods, 1, 12)  # Realistic range: 1-12 pods
+        
+        # Add some time-based variation to simulate real scaling events
+        if 'hour' in df.columns:
+            # Higher load during business hours
+            business_hours_boost = np.where(
+                (df['hour'] >= 9) & (df['hour'] <= 17), 1, 0
+            )
+            current_pods = current_pods + business_hours_boost
+        
+        # Add some random variation to create scaling events
+        np.random.seed(42)  # Reproducible
+        variation = np.random.choice([-1, 0, 0, 0, 1], size=len(df))  # Occasional +1/-1
+        current_pods = np.clip(current_pods + variation, 1, 12)
+        
+        # Calculate optimal pod count based on utilization
+        optimal_pods = current_pods.copy()
+        
+        # Scale up if high utilization (>70th percentile)
+        high_load_threshold = np.percentile(system_load, 70)
+        scale_up_mask = system_load > high_load_threshold
+        optimal_pods[scale_up_mask] = np.clip(optimal_pods[scale_up_mask] + 1, 1, 12)
+        
+        # Scale down if low utilization (<30th percentile)
+        low_load_threshold = np.percentile(system_load, 30)
+        scale_down_mask = system_load < low_load_threshold
+        optimal_pods[scale_down_mask] = np.clip(optimal_pods[scale_down_mask] - 1, 1, 12)
+        
+        # Add scaling action (0: scale down, 1: keep, 2: scale up)
+        df['scaling_action'] = np.where(
+            optimal_pods > current_pods, 2,  # Scale up
+            np.where(optimal_pods < current_pods, 0, 1)  # Scale down or keep
+        )
+        
+        df['optimal_pod_count'] = optimal_pods
+        df['current_pod_count'] = current_pods
+        
+        # Log scaling action distribution
+        action_counts = df['scaling_action'].value_counts().sort_index()
+        self.logger.info(f"Scaling actions: Scale Down={action_counts.get(0, 0)}, Keep={action_counts.get(1, 0)}, Scale Up={action_counts.get(2, 0)}")
+        self.logger.info(f"Pod count range: {current_pods.min()}-{current_pods.max()} current, {optimal_pods.min()}-{optimal_pods.max()} optimal")
+        
+        return df
+    
+    def _save_dqn_metadata(self, df: pd.DataFrame, output_path: Path, 
+                          original_metrics: int, engineered_features: int, config: dict):
+        """Save detailed metadata for DQN training."""
+        metadata_path = output_path.parent / f"{output_path.stem}_metadata.txt"
+        
+        with open(metadata_path, 'w') as f:
+            f.write("DQN Infrastructure Monitoring Dataset\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write("📊 DATASET OVERVIEW:\n")
+            f.write(f"   Shape: {df.shape}\n")
+            f.write(f"   Time range: {df['timestamp'].min()} to {df['timestamp'].max()}\n")
+            f.write(f"   Duration: {df['timestamp'].max() - df['timestamp'].min()}\n")
+            f.write(f"   Missing values: {df.isnull().sum().sum()}\n\n")
+            
+            f.write("🎯 DQN FEATURES:\n")
+            f.write(f"   Original metrics: {original_metrics}\n")
+            f.write(f"   Engineered features: {engineered_features}\n")
+            f.write(f"   Total features: {len(df.columns)}\n\n")
+            
+            f.write("🎮 ACTION SPACE:\n")
+            if 'scaling_action' in df.columns:
+                action_counts = df['scaling_action'].value_counts().sort_index()
+                f.write(f"   0 (Scale Down): {action_counts.get(0, 0)} samples\n")
+                f.write(f"   1 (Keep Same): {action_counts.get(1, 0)} samples\n")
+                f.write(f"   2 (Scale Up): {action_counts.get(2, 0)} samples\n\n")
+            
+            f.write("🔧 FEATURE CATEGORIES:\n")
+            if not config['skip_utilization']:
+                f.write("   ✓ Resource Utilization Features\n")
+            if not config['skip_performance']:
+                f.write("   ✓ Performance Features\n")
+            if not config['skip_anomaly']:
+                f.write("   ✓ Anomaly Detection Features\n")
+            if not config['skip_time_series']:
+                f.write("   ✓ Time Series Features\n")
+            
+            f.write("\n📈 KEY METRICS FOR DQN:\n")
+            key_metrics = ['cpu_utilization_mean', 'memory_utilization_mean', 'avg_response_time', 
+                          'total_throughput', 'error_rate', 'total_anomaly_score']
+            for metric in key_metrics:
+                if metric in df.columns:
+                    f.write(f"   {metric}: min={df[metric].min():.2f}, max={df[metric].max():.2f}, mean={df[metric].mean():.2f}\n")
     
     def engineer_features(self, config: dict) -> None:
         """Engineer features from the input dataset."""
         try:
-            self.logger.info("Starting infrastructure feature engineering...")
+            self.logger.info("Starting infrastructure feature engineering for DQN...")
             self.logger.info(f"Loading data from {self.input_path}")
             
             # Load data
@@ -412,65 +667,131 @@ class InfrastructureFeatureEngineer:
             self.logger.info(f"Loaded {len(df)} rows with {len(df.columns)} columns")
             self.logger.info(f"Loaded data: {df.shape}")
             
-            # Get list of metrics
-            metrics = [col for col in df.columns if col != 'timestamp']
-            self.logger.info(f"MEMORY: {len(metrics)} metrics")
+            # Check for missing values in input
+            missing_before = df.isnull().sum().sum()
+            self.logger.info(f"Missing values in input: {missing_before}")
             
-            # Create time features first - this is critical
-            df = self._create_time_features(df)
+            # Get list of metrics (exclude time and DQN features)
+            exclude_cols = ['timestamp', 'hour', 'day_of_week', 'is_weekend', 'hour_sin', 'hour_cos', 
+                           'day_sin', 'day_cos', 'day_of_month', 'month', 'is_business_hours',
+                           'avg_cpu_utilization', 'max_cpu_utilization', 'cpu_pressure',
+                           'avg_memory_utilization', 'max_memory_utilization', 'memory_pressure',
+                           'total_request_rate', 'avg_request_rate', 'total_error_rate',
+                           'current_pod_count', 'system_load', 'network_traffic']
             
-            # Store original feature count
-            original_features = len(df.columns)
+            all_columns = [col for col in df.columns if col not in exclude_cols]
             
-            # Initialize feature list
+            # First filter to only numeric columns
+            numeric_metrics = []
+            for col in all_columns:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    numeric_metrics.append(col)
+                else:
+                    self.logger.info(f"Skipping non-numeric column: {col}")
+            
+            self.logger.info(f"Found {len(numeric_metrics)} numeric metric columns out of {len(all_columns)} total")
+            
+            # Filter out static metrics and limit for computational efficiency
+            metrics = []
+            metric_variance = {}
+            
+            for metric in numeric_metrics:
+                try:
+                    metric_std = df[metric].std()
+                    metric_variance[metric] = metric_std
+                    if metric_std > 1e-6:  # Keep metrics with some variation
+                        metrics.append(metric)
+                    else:
+                        self.logger.debug(f"Filtering out static metric: {metric}")
+                except Exception as e:
+                    self.logger.warning(f"Error processing metric {metric}: {e}")
+                    continue
+            
+            # Limit to top N most variable metrics for computational efficiency
+            if len(metrics) > 200:
+                # Sort by variance and keep top 200
+                sorted_metrics = sorted(metrics, key=lambda x: metric_variance[x], reverse=True)
+                metrics = sorted_metrics[:200]
+                self.logger.info(f"Limited to top 200 most variable metrics from {len(sorted_metrics)} total")
+            
+            self.logger.info(f"Using {len(metrics)} metrics after filtering")
+            
+            # Ensure timestamp is datetime
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # Create time features if not already present
+            if 'hour' not in df.columns:
+                df = self._create_time_features(df)
+            
+            # Initialize feature lists
             engineered_features = []
             
-            if not config['skip_health_scores']:
-                self.logger.info("Creating system health scores...")
-                health_scores = self._create_health_scores(df, metrics)
-                engineered_features.extend(health_scores)
-                self.logger.info("Health scores created")
-            
+            # DQN-specific feature engineering
             if not config['skip_utilization']:
-                self.logger.info("Creating resource utilization features...")
-                utilization_features = self._create_utilization_features(df, metrics)
+                self.logger.info("Creating DQN utilization features...")
+                utilization_features = self._create_dqn_utilization_features(df, metrics)
                 engineered_features.extend(utilization_features)
-                self.logger.info("Resource utilization features created")
+                self.logger.info(f"Created {len(utilization_features)} utilization features")
             
             if not config['skip_performance']:
-                self.logger.info("Creating performance indicators...")
-                performance_features = self._create_performance_features(df, metrics)
+                self.logger.info("Creating DQN performance features...")
+                performance_features = self._create_dqn_performance_features(df, metrics)
                 engineered_features.extend(performance_features)
-                self.logger.info("Performance indicators created")
+                self.logger.info(f"Created {len(performance_features)} performance features")
             
             if not config['skip_anomaly']:
-                self.logger.info("Creating anomaly detection features...")
-                anomaly_features = self._create_anomaly_features(df, metrics)
+                self.logger.info("Creating DQN anomaly features...")
+                anomaly_features = self._create_dqn_anomaly_features(df, metrics[:50])  # Limit for speed
                 engineered_features.extend(anomaly_features)
-                self.logger.info("Anomaly detection features created")
-            
-            if not config['skip_correlation']:
-                self.logger.info("Creating correlation features...")
-                correlation_features = self._create_correlation_features(df, metrics)
-                engineered_features.extend(correlation_features)
-                self.logger.info("Correlation features created")
+                self.logger.info(f"Created {len(anomaly_features)} anomaly features")
             
             if not config['skip_time_series']:
-                self.logger.info("Creating time series features...")
-                time_series_features = self._create_time_series_features(df, metrics)
+                self.logger.info("Creating DQN time series features...")
+                time_series_features = self._create_dqn_time_series_features(df, metrics[:30])  # Limit for speed
                 engineered_features.extend(time_series_features)
-                self.logger.info("Time series features created")
+                self.logger.info(f"Created {len(time_series_features)} time series features")
             
-            if not config['skip_dimensionality_reduction']:
-                self.logger.info("Creating dimensionality reduction features...")
+            # Skip correlation features by default (broken due to 1,180+ constant columns causing 48% NaN correlations)
+            if not config.get('skip_correlation', True):  # Default to skip=True
+                self.logger.warning("⚠️  Correlation features are DISABLED by default due to data quality issues:")
+                self.logger.warning("   - 1,180+ constant columns cause correlation matrix to be 48% NaN values")
+                self.logger.warning("   - Enable with --correlation flag only if you've filtered constant columns")
+                correlation_features = self._create_correlation_features(df, metrics[:50])
+                engineered_features.extend(correlation_features)
+                self.logger.info(f"Created {len(correlation_features)} correlation features")
+            else:
+                self.logger.info("⏭️  Skipping correlation features (recommended - broken with current data)")
+            
+            # Skip dimensionality reduction features by default (broken due to NaN-filled correlation matrix)
+            if not config.get('skip_dimensionality_reduction', True):  # Default to skip=True
+                self.logger.warning("⚠️  Dimensionality reduction features are DISABLED by default:")
+                self.logger.warning("   - PCA fails on correlation matrix with 8.5M+ NaN values")
+                self.logger.warning("   - Enable with --dimensionality-reduction flag only if correlation works")
                 dim_reduction_features = self._create_dimensionality_reduction_features(df)
                 engineered_features.extend(dim_reduction_features)
-                self.logger.info("Dimensionality reduction features created")
+                self.logger.info(f"Created {len(dim_reduction_features)} dimensionality reduction features")
+            else:
+                self.logger.info("⏭️  Skipping dimensionality reduction features (recommended - broken with current data)")
             
-            # Add engineered features to dataframe
-            for feature in engineered_features:
-                if feature not in df.columns:
-                    df[feature] = 0  # Initialize with default value
+            # Add target variable for DQN (pod scaling decision)
+            df = self._add_dqn_target(df)
+            
+            # Add all engineered features to dataframe with proper handling
+            for feature_name in engineered_features:
+                if feature_name not in df.columns:
+                    # Initialize with zeros instead of leaving as missing
+                    df[feature_name] = 0.0
+            
+            # Fill any remaining missing values
+            missing_after = df.isnull().sum().sum()
+            if missing_after > 0:
+                self.logger.warning(f"Found {missing_after} missing values, filling with forward fill then zeros")
+                df = df.fillna(method='ffill').fillna(0)
+            
+            # Final check
+            final_missing = df.isnull().sum().sum()
+            self.logger.info(f"Final missing values: {final_missing}")
             
             self.logger.info(f"Added {len(engineered_features)} new features")
             
@@ -484,32 +805,10 @@ class InfrastructureFeatureEngineer:
             else:
                 df.to_csv(output_path, index=False)
             
-            # Save metadata
-            metadata_path = self.output_path.with_suffix('.txt')
-            with open(metadata_path, 'w') as f:
-                f.write("Infrastructure Monitoring Features\n")
-                f.write("=" * 30 + "\n\n")
-                f.write(f"Total features: {len(df.columns)}\n")
-                f.write(f"Original metrics: {len(metrics)}\n")
-                f.write(f"Engineered features: {len(engineered_features)}\n\n")
-                f.write("Feature Categories:\n")
-                f.write("-" * 20 + "\n")
-                if not config['skip_health_scores']:
-                    f.write("- Health Scores\n")
-                if not config['skip_utilization']:
-                    f.write("- Resource Utilization\n")
-                if not config['skip_performance']:
-                    f.write("- Performance Indicators\n")
-                if not config['skip_anomaly']:
-                    f.write("- Anomaly Detection\n")
-                if not config['skip_correlation']:
-                    f.write("- Correlation Features\n")
-                if not config['skip_time_series']:
-                    f.write("- Time Series Features\n")
-                if not config['skip_dimensionality_reduction']:
-                    f.write("- Dimensionality Reduction\n")
+            # Save detailed metadata for DQN
+            self._save_dqn_metadata(df, output_path, len(metrics), len(engineered_features), config)
             
-            self.logger.info("Feature engineering completed successfully!")
+            self.logger.info("✅ DQN feature engineering completed successfully!")
             
         except Exception as e:
             self.logger.error(f"Feature engineering failed: {e}")

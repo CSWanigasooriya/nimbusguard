@@ -1,0 +1,29 @@
+DQN Infrastructure Monitoring Dataset
+==================================================
+
+📊 DATASET OVERVIEW:
+   Shape: (894, 4249)
+   Time range: 2025-06-25 06:55:54 to 2025-06-26 09:08:54
+   Duration: 1 days 02:13:00
+   Missing values: 0
+
+🎯 DQN FEATURES:
+   Original metrics: 200
+   Engineered features: 227
+   Total features: 4249
+
+🎮 ACTION SPACE:
+   0 (Scale Down): 268 samples
+   1 (Keep Same): 358 samples
+   2 (Scale Up): 268 samples
+
+🔧 FEATURE CATEGORIES:
+   ✓ Resource Utilization Features
+   ✓ Performance Features
+   ✓ Anomaly Detection Features
+   ✓ Time Series Features
+
+📈 KEY METRICS FOR DQN:
+   memory_utilization_mean: min=0.00, max=2852593583366699520.00, mean=2798349597627395584.00
+   avg_response_time: min=0.00, max=439037214537.73, mean=435076165365.26
+   total_anomaly_score: min=0.00, max=40.00, mean=0.77

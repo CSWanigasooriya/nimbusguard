@@ -31,12 +31,12 @@ class PipelineOrchestrator:
         
         # Define pipeline stages and their corresponding scripts
         self.pipeline_stages = [
-            {
-                'name': 'Data Export',
-                'script': 'export_prometheus.py',
-                'skip_flag': 'skip_extraction',
-                'description': 'Export metrics from Prometheus'
-            },
+            # {
+            #     'name': 'Data Export',
+            #     'script': 'export_prometheus.py',
+            #     'skip_flag': 'skip_extraction',
+            #     'description': 'Export metrics from Prometheus'
+            # },
             {
                 'name': 'Data Preparation',
                 'script': 'prepare_dataset.py',
@@ -58,7 +58,7 @@ class PipelineOrchestrator:
         ]
     
     def _run_script(self, script_name: str, args: list = None) -> bool:
-        """Run a pipeline script with arguments."""
+        """Run a pipeline script with arguments and stream output in real-time."""
         script_path = self.scripts_dir / script_name
         if not script_path.exists():
             logging.error(f"Script not found: {script_path}")
@@ -66,24 +66,47 @@ class PipelineOrchestrator:
         
         cmd = [sys.executable, str(script_path)]
         
-        # No need to pass work-dir anymore as scripts handle their own paths
-        
         if args:
             cmd.extend(args)
         
         try:
             logging.info(f"Running command: {' '.join(map(str, cmd))}")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            if result.stdout:
-                print(result.stdout)
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
-            return True
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Script failed with exit code {e.returncode}")
-            print(e.stdout)
-            print(e.stderr, file=sys.stderr)
-            return False
+            print(f"   📋 Executing: {script_name}")
+            
+            # Stream output in real-time
+            process = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            # Print output line by line as it comes
+            last_progress_time = time.time()
+            line_count = 0
+            
+            for line in iter(process.stdout.readline, ''):
+                print(f"   {line.rstrip()}")
+                line_count += 1
+                
+                # Show progress indicator every 10 seconds for long-running tasks
+                current_time = time.time()
+                if current_time - last_progress_time > 10:
+                    print(f"   ⏳ Still working... ({line_count} messages processed)")
+                    last_progress_time = current_time
+            
+            # Wait for process to complete
+            return_code = process.wait()
+            
+            if return_code == 0:
+                print(f"   ✅ {script_name} completed successfully")
+                return True
+            else:
+                logging.error(f"Script failed with exit code {return_code}")
+                return False
+                
         except Exception as e:
             logging.error(f"Failed to run script: {e}")
             return False
@@ -111,19 +134,7 @@ class PipelineOrchestrator:
         prometheus_data_dir.mkdir(parents=True, exist_ok=True)
         processed_data_dir.mkdir(parents=True, exist_ok=True)
         
-        # Clean existing data if requested
-        if not self.config.get('keep_existing', False):
-            if prometheus_data_dir.exists() and not self.config.get('skip_extraction', False):
-                logging.info("Cleaning existing Prometheus data...")
-                shutil.rmtree(prometheus_data_dir)
-                prometheus_data_dir.mkdir(parents=True, exist_ok=True)
-            
-            if processed_data_dir.exists() and not self.config.get('skip_preparation', False):
-                logging.info("Cleaning existing processed data...")
-                for file in processed_data_dir.glob('dataset*'):
-                    file.unlink()
-                for file in processed_data_dir.glob('engineered_features*'):
-                    file.unlink()
+        # Note: Each stage now handles its own cleanup independently
         
         # Execute pipeline stages
         for i, stage in enumerate(self.pipeline_stages, 1):
@@ -164,6 +175,32 @@ class PipelineOrchestrator:
                         print("   Make sure feature engineering completed successfully")
                         return False
             
+            # Clean stage-specific output files (each stage handles its own cleanup)
+            if not self.config.get('keep_existing', False):
+                if stage['script'] == 'export_prometheus.py':
+                    if prometheus_data_dir.exists():
+                        print(f"   🧹 Cleaning existing Prometheus data...")
+                        shutil.rmtree(prometheus_data_dir)
+                        prometheus_data_dir.mkdir(parents=True, exist_ok=True)
+                
+                elif stage['script'] == 'prepare_dataset.py':
+                    print(f"   🧹 Cleaning existing dataset files...")
+                    for file in processed_data_dir.glob('dataset*'):
+                        file.unlink()
+                        print(f"   Removed: {file.name}")
+                
+                elif stage['script'] == 'feature_engineering.py':
+                    print(f"   🧹 Cleaning existing engineered features...")
+                    for file in processed_data_dir.glob('engineered_features*'):
+                        file.unlink()
+                        print(f"   Removed: {file.name}")
+                
+                elif stage['script'] == 'inspect_dataset.py':
+                    print(f"   🧹 Cleaning existing analysis files...")
+                    for file in processed_data_dir.glob('*analysis*'):
+                        file.unlink()
+                        print(f"   Removed: {file.name}")
+            
             # Build script arguments
             args = []
             
@@ -191,11 +228,19 @@ class PipelineOrchestrator:
                         '--skip-dimensionality-reduction',
                         '--skip-correlation'
                     ])
-                # Add feature engineering flags
-                for flag in ['health_scores', 'utilization', 'performance', 'anomaly', 
-                           'correlation', 'time_series', 'dimensionality_reduction']:
+                # Add feature engineering flags  
+                flag_mapping = {
+                    'health_scores': 'health-scores',
+                    'utilization': 'utilization', 
+                    'performance': 'performance',
+                    'anomaly': 'anomaly',
+                    'correlation': 'correlation',
+                    'time_series': 'time-series',
+                    'dimensionality_reduction': 'dimensionality-reduction'
+                }
+                for flag, arg_flag in flag_mapping.items():
                     if self.config.get(f'skip_{flag}', False):
-                        args.append(f'--skip-{flag}')
+                        args.append(f'--skip-{arg_flag}')
                 
                 # Add output format if specified
                 if self.config.get('output_format'):
@@ -227,7 +272,6 @@ class PipelineOrchestrator:
         print(f"   • dataset.parquet - Consolidated dataset")
         print(f"   • engineered_features.parquet - ML-ready dataset")
         print(f"   • engineered_features_metadata.txt - Feature descriptions")
-        print(f"   • final_analysis.txt - Dataset analysis")
         print()
         
         print("🎯 Your data is ready for:")
@@ -247,11 +291,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python run_pipeline.py                         # Full pipeline with defaults
-  python run_pipeline.py --quick                 # Quick mode (1 day, skip advanced)
-  python run_pipeline.py --skip-extraction       # Use existing data
-  python run_pipeline.py --work-dir ./scripts    # Specify working directory
-  python run_pipeline.py --days 7 --cleanup     # 7 days with cleanup
+  python run_pipeline.py                         # Full pipeline with optimal defaults (7 days, clean dataset)
+  python run_pipeline.py --quick                 # Quick mode (1 day, fast processing)
+  python run_pipeline.py --skip-extraction       # Use existing Prometheus data
+  python run_pipeline.py --skip-preparation      # Use existing dataset, just do feature engineering
+  python run_pipeline.py --days 3                # 3 days of data with clean features
+  python run_pipeline.py --correlation           # Enable correlation features (WARNING: may fail)
+  python run_pipeline.py --days 1 --cleanup      # 1 day with cleanup of intermediate files
         """
     )
     
@@ -294,10 +340,14 @@ Examples:
                       help='Skip anomaly detection features')
     parser.add_argument('--skip-time-series', action='store_true',
                       help='Skip time series features')
-    parser.add_argument('--skip-correlation', action='store_true',
-                      help='Skip correlation features')
-    parser.add_argument('--skip-dimensionality-reduction', action='store_true',
-                      help='Skip dimensionality reduction features')
+    parser.add_argument('--skip-correlation', action='store_true', default=True,
+                      help='Skip correlation features (default: True, use --correlation to enable)')
+    parser.add_argument('--correlation', action='store_true',
+                      help='Enable correlation features (WARNING: broken with current data due to 1,180+ constant columns)')
+    parser.add_argument('--skip-dimensionality-reduction', action='store_true', default=True,
+                      help='Skip dimensionality reduction features (default: True, use --dimensionality-reduction to enable)')
+    parser.add_argument('--dimensionality-reduction', action='store_true',
+                      help='Enable dimensionality reduction features (WARNING: broken due to NaN-filled correlation matrix)')
     parser.add_argument('--output-format', choices=['parquet', 'csv'],
                       help='Output format for engineered features')
     
@@ -313,6 +363,20 @@ Examples:
         args.skip_dimensionality_reduction = True
         args.skip_correlation = True
         args.cleanup = True
+    
+    # Handle enable flags (override skip defaults if user explicitly enables)
+    if args.correlation:
+        args.skip_correlation = False  # User explicitly wants correlation features
+        print("⚠️  WARNING: Correlation features enabled despite known issues with constant columns")
+    if getattr(args, 'dimensionality_reduction', False):
+        args.skip_dimensionality_reduction = False  # User explicitly wants PCA features
+        print("⚠️  WARNING: Dimensionality reduction features enabled despite known issues with NaN correlations")
+    
+    # Set helpful defaults for dataset generation
+    if args.output_format is None:
+        args.output_format = 'parquet'  # Use parquet for better performance and compression
+    if args.batch_size is None:
+        args.batch_size = 50  # Reasonable batch size for processing
     
     # Build configuration
     config = {

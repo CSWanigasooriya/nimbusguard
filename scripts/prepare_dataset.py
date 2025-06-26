@@ -290,6 +290,10 @@ class CSVConsolidator:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         
         try:
+            # CRITICAL: Convert to wide format for DQN training
+            logging.info("Converting to wide format for DQN training...")
+            df = self._pivot_to_wide_format(df)
+            
             if format == 'parquet':
                 output_file = self.output_path.with_suffix('.parquet')
                 df.to_parquet(output_file, index=False)
@@ -304,28 +308,153 @@ class CSVConsolidator:
             logging.error(f"Error saving dataset: {e}")
             raise
     
+    def _pivot_to_wide_format(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Convert long format to wide format for DQN training."""
+        logging.info("Pivoting dataset to wide format...")
+        
+        # Get all unique metrics and timestamps
+        all_metrics = sorted(df['metric_key'].unique())
+        all_timestamps = sorted(df['timestamp'].unique())
+        
+        logging.info(f"Pivoting {len(all_metrics)} metrics across {len(all_timestamps)} timestamps")
+        
+        # Limit metrics if too many (for memory efficiency)
+        if len(all_metrics) > 1000:
+            # Keep most frequently occurring metrics
+            metric_counts = df['metric_key'].value_counts()
+            selected_metrics = metric_counts.head(1000).index.tolist()
+            df = df[df['metric_key'].isin(selected_metrics)]
+            logging.info(f"Limited to top 1000 most frequent metrics for memory efficiency")
+        
+        # Create separate DataFrames for each aggregation type
+        pivot_dfs = []
+        agg_types = ['value_mean', 'value_min', 'value_max', 'value_count']
+        
+        for agg_type in agg_types:
+            logging.info(f"Pivoting {agg_type}...")
+            
+            # Pivot this aggregation type
+            pivot_df = df.pivot_table(
+                index='timestamp',
+                columns='metric_key',
+                values=agg_type,
+                aggfunc='first',  # Take first value if duplicates
+                fill_value=0  # Fill missing with 0 instead of NaN
+            )
+            
+            # Rename columns to include aggregation type
+            pivot_df.columns = [f"{col}_{agg_type}" for col in pivot_df.columns]
+            pivot_dfs.append(pivot_df)
+        
+        # Combine all aggregation types
+        logging.info("Combining all aggregation types...")
+        final_df = pivot_dfs[0]
+        for i in range(1, len(pivot_dfs)):
+            final_df = final_df.join(pivot_dfs[i], how='outer')
+        
+        # Reset index to make timestamp a column
+        final_df = final_df.reset_index()
+        
+        # Add time features
+        final_df = self.add_time_features(final_df)
+        
+        # Add DQN-specific features for pod scaling decisions
+        final_df = self._add_dqn_features(final_df)
+        
+        logging.info(f"Final wide format shape: {final_df.shape}")
+        return final_df
+    
+    def _add_dqn_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add DQN-specific features for pod scaling decisions."""
+        logging.info("Adding DQN-specific features...")
+        
+        # Resource utilization indicators
+        cpu_cols = [col for col in df.columns if 'cpu' in col.lower() and 'value_mean' in col]
+        memory_cols = [col for col in df.columns if 'memory' in col.lower() and 'value_mean' in col]
+        
+        if cpu_cols:
+            df['avg_cpu_utilization'] = df[cpu_cols].mean(axis=1)
+            df['max_cpu_utilization'] = df[cpu_cols].max(axis=1)
+            df['cpu_pressure'] = (df[cpu_cols] > df[cpu_cols].quantile(0.8)).sum(axis=1)
+        
+        if memory_cols:
+            df['avg_memory_utilization'] = df[memory_cols].mean(axis=1)
+            df['max_memory_utilization'] = df[memory_cols].max(axis=1)
+            df['memory_pressure'] = (df[memory_cols] > df[memory_cols].quantile(0.8)).sum(axis=1)
+        
+        # Request rate indicators
+        request_cols = [col for col in df.columns if 'request' in col.lower() and 'value_mean' in col]
+        if request_cols:
+            df['total_request_rate'] = df[request_cols].sum(axis=1)
+            df['avg_request_rate'] = df[request_cols].mean(axis=1)
+        
+        # Error rate indicators
+        error_cols = [col for col in df.columns if 'error' in col.lower() and 'value_mean' in col]
+        if error_cols:
+            df['total_error_rate'] = df[error_cols].sum(axis=1)
+        
+        # Pod count indicators (if available)
+        pod_cols = [col for col in df.columns if 'pod' in col.lower() and 'value_mean' in col]
+        if pod_cols:
+            df['current_pod_count'] = df[pod_cols].sum(axis=1)
+        
+        # System load indicators
+        load_cols = [col for col in df.columns if 'load' in col.lower() and 'value_mean' in col]
+        if load_cols:
+            df['system_load'] = df[load_cols].mean(axis=1)
+        
+        # Network traffic indicators
+        network_cols = [col for col in df.columns if 'network' in col.lower() and 'value_mean' in col]
+        if network_cols:
+            df['network_traffic'] = df[network_cols].sum(axis=1)
+        
+        return df
+    
     def save_summary(self, df: pd.DataFrame, output_file: Path):
         """Save detailed summary of the dataset."""
         summary_file = output_file.parent / f"{output_file.stem}_summary.txt"
         
+        # Count metric columns (exclude time and DQN features)
+        metric_cols = [col for col in df.columns if not col in ['timestamp', 'hour', 'day_of_week', 'is_weekend', 
+                                                               'hour_sin', 'hour_cos', 'day_sin', 'day_cos',
+                                                               'avg_cpu_utilization', 'max_cpu_utilization', 'cpu_pressure',
+                                                               'avg_memory_utilization', 'max_memory_utilization', 'memory_pressure',
+                                                               'total_request_rate', 'avg_request_rate', 'total_error_rate',
+                                                               'current_pod_count', 'system_load', 'network_traffic']]
+        
         with open(summary_file, 'w') as f:
-            f.write("Dataset Summary\n")
+            f.write("DQN Dataset Summary (Wide Format)\n")
             f.write("=" * 50 + "\n\n")
             
             f.write(f"Time Range: {df['timestamp'].min()} to {df['timestamp'].max()}\n")
             f.write(f"Total Samples: {len(df):,}\n")
-            f.write(f"Unique Metrics: {df['metric_key'].nunique():,}\n\n")
+            f.write(f"Total Features: {len(df.columns):,}\n")
+            f.write(f"Metric Features: {len(metric_cols):,}\n\n")
             
-            f.write("Sample Metrics:\n")
-            for metric in sorted(df['metric_key'].unique())[:20]:
-                metric_stats = df[df['metric_key'] == metric]['value_mean'].describe()
-                f.write(f"  {metric}:\n")
-                f.write(f"    Mean: {metric_stats['mean']:.2f}\n")
-                f.write(f"    Min: {metric_stats['min']:.2f}\n")
-                f.write(f"    Max: {metric_stats['max']:.2f}\n")
+            f.write("Sample Metric Features (first 20):\n")
+            for metric in metric_cols[:20]:
+                try:
+                    metric_stats = df[metric].describe()
+                    f.write(f"  {metric}:\n")
+                    f.write(f"    Mean: {metric_stats['mean']:.2f}\n")
+                    f.write(f"    Min: {metric_stats['min']:.2f}\n")
+                    f.write(f"    Max: {metric_stats['max']:.2f}\n")
+                except:
+                    f.write(f"  {metric}: (analysis failed)\n")
             
-            if df['metric_key'].nunique() > 20:
-                f.write(f"\n... and {df['metric_key'].nunique() - 20} more metrics\n")
+            if len(metric_cols) > 20:
+                f.write(f"\n... and {len(metric_cols) - 20} more metric features\n")
+                
+            f.write(f"\nDQN Features Available:\n")
+            dqn_features = ['avg_cpu_utilization', 'max_cpu_utilization', 'cpu_pressure',
+                           'avg_memory_utilization', 'max_memory_utilization', 'memory_pressure',
+                           'total_request_rate', 'avg_request_rate', 'total_error_rate',
+                           'current_pod_count', 'system_load', 'network_traffic']
+            for feature in dqn_features:
+                if feature in df.columns:
+                    f.write(f"  ✓ {feature}\n")
+                else:
+                    f.write(f"  ✗ {feature}\n")
     
     def consolidate(self,
                    batch_size: int = 50,
