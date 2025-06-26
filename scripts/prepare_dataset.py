@@ -1,8 +1,13 @@
+"""
+Consolidate individual metric CSV files into a unified dataset.
+Enhanced version with better handling of Prometheus data specifics.
+"""
+
 import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import glob
 
 import pandas as pd
@@ -16,13 +21,76 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()],
 )
 
+class PrometheusMetricProcessor:
+    """Process Prometheus metrics with proper handling of labels and instances."""
+    
+    def __init__(self, safe_mode: bool = False):
+        self.safe_mode = safe_mode
+        
+    def clean_instance_label(self, instance: str) -> str:
+        """Clean instance label to extract meaningful identifier."""
+        if pd.isna(instance):
+            return 'unknown'
+        instance = str(instance)
+        # Extract pod number or last part of hostname
+        if ':' in instance:
+            instance = instance.split(':')[0]
+        return instance.split('.')[-1]
+    
+    def standardize_labels(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize label columns and values."""
+        # Handle known label columns
+        if 'instance' in df.columns:
+            df['instance'] = df['instance'].apply(self.clean_instance_label)
+        
+        # Convert all label values to strings
+        label_cols = [col for col in df.columns if col not in ['timestamp', 'value', 'metric_name']]
+        for col in label_cols:
+            df[col] = df[col].fillna('unknown').astype(str)
+            
+        return df
+    
+    def create_metric_key(self, row: pd.Series) -> str:
+        """Create a clean metric key from metric name and essential labels."""
+        key = str(row['metric_name'])
+        
+        # Add instance identifier if available
+        if 'instance' in row and row['instance'] != 'unknown':
+            key += f"_i{row['instance']}"
+            
+        # Add job identifier if available and meaningful
+        if 'job' in row and row['job'] != 'unknown':
+            job = str(row['job']).split('.')[-1]  # Take last part of job name
+            key += f"_{job}"
+            
+        return key
+    
+    def aggregate_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Aggregate metrics with proper handling of instances."""
+        # Group by timestamp and metric key
+        df['metric_key'] = df.apply(self.create_metric_key, axis=1)
+        
+        # Calculate aggregations
+        agg_df = df.groupby(['timestamp', 'metric_key']).agg({
+            'value': ['mean', 'min', 'max', 'count']
+        }).reset_index()
+        
+        # Flatten column names
+        agg_df.columns = [
+            col[0] if col[1] == '' else f"{col[0]}_{col[1]}"
+            for col in agg_df.columns
+        ]
+        
+        return agg_df
 
 class CSVConsolidator:
     """Efficiently consolidate individual metric CSV files into a unified dataset."""
     
-    def __init__(self, input_dir: Path, output_path: Path):
+    def __init__(self, input_dir: Path, output_path: Path, safe_mode: bool = False):
         self.input_dir = Path(input_dir)
         self.output_path = Path(output_path)
+        self.safe_mode = safe_mode
+        self.metric_processor = PrometheusMetricProcessor(safe_mode)
         
     def get_csv_files(self) -> List[Path]:
         """Get all CSV files in the input directory."""
@@ -30,58 +98,89 @@ class CSVConsolidator:
         logging.info(f"Found {len(csv_files)} CSV files")
         return csv_files
     
-    def analyze_file_structure(self, csv_files: List[Path], sample_size: int = 5) -> dict:
+    def analyze_file_structure(self, csv_files: List[Path]) -> dict:
         """Analyze the structure of CSV files to understand the data."""
         logging.info("Analyzing file structure...")
         
-        sample_files = csv_files[:min(sample_size, len(csv_files))]
         file_info = {}
-        
-        for file in sample_files:
+        for file in csv_files:
             try:
-                df = pd.read_csv(file, nrows=5)  # Just read first 5 rows
+                df = pd.read_csv(file, nrows=5)
                 file_info[file.name] = {
                     'columns': list(df.columns),
-                    'shape_estimate': 'unknown',
-                    'sample_data': df.head(2).to_dict()
+                    'metric_name': file.stem
                 }
                 
-                # Try to get full row count efficiently
+                # Get row count efficiently
                 with open(file, 'r') as f:
-                    row_count = sum(1 for line in f) - 1  # Subtract header
-                file_info[file.name]['shape_estimate'] = (row_count, len(df.columns))
+                    row_count = sum(1 for line in f) - 1
+                file_info[file.name]['row_count'] = row_count
                 
             except Exception as e:
                 logging.warning(f"Could not analyze {file.name}: {e}")
-                file_info[file.name] = {'error': str(e)}
-        
-        # Print analysis
-        for filename, info in file_info.items():
-            if 'error' not in info:
-                logging.info(f"{filename}: {info['shape_estimate']} - Columns: {info['columns']}")
-        
+                
         return file_info
+    
+    def validate_dataframe(self, df: pd.DataFrame, source_file: str) -> bool:
+        """Validate dataframe structure and content."""
+        if self.safe_mode:
+            try:
+                # Check required columns
+                required_cols = {'timestamp', 'value'}
+                missing_cols = required_cols - set(df.columns)
+                if missing_cols:
+                    logging.error(f"Missing required columns in {source_file}: {missing_cols}")
+                    return False
+                
+                # Check for empty DataFrame
+                if df.empty:
+                    logging.warning(f"Empty DataFrame from {source_file}")
+                    return False
+                
+                # Check column types
+                if not pd.api.types.is_numeric_dtype(df['value']):
+                    logging.warning(f"Non-numeric values in 'value' column in {source_file}")
+                    try:
+                        df['value'] = pd.to_numeric(df['value'], errors='coerce')
+                    except:
+                        return False
+                
+                # Remove infinite values
+                inf_mask = np.isinf(df['value'])
+                if inf_mask.any():
+                    logging.warning(f"Found {inf_mask.sum()} infinite values in {source_file}")
+                    df = df[~inf_mask]
+                
+                # Check for reasonable value range
+                abs_values = df['value'].abs()
+                if abs_values.max() > 1e12:
+                    logging.warning(f"Very large values in {source_file}: max abs value = {abs_values.max()}")
+                
+                # Check for too many unique categories in label columns
+                label_cols = [col for col in df.columns if col not in ['timestamp', 'value', 'metric_name']]
+                for col in label_cols:
+                    unique_count = df[col].nunique()
+                    if unique_count > 1000:
+                        logging.warning(f"High cardinality in column '{col}' ({unique_count} unique values)")
+                
+                return len(df) > 0  # Return True only if we have valid rows
+                
+            except Exception as e:
+                logging.error(f"Validation error in {source_file}: {e}")
+                return False
+        return True
     
     def consolidate_files(self, 
                          csv_files: List[Path], 
                          batch_size: int = 50,
                          filter_metrics: Optional[List[str]] = None) -> pd.DataFrame:
-        """Consolidate CSV files in batches to manage memory."""
-        logging.info(f"Consolidating {len(csv_files)} files in batches of {batch_size}...")
-        
-        # Filter files if requested
+        """Consolidate CSV files with proper validation and error handling."""
         if filter_metrics:
-            filtered_files = []
-            for file in csv_files:
-                metric_name = file.stem  # filename without extension
-                if any(pattern in metric_name for pattern in filter_metrics):
-                    filtered_files.append(file)
-            csv_files = filtered_files
+            csv_files = [f for f in csv_files if any(pattern in f.stem for pattern in filter_metrics)]
             logging.info(f"Filtered to {len(csv_files)} files matching criteria")
         
         all_dataframes = []
         
-        # Process files in batches
         for i in range(0, len(csv_files), batch_size):
             batch_files = csv_files[i:i + batch_size]
             logging.info(f"Processing batch {i//batch_size + 1}/{(len(csv_files)-1)//batch_size + 1}")
@@ -89,310 +188,210 @@ class CSVConsolidator:
             batch_dfs = []
             for file in batch_files:
                 try:
-                    df = pd.read_csv(file)
+                    # Read CSV with proper data type handling
+                    df = pd.read_csv(
+                        file,
+                        low_memory=False,
+                        dtype={
+                            'timestamp': str,  # Read timestamp as string first
+                            'value': float,    # Values should be numeric
+                            'metric_name': str,
+                            'instance': str,
+                            'job': str
+                        }
+                    )
                     
-                    # Ensure metric_name column exists
+                    if not self.validate_dataframe(df, file.name):
+                        continue
+                    
+                    # Add metric name if needed
                     if 'metric_name' not in df.columns:
-                        # Use filename as metric name
-                        metric_name = file.stem
-                        df['metric_name'] = metric_name
+                        df['metric_name'] = file.stem
                     
-                    # Standardize column names
-                    df.columns = df.columns.str.lower().str.strip()
-                    
-                    # Ensure required columns exist
-                    if 'timestamp' not in df.columns:
-                        logging.warning(f"No timestamp column in {file.name}")
+                    # Convert timestamp to datetime safely
+                    try:
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    except Exception as e:
+                        logging.error(f"Failed to convert timestamps in {file.name}: {e}")
                         continue
                     
-                    if 'value' not in df.columns:
-                        logging.warning(f"No value column in {file.name}")
-                        continue
+                    # Standardize labels
+                    df = self.metric_processor.standardize_labels(df)
                     
-                    batch_dfs.append(df)
+                    # Drop any rows with invalid timestamps
+                    df = df.dropna(subset=['timestamp'])
+                    
+                    if not df.empty:
+                        batch_dfs.append(df)
                     
                 except Exception as e:
                     logging.error(f"Error processing {file.name}: {e}")
                     continue
             
             if batch_dfs:
-                # Filter out empty dataframes to avoid FutureWarning
-                non_empty_dfs = [df for df in batch_dfs if not df.empty and len(df.dropna(how='all')) > 0]
-                if non_empty_dfs:
-                    batch_combined = pd.concat(non_empty_dfs, ignore_index=True)
-                    all_dataframes.append(batch_combined)
+                try:
+                    # Ensure all DataFrames have compatible dtypes before concat
+                    common_cols = set.intersection(*[set(df.columns) for df in batch_dfs])
+                    for col in common_cols:
+                        dtype = None
+                        if col == 'timestamp':
+                            dtype = 'datetime64[ns]'
+                        elif col == 'value':
+                            dtype = float
+                        elif col in ['metric_name', 'instance', 'job']:
+                            dtype = str
+                        
+                        if dtype:
+                            batch_dfs = [df.astype({col: dtype}, errors='ignore') for df in batch_dfs]
+                    
+                    batch_df = pd.concat(batch_dfs, ignore_index=True)
+                    batch_df = self.metric_processor.aggregate_metrics(batch_df)
+                    all_dataframes.append(batch_df)
+                except Exception as e:
+                    logging.error(f"Failed to process batch: {e}")
+                    continue
         
         if not all_dataframes:
-            raise ValueError("No valid CSV files could be processed")
+            raise ValueError("No valid data could be processed")
         
-        # Combine all batches
-        logging.info("Combining all batches...")
-        if all_dataframes:
-            # Filter out any remaining empty dataframes
-            final_dataframes = [df for df in all_dataframes if not df.empty]
-            if final_dataframes:
-                final_df = pd.concat(final_dataframes, ignore_index=True)
-            else:
-                raise ValueError("No valid data found after processing all batches")
-        else:
-            raise ValueError("No valid data found in any CSV files")
-        
-        return final_df
-    
-    def clean_and_standardize(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean and standardize the consolidated dataset."""
-        logging.info("Cleaning and standardizing data...")
-        
-        initial_rows = len(df)
-        
-        # Convert timestamp to datetime
-        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-        
-        # Convert value to numeric
-        df['value'] = pd.to_numeric(df['value'], errors='coerce')
-        
-        # Remove rows with invalid timestamps or values
-        df = df.dropna(subset=['timestamp', 'value'])
-        
-        logging.info(f"Removed {initial_rows - len(df)} rows with invalid data")
-        
-        # Sort by metric and timestamp
-        df = df.sort_values(['metric_name', 'timestamp'])
-        
-        # Remove exact duplicates
-        initial_rows = len(df)
-        df = df.drop_duplicates()
-        logging.info(f"Removed {initial_rows - len(df)} duplicate rows")
-        
-        # Handle duplicate timestamps for same metric (take mean)
-        duplicate_mask = df.duplicated(subset=['metric_name', 'timestamp'], keep=False)
-        if duplicate_mask.any():
-            logging.info(f"Found {duplicate_mask.sum()} rows with duplicate timestamps, averaging values")
+        try:
+            # Final concatenation with explicit dtypes
+            final_df = pd.concat(all_dataframes, ignore_index=True)
             
-            # Group by metric and timestamp, take mean of values and first of other columns
-            agg_dict = {'value': 'mean'}
-            other_cols = [col for col in df.columns if col not in ['metric_name', 'timestamp', 'value']]
-            for col in other_cols:
-                agg_dict[col] = 'first'
+            # Ensure timestamp is datetime
+            final_df['timestamp'] = pd.to_datetime(final_df['timestamp'])
             
-            df = df.groupby(['metric_name', 'timestamp']).agg(agg_dict).reset_index()
-        
-        return df
+            # Sort by timestamp
+            final_df = final_df.sort_values('timestamp')
+            
+            return final_df
+            
+        except Exception as e:
+            logging.error(f"Failed to combine all batches: {e}")
+            raise
     
-    def add_basic_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add basic time-based features."""
-        logging.info("Adding basic features...")
-        
-        # Time features
+    def add_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add comprehensive time-based features."""
+        # Basic time components
         df['hour'] = df['timestamp'].dt.hour
         df['day_of_week'] = df['timestamp'].dt.dayofweek
-        df['day_of_month'] = df['timestamp'].dt.day
-        df['month'] = df['timestamp'].dt.month
         df['is_weekend'] = df['day_of_week'].isin([5, 6])
-        df['is_business_hours'] = df['hour'].between(9, 17)
+        
+        # Cyclical encoding of time features
+        df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+        df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+        df['day_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+        df['day_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
         
         return df
-    
-    def create_wide_format(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Convert to wide format with metrics as columns."""
-        logging.info("Converting to wide format...")
-        
-        # Only use essential label columns for pivot (avoid explosion of columns)
-        essential_labels = ['instance', 'job']  # Most important for distinguishing metrics
-        label_columns = [col for col in df.columns 
-                        if col in essential_labels and col in df.columns]
-        
-        # Create simplified metric identifiers
-        if label_columns:
-            # Only use non-null, meaningful labels
-            df_clean = df.copy()
-            
-            # Clean up label values - replace NaN/None with empty string
-            for col in label_columns:
-                df_clean[col] = df_clean[col].fillna('').astype(str)
-                df_clean[col] = df_clean[col].replace(['nan', 'None', 'none'], '')
-            
-            # Create cleaner metric keys
-            df_clean['metric_key'] = df_clean['metric_name'].astype(str)
-            
-            for col in label_columns:
-                # Only add label if it's not empty and adds meaningful distinction
-                label_values = df_clean[col].str.strip()
-                non_empty_labels = label_values[label_values != '']
-                
-                if len(non_empty_labels) > 0 and len(non_empty_labels.unique()) > 1:
-                    df_clean['metric_key'] += '_' + label_values.replace('', 'default')
-        else:
-            df_clean = df.copy()
-            df_clean['metric_key'] = df_clean['metric_name']
-        
-        # Limit the number of unique metrics to prevent column explosion
-        unique_metrics = df_clean['metric_key'].nunique()
-        logging.info(f"Found {unique_metrics} unique metric keys")
-        
-        if unique_metrics > 1000:
-            logging.warning(f"Too many unique metrics ({unique_metrics}). Consider filtering or using long format.")
-            # Keep only the most frequently occurring metrics
-            metric_counts = df_clean['metric_key'].value_counts()
-            top_metrics = metric_counts.head(1000).index
-            df_clean = df_clean[df_clean['metric_key'].isin(top_metrics)]
-            logging.info(f"Reduced to top 1000 most frequent metrics")
-        
-        # Pivot to wide format
-        time_cols = ['hour', 'day_of_week', 'day_of_month', 'month', 
-                    'is_weekend', 'is_business_hours']
-        
-        wide_df = df_clean.pivot_table(
-            index=['timestamp'] + time_cols,
-            columns='metric_key',
-            values='value',
-            aggfunc='mean'  # Handle any remaining duplicates
-        ).reset_index()
-        
-        # Flatten column names
-        wide_df.columns.name = None
-        
-        logging.info(f"Wide format shape: {wide_df.shape}")
-        return wide_df
     
     def save_dataset(self, df: pd.DataFrame, format: str = 'parquet'):
-        """Save the consolidated dataset."""
+        """Save the dataset with proper error handling."""
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        if format == 'parquet':
-            output_file = self.output_path.with_suffix('.parquet')
-            df.to_parquet(output_file, index=False)
-        elif format == 'csv':
-            output_file = self.output_path.with_suffix('.csv')
-            df.to_csv(output_file, index=False)
-        else:
-            raise ValueError(f"Unsupported format: {format}")
-        
-        logging.info(f"Dataset saved to {output_file}")
-        
-        # Save summary
-        summary_file = self.output_path.parent / f"{self.output_path.name}_summary.txt"
-        with open(summary_file, 'w') as f:
-            f.write("CSV Consolidation Summary\n")
-            f.write("=" * 30 + "\n\n")
-            f.write(f"Final dataset shape: {df.shape}\n")
-            f.write(f"Time range: {df['timestamp'].min()} to {df['timestamp'].max()}\n")
+        try:
+            if format == 'parquet':
+                output_file = self.output_path.with_suffix('.parquet')
+                df.to_parquet(output_file, index=False)
+            else:
+                output_file = self.output_path.with_suffix('.csv')
+                df.to_csv(output_file, index=False)
             
-            # Count metric columns more safely
-            metric_cols = [col for col in df.columns if col not in ['timestamp', 'hour', 'day_of_week', 'day_of_month', 'month', 'is_weekend', 'is_business_hours']]
-            f.write(f"Number of unique metrics: {len(metric_cols)}\n\n")
+            # Save summary
+            self.save_summary(df, output_file)
             
-            f.write("Sample metrics:\n")
-            for metric in metric_cols[:20]:
-                f.write(f"  - {metric}\n")
-            if len(metric_cols) > 20:
-                f.write(f"  ... and {len(metric_cols) - 20} more metrics\n")
-        
-        logging.info(f"Summary saved to {summary_file}")
+        except Exception as e:
+            logging.error(f"Error saving dataset: {e}")
+            raise
     
-    def consolidate(self, 
+    def save_summary(self, df: pd.DataFrame, output_file: Path):
+        """Save detailed summary of the dataset."""
+        summary_file = output_file.parent / f"{output_file.stem}_summary.txt"
+        
+        with open(summary_file, 'w') as f:
+            f.write("Dataset Summary\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write(f"Time Range: {df['timestamp'].min()} to {df['timestamp'].max()}\n")
+            f.write(f"Total Samples: {len(df):,}\n")
+            f.write(f"Unique Metrics: {df['metric_key'].nunique():,}\n\n")
+            
+            f.write("Sample Metrics:\n")
+            for metric in sorted(df['metric_key'].unique())[:20]:
+                metric_stats = df[df['metric_key'] == metric]['value_mean'].describe()
+                f.write(f"  {metric}:\n")
+                f.write(f"    Mean: {metric_stats['mean']:.2f}\n")
+                f.write(f"    Min: {metric_stats['min']:.2f}\n")
+                f.write(f"    Max: {metric_stats['max']:.2f}\n")
+            
+            if df['metric_key'].nunique() > 20:
+                f.write(f"\n... and {df['metric_key'].nunique() - 20} more metrics\n")
+    
+    def consolidate(self,
                    batch_size: int = 50,
                    format: str = 'parquet',
-                   wide_format: bool = True,
                    filter_metrics: Optional[List[str]] = None) -> pd.DataFrame:
-        """Full consolidation pipeline."""
-        
-        # Get CSV files
-        csv_files = self.get_csv_files()
-        if not csv_files:
-            raise ValueError(f"No CSV files found in {self.input_dir}")
-        
-        # Analyze structure
-        self.analyze_file_structure(csv_files)
-        
-        # Consolidate files
-        df = self.consolidate_files(csv_files, batch_size, filter_metrics)
-        
-        # Clean and standardize
-        df = self.clean_and_standardize(df)
-        
-        # Add basic features
-        df = self.add_basic_features(df)
-        
-        # Convert to wide format if requested
-        if wide_format:
-            df = self.create_wide_format(df)
-        
-        # Save dataset
-        self.save_dataset(df, format)
-        
-        return df
-
+        """Full consolidation pipeline with proper error handling."""
+        try:
+            csv_files = self.get_csv_files()
+            if not csv_files:
+                raise ValueError(f"No CSV files found in {self.input_dir}")
+            
+            file_info = self.analyze_file_structure(csv_files)
+            df = self.consolidate_files(csv_files, batch_size, filter_metrics)
+            df = self.add_time_features(df)
+            
+            self.save_dataset(df, format)
+            return df
+            
+        except Exception as e:
+            logging.error(f"Consolidation failed: {e}")
+            raise
 
 def main():
-    """Main function to consolidate CSV files."""
+    """Main function with argument parsing."""
     parser = argparse.ArgumentParser(
-        description="Consolidate individual metric CSV files into a unified dataset."
+        description="Consolidate individual metric CSV files into a unified dataset"
     )
-    parser.add_argument(
-        "input_dir",
-        nargs='?',  # Make optional
-        default="prometheus_data",
-        help="Directory containing individual metric CSV files (default: prometheus_data)"
-    )
-    parser.add_argument(
-        "output_path",
-        nargs='?',  # Make optional
-        default="consolidated_dataset",
-        help="Path for output consolidated dataset (default: consolidated_dataset)"
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=50,
-        help="Number of CSV files to process in each batch (default: 50)"
-    )
-    parser.add_argument(
-        "--output-format",
-        choices=["parquet", "csv"],
-        default="parquet",
-        help="Output file format (default: parquet)"
-    )
-    parser.add_argument(
-        "--long-format",
-        action="store_true",
-        help="Keep long format instead of pivoting to wide format"
-    )
-    parser.add_argument(
-        "--filter-metrics",
-        nargs="+",
-        help="Only include metrics containing these patterns (e.g., 'node_cpu' 'kube_pod')"
-    )
+    
+    parser.add_argument('--batch-size', type=int, default=50,
+                      help='Batch size for processing CSV files')
+    parser.add_argument('--format', choices=['parquet', 'csv'], default='parquet',
+                      help='Output format')
+    parser.add_argument('--filter-metrics', nargs='+',
+                      help='List of metric patterns to include')
+    parser.add_argument('--safe-mode', action='store_true',
+                      help='Enable additional data validation')
     
     args = parser.parse_args()
     
-    # Show what we're doing
-    print(f"🔄 Consolidating CSV files...")
-    print(f"   Input: {args.input_dir}")
-    print(f"   Output: {args.output_path}.{args.output_format}")
-    print(f"   Format: {'Long' if args.long_format else 'Wide'} format")
-    if args.filter_metrics:
-        print(f"   Filter: {', '.join(args.filter_metrics)}")
-    print()
-    
     try:
-        consolidator = CSVConsolidator(args.input_dir, args.output_path)
+        # Set up paths - get script directory automatically
+        scripts_dir = Path(__file__).parent.resolve()
+        input_dir = scripts_dir / 'prometheus_data'
+        output_dir = scripts_dir / 'processed_data'
+        output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Initialize consolidator
+        consolidator = CSVConsolidator(
+            input_dir=input_dir,
+            output_path=output_dir / 'dataset',
+            safe_mode=args.safe_mode
+        )
+        
+        # Run consolidation
         df = consolidator.consolidate(
             batch_size=args.batch_size,
-            format=args.output_format,
-            wide_format=not args.long_format,
+            format=args.format,
             filter_metrics=args.filter_metrics
         )
         
-        logging.info("CSV consolidation completed successfully!")
-        print(f"\n✅ Success! Dataset saved to {args.output_path}.{args.output_format}")
-        print(f"   Summary: {args.output_path}_summary.txt")
+        logging.info("✅ Dataset consolidation complete!")
+        return 0
         
     except Exception as e:
-        logging.error(f"An error occurred: {e}", exc_info=True)
-        sys.exit(1)
-
+        logging.error(f"Failed to consolidate dataset: {e}")
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

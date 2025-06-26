@@ -7,3 +7,4 @@ scripts/*.txt
 !scripts/requirements.txt
 
 scripts/prometheus_data/* 
+.venv/*

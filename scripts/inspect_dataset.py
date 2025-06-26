@@ -2,6 +2,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Dict, List, Set
 
 import pandas as pd
 import numpy as np
@@ -13,12 +14,77 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()],
 )
 
+class PrometheusMetricInspector:
+    """Helper class to analyze Prometheus metric patterns."""
+    
+    def __init__(self):
+        # Define known metric types
+        self.metric_types = {
+            'counter': ['_total', '_created', '_count'],
+            'gauge': ['_bytes', '_ratio', '_utilization', '_active', '_current'],
+            'histogram': ['_bucket', '_sum', '_count'],
+            'summary': ['_sum', '_count', 'quantile']
+        }
+        
+        # Define common metric units
+        self.metric_units = {
+            'bytes': ['_bytes', '_bytes_total'],
+            'seconds': ['_seconds', '_seconds_total'],
+            'ratio': ['_ratio', '_utilization'],
+            'count': ['_total', '_count']
+        }
+    
+    def identify_metric_type(self, metric_name: str) -> str:
+        """Identify the likely type of a Prometheus metric."""
+        for type_name, patterns in self.metric_types.items():
+            if any(pattern in metric_name for pattern in patterns):
+                return type_name
+        return 'unknown'
+    
+    def identify_metric_unit(self, metric_name: str) -> str:
+        """Identify the unit of a Prometheus metric."""
+        for unit, patterns in self.metric_units.items():
+            if any(pattern in metric_name for pattern in patterns):
+                return unit
+        return 'unknown'
+    
+    def analyze_histogram_buckets(self, df: pd.DataFrame) -> Dict[str, List[float]]:
+        """Analyze histogram bucket distributions."""
+        histograms = {}
+        
+        # Find all histogram metrics
+        histogram_metrics = set()
+        for col in df.columns:
+            if '_bucket' in col:
+                base_name = col.split('_bucket')[0]
+                histogram_metrics.add(base_name)
+        
+        # Analyze each histogram
+        for metric in histogram_metrics:
+            bucket_cols = [col for col in df.columns if col.startswith(metric) and '_bucket' in col]
+            buckets = []
+            
+            for col in bucket_cols:
+                try:
+                    # Extract the le="X" value
+                    bucket = float(col.split('le="')[1].split('"')[0])
+                    buckets.append(bucket)
+                except:
+                    continue
+            
+            if buckets:
+                histograms[metric] = sorted(buckets)
+        
+        return histograms
 
 def inspect_dataset(file_path: Path, output_summary: bool = True):
     """Inspect and analyze a dataset."""
     logging.info(f"Inspecting dataset: {file_path}")
     
     try:
+        # Initialize Prometheus metric inspector
+        metric_inspector = PrometheusMetricInspector()
+        
         # Read the dataset
         if file_path.suffix == '.parquet':
             df = pd.read_parquet(file_path)
@@ -41,6 +107,10 @@ def inspect_dataset(file_path: Path, output_summary: bool = True):
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             print(f"   Time range: {df['timestamp'].min()} to {df['timestamp'].max()}")
             print(f"   Duration: {df['timestamp'].max() - df['timestamp'].min()}")
+            # Add time resolution analysis
+            if len(df) > 1:
+                time_diff = df['timestamp'].diff().median()
+                print(f"   Time resolution: {time_diff}")
         
         # Column analysis
         print(f"\n📈 COLUMN ANALYSIS:")
@@ -54,6 +124,37 @@ def inspect_dataset(file_path: Path, output_summary: bool = True):
         print(f"   Time columns: {len(time_cols)}")
         print(f"   Engineered features: {len(feature_cols)}")
         print(f"   Original metrics: {len(metric_cols)}")
+        
+        # Prometheus Metric Analysis
+        if metric_cols:
+            print(f"\n📊 PROMETHEUS METRIC ANALYSIS:")
+            metric_types = {}
+            metric_units = {}
+            
+            for col in metric_cols:
+                metric_type = metric_inspector.identify_metric_type(col)
+                metric_unit = metric_inspector.identify_metric_unit(col)
+                
+                metric_types[metric_type] = metric_types.get(metric_type, 0) + 1
+                if metric_unit != 'unknown':
+                    metric_units[metric_unit] = metric_units.get(metric_unit, 0) + 1
+            
+            print(f"   Metric Types:")
+            for type_name, count in metric_types.items():
+                print(f"     - {type_name}: {count} metrics")
+            
+            print(f"\n   Metric Units:")
+            for unit, count in metric_units.items():
+                print(f"     - {unit}: {count} metrics")
+            
+            # Analyze histograms
+            histograms = metric_inspector.analyze_histogram_buckets(df)
+            if histograms:
+                print(f"\n   Histogram Metrics:")
+                for metric, buckets in histograms.items():
+                    print(f"     - {metric}:")
+                    print(f"       Buckets: {len(buckets)}")
+                    print(f"       Range: {min(buckets)} to {max(buckets)}")
         
         # Data types
         print(f"\n📋 DATA TYPES:")
@@ -187,7 +288,7 @@ def inspect_dataset(file_path: Path, output_summary: bool = True):
 def main():
     """Main function to parse arguments and inspect dataset."""
     parser = argparse.ArgumentParser(
-        description="Inspect and analyze a dataset (CSV or Parquet)."
+        description="Inspect and analyze a dataset (CSV or Parquet) with focus on Prometheus metrics."
     )
     parser.add_argument(
         "input_file",
@@ -200,11 +301,19 @@ def main():
         action="store_true",
         help="Don't save a summary file"
     )
+    parser.add_argument(
+        "--focus",
+        choices=['all', 'metrics', 'features'],
+        default='all',
+        help="Focus the analysis on specific aspects (default: all)"
+    )
     
     args = parser.parse_args()
     
     # Show what we're doing
     print(f"🔍 Inspecting dataset: {args.input_file}")
+    if args.focus != 'all':
+        print(f"   Focus: {args.focus}")
     print()
     
     try:
