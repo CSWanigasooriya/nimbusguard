@@ -1,10 +1,1 @@
-# Ignore generated data files in scripts directory
-scripts/*.parquet
-scripts/*.csv
-
-# Ignore text output files in scripts but keep requirements.txt
-scripts/*.txt
-!scripts/requirements.txt
-
-scripts/prometheus_data/* 
 .venv/*
