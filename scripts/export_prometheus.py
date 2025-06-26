@@ -199,68 +199,75 @@ def main():
     parser = argparse.ArgumentParser(
         description="Export metrics from a Prometheus instance."
     )
-    parser.add_argument(
-        "--test-connection", action="store_true", help="Test connection to Prometheus."
-    )
-    parser.add_argument(
-        "--list-metrics", action="store_true", help="List available metrics."
-    )
-    parser.add_argument(
-        "--url",
-        default="http://localhost:9090",
-        help="Prometheus server URL.",
-    )
-    parser.add_argument("--days", type=int, default=7, help="Number of days to export.")
-    parser.add_argument("--step", default="1m", help="Query resolution step width.")
-    parser.add_argument(
-        "--output-format",
-        choices=["unified", "individual"],
-        default="individual",
-        help="Output format for metrics.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="prometheus_data",
-        help="Directory to save exported data.",
-    )
-    parser.add_argument(
-        "--metrics", dest="metrics_file", help="File with a list of metrics to export."
-    )
-    parser.add_argument(
-        "--filter", dest="filter_regex", help="Regex to filter metric names."
-    )
-    parser.add_argument(
-        "--workers", type=int, default=4, help="Number of parallel workers."
-    )
-    parser.add_argument("--timeout", type=int, default=300, help="Request timeout.")
-    parser.add_argument("--retries", type=int, default=3, help="Number of retries.")
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would be exported."
-    )
-
+    
+    # Connection options
+    parser.add_argument('--test-connection', action='store_true',
+                      help='Test connection to Prometheus and exit')
+    parser.add_argument('--list-metrics', action='store_true',
+                      help='List available metrics and exit')
+    parser.add_argument('--url', default='http://localhost:9090',
+                      help='Prometheus server URL')
+    
+    # Export options
+    parser.add_argument('--days', type=int, default=7,
+                      help='Number of days to export')
+    parser.add_argument('--step', default='1m',
+                      help='Query resolution step width')
+    parser.add_argument('--output-format', choices=['unified', 'individual'],
+                      default='individual',
+                      help='Output format: unified parquet or individual CSVs')
+    parser.add_argument('--output-dir', default='prometheus_data',
+                      help='Output directory for exported data')
+    parser.add_argument('--metrics', dest='metrics_file',
+                      help='File containing list of metrics to export')
+    parser.add_argument('--filter', dest='filter_regex',
+                      help='Regex pattern to filter metrics')
+    
+    # Performance options
+    parser.add_argument('--workers', type=int, default=4,
+                      help='Number of parallel workers')
+    parser.add_argument('--timeout', type=int, default=30,
+                      help='Query timeout in seconds')
+    parser.add_argument('--retries', type=int, default=3,
+                      help='Number of retries for failed queries')
+    
+    # Other options
+    parser.add_argument('--dry-run', action='store_true',
+                      help='Show what would be done without doing it')
+    
     args = parser.parse_args()
-
+    
     try:
+        # Handle work directory - set output relative to script location if not absolute
+        if not Path(args.output_dir).is_absolute():
+            args.output_dir = SCRIPT_DIR / args.output_dir
+        
+        # Handle commands
         if args.test_connection:
-            test_connection(args.url)
-        elif args.list_metrics:
+            success = test_connection(args.url)
+            sys.exit(0 if success else 1)
+        
+        if args.list_metrics:
             list_metrics(args.url)
-        else:
-            export_metrics(
-                prometheus_url=args.url,
-                days=args.days,
-                step=args.step,
-                output_format=args.output_format,
-                output_dir=args.output_dir,
-                metrics_file=args.metrics_file,
-                filter_regex=args.filter_regex,
-                workers=args.workers,
-                timeout=args.timeout,
-                retries=args.retries,
-                dry_run=args.dry_run,
-            )
+            sys.exit(0)
+        
+        export_metrics(
+            prometheus_url=args.url,
+            days=args.days,
+            step=args.step,
+            output_format=args.output_format,
+            output_dir=args.output_dir,
+            metrics_file=args.metrics_file,
+            filter_regex=args.filter_regex,
+            workers=args.workers,
+            timeout=args.timeout,
+            retries=args.retries,
+            dry_run=args.dry_run,
+        )
+        sys.exit(0)
+        
     except Exception as e:
-        logging.error(f"An error occurred: {e}", exc_info=True)
+        logging.error(f"Export failed: {e}", exc_info=True)
         sys.exit(1)
 
 

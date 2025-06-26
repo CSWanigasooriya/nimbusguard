@@ -7,8 +7,42 @@ Helps identify and fix data type issues in your CSV files before processing.
 import pandas as pd
 from pathlib import Path
 import logging
+from datetime import datetime
+import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+def validate_timestamp(series):
+    """Validate timestamp format and continuity."""
+    try:
+        timestamps = pd.to_datetime(series)
+        time_diffs = timestamps.diff()
+        
+        # Check for gaps (should be ~1 minute intervals)
+        gaps = time_diffs > pd.Timedelta(minutes=2)
+        if gaps.any():
+            return False, f"Found {gaps.sum()} gaps in time series"
+        
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+def validate_numeric(series):
+    """Validate numeric values."""
+    try:
+        numeric_values = pd.to_numeric(series)
+        
+        # Check for infinity or extremely large values
+        if np.inf in numeric_values.values or -np.inf in numeric_values.values:
+            return False, "Contains infinity values"
+        
+        # Check for unreasonable values (adjust thresholds as needed)
+        if numeric_values.abs().max() > 1e12:
+            return False, f"Contains very large values: {numeric_values.abs().max()}"
+            
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 def diagnose_data_types():
     """Diagnose data type issues in prometheus data."""
@@ -26,66 +60,115 @@ def diagnose_data_types():
     
     print(f"🔍 Analyzing {len(csv_files)} CSV files for data type issues...")
     
-    problematic_files = []
-    mixed_type_columns = {}
+    issues = {
+        'timestamp_issues': [],
+        'value_issues': [],
+        'label_issues': [],
+        'mixed_types': {},
+        'missing_data': []
+    }
     
-    # Sample a few files to check for issues
-    sample_files = csv_files[:20]  # Check first 20 files
-    
-    for file in sample_files:
+    # Analyze all files
+    for file in csv_files:
         try:
             df = pd.read_csv(file)
             
-            # Check for mixed types in object columns
-            object_cols = df.select_dtypes(include=['object']).columns
+            # Check timestamp
+            if 'timestamp' in df.columns:
+                valid, msg = validate_timestamp(df['timestamp'])
+                if not valid:
+                    issues['timestamp_issues'].append(f"{file.name}: {msg}")
             
-            for col in object_cols:
-                if col in ['timestamp', 'metric_name']:
-                    continue
-                    
-                # Check if column has mixed types
-                unique_types = set(type(x).__name__ for x in df[col].dropna().iloc[:100])
+            # Check value column
+            if 'value' in df.columns:
+                valid, msg = validate_numeric(df['value'])
+                if not valid:
+                    issues['value_issues'].append(f"{file.name}: {msg}")
+            
+            # Check for missing required columns
+            required_cols = {'timestamp', 'value', 'metric_name'}
+            missing = required_cols - set(df.columns)
+            if missing:
+                issues['missing_data'].append(f"{file.name}: Missing columns {missing}")
+            
+            # Check label consistency
+            label_cols = [col for col in df.columns if col not in required_cols]
+            for col in label_cols:
+                # Check for mixed types
+                unique_types = df[col].apply(type).unique()
                 if len(unique_types) > 1:
-                    if col not in mixed_type_columns:
-                        mixed_type_columns[col] = set()
-                    mixed_type_columns[col].update(unique_types)
-                    problematic_files.append(file.name)
-                    
+                    if col not in issues['mixed_types']:
+                        issues['mixed_types'][col] = set()
+                    issues['mixed_types'][col].update(str(t) for t in unique_types)
+                
+                # Check for label validity
+                if df[col].isna().any():
+                    issues['label_issues'].append(f"{file.name}: Column {col} has missing values")
+                
         except Exception as e:
             print(f"⚠️  Error reading {file.name}: {e}")
-            problematic_files.append(file.name)
+            issues['missing_data'].append(f"{file.name}: Failed to read file - {str(e)}")
     
     # Report findings
     print(f"\n📊 ANALYSIS RESULTS:")
-    print(f"   Files analyzed: {len(sample_files)}")
-    print(f"   Problematic files: {len(set(problematic_files))}")
+    print(f"   Files analyzed: {len(csv_files)}")
     
-    if mixed_type_columns:
-        print(f"\n⚠️  MIXED TYPE COLUMNS FOUND:")
-        for col, types in mixed_type_columns.items():
-            print(f"   {col}: {', '.join(types)}")
+    if any(issues.values()):
+        print("\n⚠️  ISSUES FOUND:")
+        
+        if issues['timestamp_issues']:
+            print("\n   Timestamp Issues:")
+            for issue in issues['timestamp_issues'][:5]:
+                print(f"   - {issue}")
+            if len(issues['timestamp_issues']) > 5:
+                print(f"   ... and {len(issues['timestamp_issues']) - 5} more")
+        
+        if issues['value_issues']:
+            print("\n   Value Issues:")
+            for issue in issues['value_issues'][:5]:
+                print(f"   - {issue}")
+            if len(issues['value_issues']) > 5:
+                print(f"   ... and {len(issues['value_issues']) - 5} more")
+        
+        if issues['mixed_types']:
+            print("\n   Mixed Type Columns:")
+            for col, types in issues['mixed_types'].items():
+                print(f"   - {col}: {', '.join(types)}")
+        
+        if issues['label_issues']:
+            print("\n   Label Issues:")
+            for issue in issues['label_issues'][:5]:
+                print(f"   - {issue}")
+            if len(issues['label_issues']) > 5:
+                print(f"   ... and {len(issues['label_issues']) - 5} more")
+    else:
+        print("   ✅ No issues found")
     
     print(f"\n💡 RECOMMENDATIONS:")
-    if mixed_type_columns:
-        print("   1. The pipeline now handles mixed types automatically")
-        print("   2. Run with the updated run_pipeline.py")
-        print("   3. Mixed type columns will be converted to strings")
+    if any(issues.values()):
+        print("   1. Run prepare_dataset.py with --safe-mode flag")
+        print("   2. Consider filtering problematic metrics")
+        print("   3. Check timestamp continuity in your data collection")
     else:
-        print("   ✅ No obvious data type issues found")
+        print("   ✅ Data looks clean and ready for processing")
     
-    return mixed_type_columns
+    return issues
 
 def quick_fix_sample():
-    """Show how the data type fix works."""
+    """Show how the data type fixes work."""
     
-    print(f"\n🔧 HOW THE FIX WORKS:")
-    print("Before fix:")
-    print("  device column: ['sda', 'nvme0n1', 8, 'loop0', 259]  ❌ Mixed types")
-    print()
-    print("After fix:")
-    print("  device column: ['sda', 'nvme0n1', '8', 'loop0', '259']  ✅ All strings")
-    print()
-    print("This prevents the PyArrow parquet conversion error!")
+    print(f"\n🔧 AUTOMATIC FIXES APPLIED:")
+    print("1. Timestamps:")
+    print("   Before: ['2025-06-25 08:29:29', '2025-06-25 8:30:29']")
+    print("   After:  [2025-06-25 08:29:29, 2025-06-25 08:30:29]  ✅ Standardized format")
+    
+    print("\n2. Mixed Types:")
+    print("   Before: ['sda', 'nvme0n1', 8, 'loop0', 259]")
+    print("   After:  ['sda', 'nvme0n1', '8', 'loop0', '259']  ✅ Consistent strings")
+    
+    print("\n3. Numeric Values:")
+    print("   Before: ['1.23e6', 'inf', '1.5M']")
+    print("   After:  [1230000.0, None, 1500000.0]  ✅ Clean numbers")
 
 if __name__ == "__main__":
     print("🩺 Data Type Diagnostic Tool")
@@ -94,6 +177,6 @@ if __name__ == "__main__":
     diagnose_data_types()
     quick_fix_sample()
     
-    print(f"\n🚀 TO RUN YOUR FIXED PIPELINE:")
-    print("   python run_pipeline.py --skip-extraction")
-    print("   python run_pipeline.py --quick")
+    print(f"\n🚀 TO RUN YOUR PIPELINE:")
+    print("   python prepare_dataset.py --safe-mode  # For extra data validation")
+    print("   python prepare_dataset.py --quick      # For faster processing")

@@ -146,6 +146,36 @@ setup: ## Setup development environment (install latest tools)
 	@echo ""
 	@echo "🚀 Ready to deploy! Try: make helm-dev (recommended) or make dev (legacy)"
 
+	@echo ""
+	@echo "🔍 Checking Kubeflow Pipelines installation..."
+	@if kubectl get ns kubeflow >/dev/null 2>&1; then \
+		echo "✅ Kubeflow Pipelines already installed"; \
+	else \
+		echo "📥 Installing Kubeflow Pipelines (version $(PIPELINE_VERSION))..."; \
+		$(MAKE) kfp-install; \
+	fi
+
+# Default Kubeflow Pipelines version (override with PIPELINE_VERSION=x.y.z)
+PIPELINE_VERSION ?= 2.4.0
+
+# -----------------------------------------------------------------------------
+# Kubeflow Pipelines
+# -----------------------------------------------------------------------------
+
+kfp-install: ## Install stand-alone Kubeflow Pipelines into the current cluster
+	@echo "🚀 Installing Kubeflow Pipelines ($(PIPELINE_VERSION))..."
+	@kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref=$(PIPELINE_VERSION)" >/dev/null
+	@kubectl wait --for condition=established --timeout=60s crd/applications.app.k8s.io || true
+	@kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic?ref=$(PIPELINE_VERSION)" >/dev/null
+	@echo "✅ Kubeflow Pipelines installed"
+
+kfp-delete: ## Remove Kubeflow Pipelines from the cluster
+	@echo "🗑️  Deleting Kubeflow Pipelines..."
+	@kubectl delete -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic?ref=$(PIPELINE_VERSION)" 2>/dev/null || true
+	@kubectl delete -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref=$(PIPELINE_VERSION)" 2>/dev/null || true
+	@kubectl delete namespace kubeflow --ignore-not-found=true
+	@echo "✅ Kubeflow Pipelines removed"
+
 setup-update: ## Update all existing tools to latest versions
 	@echo "🔄 Updating all tools to latest versions..."
 	@if [ "$$(uname)" = "Darwin" ]; then \
@@ -336,26 +366,33 @@ run: ## Dry run deployment (legacy)
 
 forward: stop-forward ## Port forward ALL services at once
 	@echo "🚀 Starting all port forwarding in background..."
+	# NimbusGuard namespace
 	@kubectl port-forward -n nimbusguard svc/consumer 8000:8000 > /dev/null 2>&1 &
 	@kubectl port-forward -n nimbusguard svc/prometheus 9090:9090 > /dev/null 2>&1 &
 	@kubectl port-forward -n nimbusguard svc/grafana 3000:3000 > /dev/null 2>&1 &
 	@kubectl port-forward -n nimbusguard svc/loki 3100:3100 > /dev/null 2>&1 &
 	@kubectl port-forward -n nimbusguard svc/tempo 3200:3200 > /dev/null 2>&1 &
 	@kubectl port-forward -n nimbusguard svc/alloy 8080:8080 > /dev/null 2>&1 &
+	# Kubeflow (KFP) namespace
+	@kubectl port-forward -n kubeflow svc/ml-pipeline-ui 8081:80 > /dev/null 2>&1 &
+	@kubectl port-forward -n kubeflow svc/minio-service 9000:9000 > /dev/null 2>&1 &
 	@sleep 2
 	@echo "✅ All services forwarded!"
-	@echo "📊 Consumer:    http://localhost:8000"
-	@echo "📈 Prometheus:  http://localhost:9090"
-	@echo "📋 Grafana:     http://localhost:3000  (admin/admin)"
-	@echo "📜 Loki:        http://localhost:3100"
-	@echo "🔍 Tempo:       http://localhost:3200"
-	@echo "🤖 Alloy:       http://localhost:8080"
+	@echo "📊 Consumer:           http://localhost:8000"
+	@echo "📈 Prometheus:         http://localhost:9090"
+	@echo "📋 Grafana:            http://localhost:3000  (admin/admin)"
+	@echo "📜 Loki:               http://localhost:3100"
+	@echo "🔍 Tempo:              http://localhost:3200"
+	@echo "🤖 Alloy:              http://localhost:8080"
+	@echo "🚀 Kubeflow Pipelines: http://localhost:8081"
+	@echo "💾 MinIO (KFP):        http://localhost:9000  (minio/minio1234)"
 	@echo ""
 	@echo "Use 'make stop-forward' to stop all forwarding"
 
 stop-forward: ## Stop ALL port forwarding
 	@echo "🛑 Stopping all port forwarding..."
 	@pkill -f "kubectl port-forward.*nimbusguard" || true
+	@pkill -f "kubectl port-forward.*kubeflow" || true
 	@echo "✅ All port forwarding stopped"
 
 status: ## Check deployment status
