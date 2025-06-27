@@ -10,6 +10,12 @@ import numpy as np
 import joblib
 import redis
 import kopf
+import pickle
+from io import BytesIO
+from urllib.parse import urlparse
+from minio import Minio
+import torch
+import torch.nn as nn
 from dotenv import load_dotenv
 from prometheus_client import Gauge, generate_latest
 from aiohttp import web
@@ -53,17 +59,31 @@ async def metrics_handler(request):
     return web.Response(text=metrics_data.decode('utf-8'), content_type='text/plain; version=0.0.4; charset=utf-8')
 
 async def metrics_api_handler(request):
-    """KEDA Metrics API endpoint - returns DQN desired replicas in simple JSON format"""
-    current_value = float(DESIRED_REPLICAS_GAUGE._value._value)
-    
-    response = {
-        "dqn": {
-            "desired_replicas": current_value,
-            "status": "active",
-            "timestamp": int(time.time())
+    """KEDA Metrics API endpoint - returns current DQN desired replicas (updated by timer)"""
+    try:
+        # Simply return the current gauge value - no decision making here
+        current_value = float(DESIRED_REPLICAS_GAUGE._value._value)
+        
+        response = {
+            "dqn": {
+                "desired_replicas": current_value,
+                "status": "active",
+                "timestamp": int(time.time())
+            }
         }
-    }
-    return web.json_response(response)
+        return web.json_response(response)
+    except Exception as e:
+        logger.error(f"Error in metrics API handler: {e}")
+        # Return default value on error
+        response = {
+            "dqn": {
+                "desired_replicas": 1.0,
+                "status": "error",
+                "error": str(e),
+                "timestamp": int(time.time())
+            }
+        }
+        return web.json_response(response)
 
 class HTTP2ErrorFilter(logging.Filter):
     """Filter to suppress HTTP/2 protocol error logs"""
@@ -81,11 +101,18 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
 TARGET_DEPLOYMENT = os.getenv("TARGET_DEPLOYMENT", "consumer")
 TARGET_NAMESPACE = os.getenv("TARGET_NAMESPACE", "nimbusguard")
 SCALER_PATH = os.getenv("SCALER_PATH", "/app/feature_scaler.gz")
-STABILIZATION_PERIOD_SECONDS = int(os.getenv("STABILIZATION_PERIOD_SECONDS", 60)) # Time to wait after action
+STABILIZATION_PERIOD_SECONDS = int(os.getenv("STABILIZATION_PERIOD_SECONDS", 15)) # Time to wait after action (reduced for testing)
 REWARD_LATENCY_WEIGHT = float(os.getenv("REWARD_LATENCY_WEIGHT", 10.0)) # Higher = more penalty for latency
 REWARD_REPLICA_COST = float(os.getenv("REWARD_REPLICA_COST", 0.1)) # Cost per replica
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 REPLAY_BUFFER_KEY = "replay_buffer"
+
+# MinIO Configuration
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio.nimbusguard.svc:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+BUCKET_NAME = os.getenv("BUCKET_NAME", "models")
+SCALER_NAME = os.getenv("SCALER_NAME", "feature_scaler.pkl")
 
 # Enhanced feature set - matching the learner
 FEATURE_ORDER = [
@@ -99,13 +126,49 @@ FEATURE_ORDER = [
 DESIRED_REPLICAS_GAUGE = Gauge('nimbusguard_dqn_desired_replicas', 'Desired replicas calculated by the DQN adapter')
 CURRENT_REPLICAS_GAUGE = Gauge('nimbusguard_current_replicas', 'Current replicas of the target deployment as seen by the adapter')
 
+# --- DQN Model Definition ---
+class EnhancedQNetwork(nn.Module):
+    """Enhanced Q-Network matching the learner's architecture."""
+    
+    def __init__(self, state_dim: int, action_dim: int, hidden_dims=[512, 256, 128]):
+        super().__init__()
+        
+        layers = []
+        prev_dim = state_dim
+        
+        for hidden_dim in hidden_dims:
+            layers.extend([
+                nn.Linear(prev_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.BatchNorm1d(hidden_dim)
+            ])
+            prev_dim = hidden_dim
+        
+        # Remove last batch norm and dropout
+        layers = layers[:-2]
+        layers.append(nn.Linear(prev_dim, action_dim))
+        
+        self.network = nn.Sequential(*layers)
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.xavier_uniform_(module.weight)
+            torch.nn.init.constant_(module.bias, 0)
+
+    def forward(self, x):
+        return self.network(x)
+
 # --- Global Clients and Models ---
 # These will be initialized in the kopf startup handler
 prometheus_client = None
 llm = None
 scaler = None
+dqn_model = None
 validator_agent = None
 redis_client = None
+minio_client = None
 metrics_server = None
 
 # --- LangGraph State ---
@@ -170,9 +233,9 @@ async def get_live_metrics(state: ScalingState, is_next_state: bool = False) -> 
 
 async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
     logger.info("==> Node: get_dqn_recommendation")
-    if not KSERVE_URL or not scaler:
-        logger.error("KSERVE_URL or scaler not configured. Skipping DQN prediction.")
-        return {"error": "DQN_NOT_CONFIGURED"}
+    if not scaler:
+        logger.error("Scaler not loaded. Skipping DQN prediction.")
+        return {"error": "SCALER_NOT_LOADED"}
 
     metrics = state['current_metrics'].copy()
     metrics['current_replicas'] = state['current_replicas']
@@ -182,20 +245,40 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
     scaled_features = scaler.transform([feature_vector])
     logger.info(f"  - Using enhanced features ({len(feature_vector)} dimensions)")
     
-    payload = {"inputs": [{"name": "dqn_input", "shape": list(scaled_features.shape), "datatype": "FP32", "data": scaled_features.tolist()}]}
-    
     try:
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, lambda: requests.post(KSERVE_URL, json=payload))
-        response.raise_for_status()
-        prediction = response.json()['outputs'][0]['data']
-        action_index = np.argmax(prediction)
-        action_map = {0: "Scale Down", 1: "Keep Same", 2: "Scale Up"}
-        action_name = action_map.get(action_index, "Unknown")
-        
-        logger.info(f"  - DQN recommends: '{action_name}' (Q-values: {[f'{q:.3f}' for q in prediction]})")
-        experience_update = {"state": metrics, "action": action_name}
-        return {"dqn_prediction": {"action_name": action_name, "q_values": prediction}, "experience": experience_update}
+        if dqn_model is not None:
+            # Use local PyTorch model
+            device = next(dqn_model.parameters()).device
+            input_tensor = torch.FloatTensor(scaled_features).to(device)
+            
+            with torch.no_grad():
+                q_values = dqn_model(input_tensor).cpu().numpy().flatten()
+            
+            action_index = np.argmax(q_values)
+            action_map = {0: "Scale Down", 1: "Keep Same", 2: "Scale Up"}
+            action_name = action_map.get(action_index, "Unknown")
+            
+            logger.info(f"  - DQN recommends: '{action_name}' (Q-values: {[f'{q:.3f}' for q in q_values]})")
+            experience_update = {"state": metrics, "action": action_name}
+            return {"dqn_prediction": {"action_name": action_name, "q_values": q_values.tolist()}, "experience": experience_update}
+        else:
+            # Fallback: Simple rule-based logic
+            logger.info("  - Using fallback rule-based logic (DQN model not available)")
+            request_rate = metrics.get('request_rate', 0)
+            cpu_usage = metrics.get('cpu_usage_avg', 0)
+            current_replicas = metrics.get('current_replicas', 1)
+            
+            if request_rate > 1.0 or cpu_usage > 0.8:
+                action_name = "Scale Up"
+            elif request_rate < 0.1 and cpu_usage < 0.2 and current_replicas > 1:
+                action_name = "Scale Down"
+            else:
+                action_name = "Keep Same"
+                
+            logger.info(f"  - Fallback recommends: '{action_name}' (rate={request_rate:.2f}, cpu={cpu_usage:.2f})")
+            experience_update = {"state": metrics, "action": action_name}
+            return {"dqn_prediction": {"action_name": action_name, "q_values": [0.0, 1.0, 0.0]}, "experience": experience_update}
+            
     except Exception as e:
         logger.error(f"DQN inference failed: {e}", exc_info=True)
         return {"error": f"DQN_INFERENCE_FAILED: {e}"}
@@ -302,17 +385,62 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     logger.info("🚀 NimbusGuard DQN Operator starting up...")
     
     # Initialize all global clients
-    global prometheus_client, llm, scaler, validator_agent, redis_client, metrics_server
+    global prometheus_client, llm, scaler, dqn_model, validator_agent, redis_client, minio_client, metrics_server
     
     prometheus_client = PrometheusClient() # Use our custom PrometheusClient
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
+    # Initialize MinIO client
     try:
-        scaler = joblib.load(SCALER_PATH)
-        logger.info(f"Successfully loaded feature scaler from {SCALER_PATH}")
+        minio_url = urlparse(MINIO_ENDPOINT).netloc
+        minio_client = Minio(
+            minio_url,
+            access_key=MINIO_ACCESS_KEY,
+            secret_key=MINIO_SECRET_KEY,
+            secure=False
+        )
+        if not minio_client.bucket_exists(BUCKET_NAME):
+            minio_client.make_bucket(BUCKET_NAME)
+            logger.info(f"Created MinIO bucket: {BUCKET_NAME}")
+        logger.info("Successfully connected to MinIO.")
     except Exception as e:
-        logger.error(f"FATAL: Could not load scaler from {SCALER_PATH}. Inference will fail.")
-        raise kopf.PermanentError(f"Scaler not found at {SCALER_PATH}")
+        logger.error(f"Failed to connect to MinIO: {e}")
+        raise kopf.PermanentError(f"MinIO connection failed: {e}")
+
+    # Load scaler from MinIO only
+    try:
+        logger.info(f"Loading feature scaler from MinIO: {SCALER_NAME}")
+        response = minio_client.get_object(BUCKET_NAME, SCALER_NAME)
+        buffer = BytesIO(response.read())
+        scaler = pickle.load(buffer)
+        logger.info("Successfully loaded feature scaler from MinIO")
+    except Exception as e:
+        logger.error(f"FATAL: Could not load scaler from MinIO: {e}")
+        raise kopf.PermanentError(f"Scaler not found in MinIO: {SCALER_NAME}")
+
+    # Load DQN model from MinIO
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    try:
+        logger.info(f"Loading DQN model from MinIO: dqn_model.pt")
+        response = minio_client.get_object(BUCKET_NAME, "dqn_model.pt")
+        buffer = BytesIO(response.read())
+        checkpoint = torch.load(buffer, map_location=device)
+        
+        # Initialize model with correct dimensions
+        state_dim = len(FEATURE_ORDER)
+        action_dim = 3
+        dqn_model = EnhancedQNetwork(state_dim, action_dim).to(device)
+        
+        if isinstance(checkpoint, dict) and 'policy_net_state_dict' in checkpoint:
+            dqn_model.load_state_dict(checkpoint['policy_net_state_dict'])
+        else:
+            dqn_model.load_state_dict(checkpoint)
+            
+        dqn_model.eval()  # Set to evaluation mode
+        logger.info(f"Successfully loaded DQN model from MinIO (device: {device})")
+    except Exception as e:
+        logger.warning(f"Could not load DQN model from MinIO: {e}")
+        logger.info("DQN adapter will use fallback scaling logic")
 
     try:
         redis_client = redis.from_url(REDIS_URL, decode_responses=True)
@@ -346,6 +474,14 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     # Initialize gauges to a default value
     CURRENT_REPLICAS_GAUGE.set(1)
     DESIRED_REPLICAS_GAUGE.set(1)
+    
+    # Run initial DQN decision to get a baseline
+    try:
+        logger.info("🎯 Running initial DQN decision during startup...")
+        await run_intelligent_scaling_decision()
+        logger.info("✅ Initial DQN decision completed")
+    except Exception as e:
+        logger.warning(f"Initial DQN decision failed (will retry with timer): {e}")
     
     # Add HTTP/2 error log suppression
     aiohttp_server_logger = logging.getLogger("aiohttp.server")
@@ -386,14 +522,13 @@ async def cleanup(**kwargs):
         except Exception as e:
             logger.error(f"Error stopping metrics server: {e}")
 
-# --- ScaledObject Event Handlers ---
-@kopf.on.create('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'})
-@kopf.on.update('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'})
-async def on_scaledobject_event(spec, status, meta, **kwargs):
-    """React to ScaledObject events - this is where the intelligent scaling happens"""
-    logger.info(f"🎯 ScaledObject event detected: {meta['name']}")
+# --- Timer-based DQN Decision Making ---
+@kopf.timer('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'}, interval=20)
+async def periodic_dqn_decision(spec, status, meta, **kwargs):
+    """Periodically run DQN scaling decisions for DQN-enabled ScaledObjects (every 60 seconds)"""
+    logger.info(f"🕐 Timer triggered for ScaledObject '{meta['name']}': Running periodic DQN decision")
     
-    # Check if this is our DQN ScaledObject
+    # Only process our specific DQN ScaledObject
     if meta['name'] != 'consumer-scaler-dqn':
         return
     
@@ -402,10 +537,14 @@ async def on_scaledobject_event(spec, status, meta, **kwargs):
     is_active = any(condition.get('type') == 'Active' and condition.get('status') == 'True' 
                    for condition in status.get('conditions', []))
     
-    logger.info(f"📊 Current state: {current_replicas} replicas, Active: {is_active}")
+    logger.info(f"📊 ScaledObject state: {current_replicas} replicas, Active: {is_active}")
     
-    # Run DQN decision making process
-    await run_intelligent_scaling_decision()
+    try:
+        # Run DQN decision making process
+        await run_intelligent_scaling_decision()
+        logger.info("✅ Periodic DQN decision completed successfully")
+    except Exception as e:
+        logger.error(f"❌ Error in periodic DQN decision: {e}", exc_info=True)
 
 async def run_intelligent_scaling_decision():
     """Execute the intelligent scaling decision using DQN"""
