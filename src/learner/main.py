@@ -625,13 +625,20 @@ async def startup_handler(**kwargs):
     if not feature_extractor.is_fitted:
         logger.info("Collecting initial data to fit feature scaler...")
         initial_features = []
-        for _ in range(50):
-            features = feature_extractor.extract_features()
-            initial_features.append(features)
-            await asyncio.sleep(2)
+        for i in range(15):  # Reduced from 50 to 15 samples
+            try:
+                features = feature_extractor.extract_features()
+                initial_features.append(features)
+                logger.info(f"Collected sample {i+1}/15")
+                await asyncio.sleep(1)  # Reduced from 2 to 1 second
+            except Exception as e:
+                logger.warning(f"Failed to collect sample {i+1}: {e}")
+                await asyncio.sleep(0.5)  # Shorter sleep on error
         
         if initial_features:
             feature_extractor.fit_scaler(np.array(initial_features))
+        else:
+            logger.warning("No initial features collected, using default scaler")
     
     # Initialize trainer
     trainer = AdvancedDQNTrainer(device, feature_extractor)
@@ -747,15 +754,7 @@ async def process_redis_experiences():
     except Exception as e:
         logger.error(f"Error processing experiences: {e}", exc_info=True)
 
-# Fallback timer to ensure we still process experiences even without ScaledObject events
-@kopf.timer('v1', 'namespaces', interval=30)
-async def periodic_experience_processing(**kwargs):
-    """Fallback timer to process experiences periodically."""
-    await process_redis_experiences()
-
 if __name__ == "__main__":
-    # Run the Kopf operator
-    kopf.run(
-        clusterwide=True,
-        liveness_endpoint=f"http://0.0.0.0:8080/healthz"
-    )
+    # The Kopf CLI will handle running the operator
+    # No need to call kopf.run() manually
+    pass
