@@ -1,1 +1,22 @@
 .venv/*
+
+# Docker build cache
+.docker-cache/
+
+# Build artifacts
+*.log
+.ports.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
