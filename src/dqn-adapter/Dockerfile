@@ -17,5 +17,5 @@ COPY src/dqn-adapter/ .
 # Expose the port the app runs on
 EXPOSE 8080
 
-# Command to run the application using Kopf
-CMD ["kopf", "run", "--namespace", "nimbusguard", "/app/main.py"] 
+# Command to run the application using Kopf with liveness probe
+CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8001/healthz", "/app/main.py"] 
