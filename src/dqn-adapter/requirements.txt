@@ -16,4 +16,8 @@ redis
 kopf
 aiohttp
 minio
-torch 
+matplotlib
+seaborn
+plotly
+scipy
+pyarrow 

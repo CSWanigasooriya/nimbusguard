@@ -158,71 +158,10 @@ setup: ## Setup development environment (install latest tools)
 	@echo "   • yq: $$(yq --version 2>/dev/null || echo 'not installed')"
 	@echo "   • k9s: $$(k9s version -s 2>/dev/null || echo 'not installed')"
 	@echo ""
-	@echo "🧠 Installing KServe platform (this may take a few minutes)..."
-	@$(MAKE) kserve-install
-	@echo ""
 	@echo "🚀 Ready to deploy!"
 
-# -----------------------------------------------------------------------------
-# MLOps Platform Installation
-# -----------------------------------------------------------------------------
-
-kserve-install: ## Install KServe and all its dependencies (cert-manager, Knative)
-	@echo "🔧 Installing KServe MLOps Platform..."
-	@echo ""
-	@echo "🔐 Step 1: Installing cert-manager..."
-	@if ! kubectl get namespace cert-manager >/dev/null 2>&1; then \
-		echo "📥 Applying cert-manager manifests..."; \
-		kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.15.1/cert-manager.yaml; \
-		echo "⏳ Waiting for cert-manager webhook to be ready..."; \
-		kubectl wait --for=condition=Available deployment/cert-manager-webhook --namespace cert-manager --timeout=300s; \
-		echo "✅ cert-manager installed."; \
-	else \
-		echo "✅ cert-manager already installed."; \
-	fi
-	@echo ""
-	@echo "🚀 Step 2: Installing Knative Serving..."
-	@if ! kubectl get namespace knative-serving >/dev/null 2>&1; then \
-		echo "📥 Applying Knative Serving CRDs..."; \
-		kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.14.1/serving-crds.yaml; \
-		echo "📥 Applying Knative Serving core components..."; \
-		kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.14.1/serving-core.yaml; \
-		echo "⏳ Waiting for Knative Serving to be ready..."; \
-		kubectl wait --for=condition=Available deployment/controller --namespace knative-serving --timeout=300s; \
-		echo "✅ Knative Serving installed."; \
-	else \
-		echo "✅ Knative Serving already installed."; \
-	fi
-	@echo ""
-	@echo "🌐 Step 3: Installing Kourier Ingress for Knative..."
-	@if ! kubectl get namespace kourier-system >/dev/null 2>&1; then \
-		echo "📥 Applying Kourier manifests..."; \
-		kubectl apply -f https://github.com/knative/net-kourier/releases/download/knative-v1.14.0/kourier.yaml; \
-		echo "⏳ Waiting for Kourier gateway to be ready..."; \
-		kubectl wait --for=condition=ready --timeout=180s -n kourier-system pod -l app=3scale-kourier-gateway; \
-		echo "⚙️  Configuring Knative to use Kourier as default ingress..."; \
-		kubectl patch configmap/config-network --namespace knative-serving --type merge --patch '{"data":{"ingress.class":"kourier.ingress.networking.knative.dev"}}'; \
-		echo "🔗 Configuring Knative domain with magic DNS (sslip.io)..."; \
-		IP_ADDRESS=$$(kubectl get svc -n kourier-system kourier -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1"); \
-		if [ "$$IP_ADDRESS" = "127.0.0.1" ]; then echo "⚠️  Could not get Kourier external IP, defaulting to 127.0.0.1. You may need to configure domain manually."; fi; \
-		kubectl patch configmap/config-domain --namespace knative-serving --type merge --patch "{\"data\":{\"$${IP_ADDRESS}.sslip.io\":\"\"}}"; \
-		echo "✅ Kourier installed and configured."; \
-	else \
-		echo "✅ Kourier already installed and configured."; \
-	fi
-	@echo ""
-	@echo "🧠 Step 4: Installing KServe..."
-	@if ! kubectl get namespace kserve >/dev/null 2>&1; then \
-		echo "📥 Applying KServe manifests..."; \
-		kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.13.0/kserve.yaml; \
-		echo "⏳ Waiting for KServe controller to be ready..."; \
-		kubectl wait --for=condition=Available deployment/kserve-controller-manager --namespace kserve --timeout=300s; \
-		echo "📚 Installing KServe built-in runtimes..."; \
-		kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.13.0/kserve-cluster-resources.yaml; \
-		echo "✅ KServe installed."; \
-	else \
-		echo "✅ KServe already installed."; \
-	fi
+# KServe installation removed - no longer needed with combined DQN architecture
+# The DQN model is now loaded locally in the adapter for optimal performance
 
 # -----------------------------------------------------------------------------
 # KEDA Installation
@@ -269,38 +208,38 @@ keda-resume: ## Resume KEDA autoscaling
 # -----------------------------------------------------------------------------
 
 load-test-light: docker-build ## Run light load test (quick validation)
-	@echo "🟢 Starting LIGHT load test..."
-	@kubectl apply -f kubernetes-manifests/components/load-generator/job-light.yaml
+	@echo "🟢 Starting LIGHT load test in nimbusguard namespace..."
+	@kubectl apply -f kubernetes-manifests/components/load-generator/job-light.yaml -n nimbusguard
 	@echo "✅ Light load test job applied. Monitor with k9s in nimbusguard namespace."
 
 load-test-medium: docker-build ## Run medium load test (moderate scaling)
-	@echo "🟡 Starting MEDIUM load test..."
-	@kubectl apply -f kubernetes-manifests/components/load-generator/job-medium.yaml
+	@echo "🟡 Starting MEDIUM load test in nimbusguard namespace..."
+	@kubectl apply -f kubernetes-manifests/components/load-generator/job-medium.yaml -n nimbusguard
 	@echo "✅ Medium load test job applied. Monitor with k9s in nimbusguard namespace."
 
 load-test-heavy: docker-build ## Run heavy load test (trigger immediate KEDA scaling)
-	@echo "🔴 Starting HEAVY load test..."
-	@kubectl apply -f kubernetes-manifests/components/load-generator/job-heavy.yaml
+	@echo "🔴 Starting HEAVY load test in nimbusguard namespace..."
+	@kubectl apply -f kubernetes-manifests/components/load-generator/job-heavy.yaml -n nimbusguard
 	@echo "✅ Heavy load test job applied. Monitor with k9s in nimbusguard namespace."
 
 load-test-sustained: docker-build ## Run sustained load test (long-term scaling cycle)
-	@echo "🔵 Starting SUSTAINED load test..."
-	@kubectl apply -f kubernetes-manifests/components/load-generator/job-sustained.yaml
+	@echo "🔵 Starting SUSTAINED load test in nimbusguard namespace..."
+	@kubectl apply -f kubernetes-manifests/components/load-generator/job-sustained.yaml -n nimbusguard
 	@echo "✅ Sustained load test job applied. Monitor with k9s in nimbusguard namespace."
 
 load-test-burst: docker-build ## Run burst load test (sudden spikes)
-	@echo "⚡ Starting BURST load test..."
-	@kubectl apply -f kubernetes-manifests/components/load-generator/job-burst.yaml
+	@echo "⚡ Starting BURST load test in nimbusguard namespace..."
+	@kubectl apply -f kubernetes-manifests/components/load-generator/job-burst.yaml -n nimbusguard
 	@echo "✅ Burst load test job applied. Monitor with k9s in nimbusguard namespace."
 
 load-test-memory: docker-build ## Run memory stress test (test memory-based scaling)
-	@echo "🧠 Starting MEMORY stress test..."
-	@kubectl apply -f kubernetes-manifests/components/load-generator/job-memory-stress.yaml
+	@echo "🧠 Starting MEMORY stress test in nimbusguard namespace..."
+	@kubectl apply -f kubernetes-manifests/components/load-generator/job-memory-stress.yaml -n nimbusguard
 	@echo "✅ Memory stress test job applied. Monitor with k9s in nimbusguard namespace."
 
 load-test-cpu: docker-build ## Run CPU stress test (test CPU-based scaling)
-	@echo "⚙️  Starting CPU stress test..."
-	@kubectl apply -f kubernetes-manifests/components/load-generator/job-cpu-stress.yaml
+	@echo "⚙️  Starting CPU stress test in nimbusguard namespace..."
+	@kubectl apply -f kubernetes-manifests/components/load-generator/job-cpu-stress.yaml -n nimbusguard
 	@echo "✅ CPU stress test job applied. Monitor with k9s in nimbusguard namespace."
 
 load-status: ## Show status of all load test jobs and consumer pods
@@ -342,7 +281,6 @@ docker-build: docker-build-base ## Build all necessary Docker images
 	@echo "🔨 Building application images..."
 	@docker build -t nimbusguard-consumer:latest src/consumer/
 	@docker build -t nimbusguard-generator:latest src/generator/
-	@docker build -t nimbusguard-learner:latest src/learner/
 	@docker build -t nimbusguard-dqn-adapter:latest src/dqn-adapter/
 
 
@@ -352,7 +290,6 @@ docker-build-clean: ## Build images without cache (clean build)
 	@docker build --no-cache -t nimbusguard-base:latest docker/
 	@docker build --no-cache -t nimbusguard-consumer:latest src/consumer/
 	@docker build --no-cache -t nimbusguard-generator:latest src/generator/
-	@docker build --no-cache -t nimbusguard-learner:latest src/learner/
 	@docker build --no-cache -t nimbusguard-dqn-adapter:latest src/dqn-adapter/
 
 # Push Docker images
@@ -360,11 +297,9 @@ docker-push: ## Push all necessary Docker images to a registry
 	$(eval REPO_URL := $(shell echo $(DOCKER_REPO_URL)))
 	docker tag nimbusguard-consumer:latest $(REPO_URL)/nimbusguard-consumer:latest
 	docker tag nimbusguard-dqn-adapter:latest $(REPO_URL)/nimbusguard-dqn-adapter:latest
-	docker tag nimbusguard-learner:latest $(REPO_URL)/nimbusguard-learner:latest
 	docker tag nimbusguard-generator:latest $(REPO_URL)/nimbusguard-generator:latest
 	docker push $(REPO_URL)/nimbusguard-consumer:latest
 	docker push $(REPO_URL)/nimbusguard-dqn-adapter:latest
-	docker push $(REPO_URL)/nimbusguard-learner:latest
 	docker push $(REPO_URL)/nimbusguard-generator:latest
 
 # -----------------------------------------------------------------------------
