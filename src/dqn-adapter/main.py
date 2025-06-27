@@ -105,7 +105,7 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
 TARGET_DEPLOYMENT = os.getenv("TARGET_DEPLOYMENT", "consumer")
 TARGET_NAMESPACE = os.getenv("TARGET_NAMESPACE", "nimbusguard")
 SCALER_PATH = os.getenv("SCALER_PATH", "/app/feature_scaler.gz")
-STABILIZATION_PERIOD_SECONDS = int(os.getenv("STABILIZATION_PERIOD_SECONDS", 20)) # Time to wait after action for system stabilization
+STABILIZATION_PERIOD_SECONDS = int(os.getenv("STABILIZATION_PERIOD_SECONDS", 5)) # Time to wait after action for system stabilization (real-time)
 REWARD_LATENCY_WEIGHT = float(os.getenv("REWARD_LATENCY_WEIGHT", 10.0)) # Higher = more penalty for latency
 REWARD_REPLICA_COST = float(os.getenv("REWARD_REPLICA_COST", 0.1)) # Cost per replica
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
@@ -1585,9 +1585,9 @@ async def cleanup(**kwargs):
             logger.error(f"Error stopping metrics server: {e}")
 
 # --- Timer-based DQN Decision Making ---
-@kopf.timer('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'}, interval=30)
+@kopf.timer('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'}, interval=5)
 async def periodic_dqn_decision(spec, status, meta, **kwargs):
-    """Periodically run DQN scaling decisions for DQN-enabled ScaledObjects (every 60 seconds)"""
+    """Periodically run DQN scaling decisions for DQN-enabled ScaledObjects (every 5 seconds for real-time response)"""
     logger.info(f"🕐 Timer triggered for ScaledObject '{meta['name']}': Running periodic DQN decision")
     
     # Only process our specific DQN ScaledObject
