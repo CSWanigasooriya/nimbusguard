@@ -12,5 +12,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy the rest of the application's code
 COPY . .
 
-# Command to run the application
-CMD ["python", "main.py"]
+# Expose the port the app runs on
+EXPOSE 8002
+
+# Command to run the application using Kopf with liveness probe
+CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8002/healthz", "/app/main.py"]
