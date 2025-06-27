@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY . .
 
 # Expose the port the app runs on
-EXPOSE 8002
+EXPOSE 8080
 
 # Command to run the application using Kopf with liveness probe
-CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8002/healthz", "/app/main.py"]
+CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8001/healthz", "/app/main.py"]

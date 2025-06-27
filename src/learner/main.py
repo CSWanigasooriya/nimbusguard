@@ -652,17 +652,17 @@ async def startup_handler(**kwargs):
 
     logger.info("✅ DQN Learner Operator ready - listening for ScaledObject events!")
 
-@kopf.on.create('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'})
-@kopf.on.update('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'})
-async def on_scaledobject_event(spec, status, meta, **kwargs):
-    """React to ScaledObject events and trigger learning."""
+# --- Timer-based Experience Processing ---
+@kopf.timer('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'}, interval=30)
+async def periodic_experience_processing(spec, status, meta, **kwargs):
+    """Periodically process experiences and trigger learning (every 30 seconds)."""
     global trainer, last_save_time, last_evaluation_step
     
     if not trainer:
-        logger.warning("Trainer not initialized yet, skipping event")
+        logger.warning("Trainer not initialized yet, skipping processing")
         return
     
-    logger.info(f"🎯 ScaledObject event: {meta['name']} - {kwargs.get('reason', 'unknown')}")
+    logger.info(f"🕐 Timer triggered for ScaledObject '{meta['name']}': Processing experiences")
     
     # Check if this is our target ScaledObject
     if meta['name'] != SCALEDOBJECT_NAME:
