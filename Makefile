@@ -320,90 +320,72 @@ deploy: docker-build ## Build images and deploy all components to the cluster
 
 dev: deploy ## Alias for 'deploy' - builds and deploys all components for development
 
-clean: ## Delete all deployed resources from ALL namespaces (AGGRESSIVE cluster-wide termination)
-	@echo "🗑️  AGGRESSIVE CLUSTER-WIDE cleanup: Force deleting all NimbusGuard resources..."
-	@echo "⚠️  WARNING: This will clean up resources across ALL namespaces!"
+clean: ## NUCLEAR cleanup - immediate brutal force deletion of everything
+	@echo "💥 NUCLEAR OPTION: Immediately destroying all NimbusGuard resources..."
+	@echo "⚠️  WARNING: This will BRUTALLY FORCE DELETE everything!"
 	@echo ""
 	
-	# Step 1: List all project-related namespaces
-	@echo "🔍 Discovering project-related namespaces..."
-	@PROJECT_NAMESPACES=$$(kubectl get namespaces -o name | grep -E "(nimbusguard|kubeflow|keda|monitoring)" | cut -d'/' -f2) || true; \
-	if [ -n "$$PROJECT_NAMESPACES" ]; then \
-		echo "📋 Found namespaces: $$PROJECT_NAMESPACES"; \
-	else \
-		echo "📋 No project-related namespaces found, checking nimbusguard specifically..."; \
-		PROJECT_NAMESPACES="nimbusguard"; \
-	fi; \
-	\
-	# Step 2: Clean up KEDA resources across all namespaces first \
-	echo "🔧 Removing KEDA finalizers from ScaledObjects in all namespaces..."; \
-	for ns in $$PROJECT_NAMESPACES; do \
+	# Step 1: Kill all port forwards immediately
+	@echo "🔪 Killing all port forwards..."
+	@pkill -f "kubectl port-forward.*nimbusguard" 2>/dev/null || true
+	@pkill -f "kubectl port-forward.*9090" 2>/dev/null || true
+	@pkill -f "kubectl port-forward.*3000" 2>/dev/null || true
+	
+	# Step 2: Nuclear namespace deletion - no mercy, no waiting
+	@echo "💥 NUCLEAR namespace deletion..."
+	@for ns in nimbusguard kubeflow keda-system monitoring; do \
 		if kubectl get namespace $$ns >/dev/null 2>&1; then \
-			echo "   Cleaning KEDA resources in namespace: $$ns"; \
-			kubectl get scaledobjects -n $$ns -o name 2>/dev/null | xargs -I {} kubectl patch -n $$ns {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
-			kubectl delete hpa -n $$ns --all --force --grace-period=0 2>/dev/null || true; \
+			echo "   💀 Destroying namespace: $$ns"; \
+			kubectl patch namespace $$ns -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
+			kubectl delete namespace $$ns --force --grace-period=0 2>/dev/null & \
 		fi; \
 	done
 	
-	# Step 3: Clean up cluster-wide KEDA installation
-	@echo "🔧 Removing cluster-wide KEDA installations..."
-	@kubectl get crd | grep keda | awk '{print $$1}' | xargs kubectl delete crd 2>/dev/null || true
-	@helm uninstall keda -n keda-system 2>/dev/null || true
-	@helm uninstall keda -n nimbusguard 2>/dev/null || true
-	@kubectl delete namespace keda-system --ignore-not-found=true --timeout=30s 2>/dev/null || true
+	# Step 3: Delete KEDA CRDs immediately (no waiting for namespace cleanup)
+	@echo "💥 Nuclear KEDA destruction..."
+	@kubectl get crd 2>/dev/null | grep keda | awk '{print $$1}' | xargs -r kubectl delete crd --force --grace-period=0 2>/dev/null &
 	
-	# Step 4: Clean up metrics-server if it was installed by this project
-	@echo "🔧 Cleaning up metrics-server..."
-	@kubectl delete deployment metrics-server -n kube-system 2>/dev/null || true
+	# Step 4: Destroy all RBAC resources matching our patterns
+	@echo "💥 Nuclear RBAC destruction..."
+	@kubectl get clusterrole,clusterrolebinding --no-headers 2>/dev/null | grep -E "(nimbusguard|dqn-adapter|mcp-server|alloy|beyla|prometheus|kube-state-metrics)" | awk '{print $$1}' | xargs -r kubectl delete --force --grace-period=0 2>/dev/null &
 	
-	# Step 5: Remove cluster-wide RBAC resources
-	@echo "🔧 Removing cluster-wide RBAC resources..."
-	@kubectl delete clusterrole,clusterrolebinding -l app=nimbusguard 2>/dev/null || true
-	@kubectl delete clusterrole,clusterrolebinding | grep -E "(nimbusguard|dqn-adapter|mcp-server|alloy|beyla|prometheus|kube-state-metrics)" | awk '{print $$1}' | xargs kubectl delete 2>/dev/null || true
+	# Step 5: Kill webhook configurations
+	@echo "💥 Nuclear webhook destruction..."
+	@kubectl delete validatingwebhookconfiguration,mutatingwebhookconfiguration --all --force --grace-period=0 2>/dev/null &
 	
-	# Step 6: Aggressively delete all project namespaces
-	@echo "🔧 Force deleting all project namespaces..."
-	@PROJECT_NAMESPACES=$$(kubectl get namespaces -o name | grep -E "(nimbusguard|kubeflow|monitoring)" | cut -d'/' -f2 || echo "nimbusguard"); \
-	for ns in $$PROJECT_NAMESPACES; do \
-		if kubectl get namespace $$ns >/dev/null 2>&1; then \
-			echo "   Deleting namespace: $$ns"; \
-			kubectl delete namespace $$ns --ignore-not-found=true --timeout=30s 2>/dev/null || true; \
-			\
-			# Check if stuck in Terminating state \
-			if kubectl get namespace $$ns 2>/dev/null | grep -q "Terminating"; then \
-				echo "   ⚠️  Namespace $$ns stuck in Terminating state - applying aggressive removal..."; \
-				kubectl get namespace $$ns -o json | jq '.spec.finalizers = []' | kubectl replace --raw /api/v1/namespaces/$$ns/finalize -f - 2>/dev/null || true; \
-				sleep 2; \
-				kubectl delete namespace $$ns --force --grace-period=0 2>/dev/null || true; \
-			fi; \
+	# Step 6: Clean up project resources from default namespace (but don't delete the namespace)
+	@echo "💥 Cleaning project resources from default namespace..."
+	@kubectl delete pods,services,deployments,configmaps,secrets,jobs,cronjobs -n default -l app=nimbusguard --force --grace-period=0 2>/dev/null || true
+	@kubectl delete pods,services,deployments,configmaps,secrets,jobs,cronjobs -n default -l component=keda-dqn --force --grace-period=0 2>/dev/null || true
+	@kubectl delete scaledobjects,hpa -n default --all --force --grace-period=0 2>/dev/null || true
+	
+	# Step 7: Wait briefly for background deletions then force-finalize stuck namespaces
+	@echo "⏳ Waiting 5 seconds for background deletions..."
+	@sleep 5
+	@for ns in nimbusguard kubeflow keda-system monitoring; do \
+		if kubectl get namespace $$ns 2>/dev/null | grep -q "Terminating"; then \
+			echo "   🔨 Force-finalizing stuck namespace: $$ns"; \
+			kubectl get namespace $$ns -o json | jq '.spec.finalizers = []' | kubectl replace --raw /api/v1/namespaces/$$ns/finalize -f - 2>/dev/null || true; \
 		fi; \
 	done
 	
-	# Step 7: Clean up any remaining stuck resources
-	@echo "🔧 Cleaning up any remaining stuck resources..."
-	@kubectl get pods --all-namespaces --field-selector=status.phase=Failed -o name | xargs kubectl delete 2>/dev/null || true
-	@kubectl get pods --all-namespaces --field-selector=status.phase=Succeeded -o name | xargs kubectl delete 2>/dev/null || true
-	
-	# Step 8: Clean up any remaining KEDA webhooks and operators
-	@echo "🔧 Removing any remaining KEDA webhooks..."
-	@kubectl delete validatingwebhookconfiguration -l app.kubernetes.io/name=keda-admission-webhooks 2>/dev/null || true
-	@kubectl delete mutatingwebhookconfiguration -l app.kubernetes.io/name=keda-admission-webhooks 2>/dev/null || true
-	
-	# Step 9: Final verification
-	@echo "🔍 Final verification..."
-	@REMAINING_NS=$$(kubectl get namespaces -o name | grep -E "(nimbusguard|kubeflow|monitoring)" | cut -d'/' -f2 || true); \
-	if [ -n "$$REMAINING_NS" ]; then \
-		echo "❌ Some namespaces still exist: $$REMAINING_NS"; \
-		echo "   Manual intervention may be required."; \
-		echo "   Try: kubectl get namespace <namespace> -o yaml"; \
-		echo "   Or restart your Kubernetes cluster if this persists."; \
+	# Step 8: Final brute force check
+	@echo "🔍 Final nuclear verification..."
+	@sleep 3
+	@REMAINING=$$(kubectl get namespaces --no-headers 2>/dev/null | grep -E "(nimbusguard|kubeflow|keda-system|monitoring)" | awk '{print $$1}' || true); \
+	if [ -n "$$REMAINING" ]; then \
+		echo "💀 Still found stubborn namespaces: $$REMAINING"; \
+		echo "   Applying final nuclear option..."; \
+		for ns in $$REMAINING; do \
+			kubectl delete namespace $$ns --force --grace-period=0 2>/dev/null || true; \
+		done; \
 	else \
-		echo "✅ All project namespaces successfully deleted!"; \
+		echo "✅ Nuclear cleanup successful - all targets eliminated!"; \
 	fi
 	
 	@echo ""
-	@echo "✅ AGGRESSIVE CLUSTER-WIDE cleanup complete!"
-	@echo "🔄 You may want to run 'make setup' to reinitialize the environment."
+	@echo "💥 NUCLEAR cleanup complete! Everything should be destroyed."
+	@echo "🔄 Ready for fresh deployment with 'make deploy'"
 
 # Port forwards
 ports: ## Port forward all relevant services in the background
