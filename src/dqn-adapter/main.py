@@ -111,6 +111,12 @@ REWARD_REPLICA_COST = float(os.getenv("REWARD_REPLICA_COST", 0.1)) # Cost per re
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 REPLAY_BUFFER_KEY = "replay_buffer"
 
+# AI Explainability Configuration
+AI_MODEL = os.getenv("AI_MODEL", "gpt-3.5-turbo")  # More cost-effective than gpt-4o-mini
+AI_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", 0.1))  # Low temperature for consistent reasoning
+ENABLE_DETAILED_REASONING = os.getenv("ENABLE_DETAILED_REASONING", "true").lower() == "true"
+REASONING_LOG_LEVEL = os.getenv("REASONING_LOG_LEVEL", "INFO")  # INFO, DEBUG for more detail
+
 # MinIO Configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio.nimbusguard.svc:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
@@ -411,17 +417,25 @@ class CombinedDQNTrainer:
     
     async def _save_model(self):
         """Save model to MinIO."""
+        logger.info("🔄 Attempting to save DQN model to MinIO...")
         try:
+            global minio_client, BUCKET_NAME
             if not minio_client:
+                logger.warning("MinIO client not available, skipping model save")
                 return
                 
-            # Create checkpoint
+            # Create comprehensive checkpoint
             checkpoint = {
                 'policy_net_state_dict': self.policy_net.state_dict(),
                 'target_net_state_dict': self.target_net.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
                 'batches_trained': self.batches_trained,
-                'epsilon': current_epsilon
+                'epsilon': current_epsilon,
+                'feature_order': self.feature_order,
+                'model_architecture': 'Enhanced DQN (512-256-128)',
+                'state_dim': len(self.feature_order),
+                'action_dim': 3,
+                'saved_at': time.time()
             }
             
             # Save to buffer
@@ -438,10 +452,10 @@ class CombinedDQNTrainer:
                 content_type='application/octet-stream'
             )
             
-            logger.info(f"📁 Model saved to MinIO (batch {self.batches_trained})")
+            logger.info(f"📁 Model saved to MinIO (batch {self.batches_trained}, size: {buffer.getbuffer().nbytes} bytes)")
             
         except Exception as e:
-            logger.error(f"Failed to save model: {e}")
+            logger.error(f"Failed to save model: {e}", exc_info=True)
     
     async def _load_historical_data(self):
         """Load historical training data to initialize replay buffer."""
@@ -622,11 +636,16 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
         return {"error": "SCALER_NOT_LOADED"}
 
     metrics = state['current_metrics'].copy()
+    current_replicas = state['current_replicas']
     
     # Feature vector using scientifically selected features (no current_replicas included)
     feature_vector = [metrics.get(feat, 0.0) for feat in FEATURE_ORDER]
     scaled_features = scaler.transform([feature_vector])
+    
     logger.info(f"  - Using scientifically selected features ({len(feature_vector)} dimensions)")
+    logger.info(f"  - Current system state: {current_replicas} replicas, "
+               f"latency={metrics.get('avg_response_time', 0):.1f}ms, "
+               f"memory={metrics.get('process_resident_memory_bytes', 0)/(1024*1024):.1f}MB")
     
     try:
         if dqn_model is not None:
@@ -649,15 +668,15 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
                 
                 q_values = dqn_model(input_tensor).cpu().numpy().flatten()
             
-            # Epsilon-greedy exploration
+            # Epsilon-greedy exploration with detailed reasoning
             if random.random() < current_epsilon:
                 action_index = random.randint(0, 2)  # Random action
                 exploration_type = "exploration"
-                logger.info(f"  - Exploration: Random action selected (ε={current_epsilon:.3f})")
+                logger.info(f"  - 🎲 EXPLORATION: Random action selected (ε={current_epsilon:.3f})")
             else:
                 action_index = np.argmax(q_values)  # Greedy action
                 exploration_type = "exploitation"  
-                logger.info(f"  - Exploitation: Best action selected (ε={current_epsilon:.3f})")
+                logger.info(f"  - 🎯 EXPLOITATION: Best action selected (ε={current_epsilon:.3f})")
             
             # Decay epsilon
             current_epsilon = max(EPSILON_END, current_epsilon * EPSILON_DECAY)
@@ -666,27 +685,111 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
             action_map = {0: "Scale Down", 1: "Keep Same", 2: "Scale Up"}
             action_name = action_map.get(action_index, "Unknown")
             
-            logger.info(f"  - DQN recommends: '{action_name}' ({exploration_type}, Q-values: {[f'{q:.3f}' for q in q_values]})")
+            # Generate comprehensive explanation using explainable AI system
+            explanation = decision_reasoning.explain_dqn_decision(
+                metrics=metrics,
+                q_values=q_values.tolist(),
+                action_name=action_name,
+                exploration_type=exploration_type,
+                epsilon=current_epsilon,
+                current_replicas=current_replicas
+            )
+            
+            # Log detailed reasoning
+            decision_reasoning.log_decision_reasoning(explanation, metrics)
+            
+            # Enhanced logging with confidence and reasoning
+            confidence = explanation['confidence_metrics']['decision_confidence']
+            risk_level = explanation['risk_assessment']
+            
+            logger.info(f"  - 🤖 DQN DECISION: '{action_name}' "
+                       f"(confidence: {confidence}, risk: {risk_level})")
+            logger.info(f"  - 📊 Q-values: {[f'{q:.3f}' for q in q_values]} "
+                       f"(gap: {explanation['confidence_metrics']['confidence_gap']:.3f})")
+            logger.info(f"  - 🧠 Key factors: {len(explanation['reasoning_factors'])} reasoning points identified")
+            
+            # Log specific reasoning for this decision
+            if ENABLE_DETAILED_REASONING:
+                logger.info("  - 💭 Decision reasoning summary:")
+                for factor in explanation['reasoning_factors'][:3]:  # Top 3 factors
+                    logger.info(f"    • {factor}")
+            
             experience_update = {"state": metrics, "action": action_name}
-            return {"dqn_prediction": {"action_name": action_name, "q_values": q_values.tolist(), "epsilon": current_epsilon, "exploration_type": exploration_type}, "experience": experience_update}
+            return {
+                "dqn_prediction": {
+                    "action_name": action_name, 
+                    "q_values": q_values.tolist(), 
+                    "epsilon": current_epsilon, 
+                    "exploration_type": exploration_type,
+                    "explanation": explanation,
+                    "confidence": confidence,
+                    "risk_assessment": risk_level
+                }, 
+                "experience": experience_update
+            }
         else:
-            # Fallback: Simple rule-based logic using selected features
-            logger.info("  - Using fallback rule-based logic (DQN model not available)")
+            # Enhanced fallback: Rule-based logic with detailed reasoning
+            logger.info("  - 🔄 Using enhanced fallback rule-based logic (DQN model not available)")
             avg_response_time = metrics.get('avg_response_time', 100)  # ms
             memory_usage = metrics.get('process_resident_memory_bytes', 0) / (1024 * 1024 * 1024)  # GB
-            current_replicas = state['current_replicas']
             
-            # Simple rules based on the most important features
+            # Generate analysis for fallback decision
+            analysis = decision_reasoning.analyze_metrics(metrics, current_replicas)
+            
+            # Enhanced rule-based decision with reasoning
+            reasoning_factors = []
+            
             if avg_response_time > 500 or memory_usage > 2.0:  # High latency or memory pressure
                 action_name = "Scale Up"
+                reasoning_factors.append(f"High latency ({avg_response_time:.1f}ms) or memory pressure ({memory_usage:.2f}GB)")
+                reasoning_factors.append("System showing signs of stress - scaling up to improve performance")
+                risk_level = "high"
             elif avg_response_time < 100 and memory_usage < 0.5 and current_replicas > 1:  # Low load
                 action_name = "Scale Down"
+                reasoning_factors.append(f"Low latency ({avg_response_time:.1f}ms) and memory usage ({memory_usage:.2f}GB)")
+                reasoning_factors.append(f"System has excess capacity with {current_replicas} replicas - can optimize costs")
+                risk_level = "low"
             else:
                 action_name = "Keep Same"
-                
-            logger.info(f"  - Fallback recommends: '{action_name}' (latency={avg_response_time:.1f}ms, memory={memory_usage:.2f}GB)")
+                reasoning_factors.append(f"Moderate latency ({avg_response_time:.1f}ms) and memory usage ({memory_usage:.2f}GB)")
+                reasoning_factors.append("System operating within acceptable parameters")
+                risk_level = "low"
+            
+            # Create fallback explanation
+            fallback_explanation = {
+                'timestamp': datetime.now().isoformat(),
+                'decision_type': 'FALLBACK_RULE_BASED',
+                'recommended_action': action_name,
+                'exploration_strategy': 'rule_based',
+                'confidence_metrics': {
+                    'decision_confidence': 'medium',
+                    'rule_based': True
+                },
+                'reasoning_factors': reasoning_factors,
+                'risk_assessment': risk_level,
+                'system_analysis': analysis
+            }
+            
+            logger.info(f"  - 📋 FALLBACK DECISION: '{action_name}' (risk: {risk_level})")
+            logger.info(f"  - 💭 Reasoning: {reasoning_factors[0]}")
+            
+            if ENABLE_DETAILED_REASONING:
+                logger.info("  - 📊 Fallback analysis:")
+                for factor in reasoning_factors:
+                    logger.info(f"    • {factor}")
+            
             experience_update = {"state": metrics, "action": action_name}
-            return {"dqn_prediction": {"action_name": action_name, "q_values": [0.0, 1.0, 0.0]}, "experience": experience_update}
+            return {
+                "dqn_prediction": {
+                    "action_name": action_name, 
+                    "q_values": [0.0, 1.0, 0.0],
+                    "explanation": fallback_explanation,
+                    "confidence": "medium",
+                    "risk_assessment": risk_level,
+                    "fallback_mode": True
+                }, 
+                "experience": experience_update
+            }
             
     except Exception as e:
         logger.error(f"DQN inference failed: {e}", exc_info=True)
@@ -696,44 +799,326 @@ async def validate_with_llm(state: ScalingState) -> Dict[str, Any]:
     logger.info("==> Node: validate_with_llm")
     if not validator_agent:
         logger.warning("  - Validator agent not initialized, skipping.")
-        return {"llm_validation_response": {"approved": True, "reason": "Agent not available."}}
+        return {"llm_validation_response": {"approved": True, "reason": "Agent not available.", "confidence": "low"}}
 
     # Handle missing dqn_prediction gracefully
     dqn_prediction = state.get('dqn_prediction', {'action_name': 'Keep Same'})
     action_name = dqn_prediction.get('action_name', 'Keep Same')
+    dqn_confidence = dqn_prediction.get('confidence', 'unknown')
+    dqn_risk = dqn_prediction.get('risk_assessment', 'unknown')
+    dqn_explanation = dqn_prediction.get('explanation', {})
 
-    prompt = f"""An automated DQN model suggests the scaling action: '{action_name}'.
-    The current state of the deployment '{TARGET_DEPLOYMENT}' is:
-    - Current Replicas: {state['current_replicas']}
-    - Current Metrics: {state['current_metrics']}
+    # Create comprehensive validation prompt with structured reasoning requirements
+    prompt = f"""You are an expert Kubernetes autoscaling validator. Analyze the following DQN scaling recommendation and provide structured validation.
 
-    Validate if this is a safe action. Use your tools to check the live cluster state if necessary.
-    Respond with a JSON object: {{"approved": boolean, "reason": "your reasoning"}}.
-    """
+DQN RECOMMENDATION ANALYSIS:
+- Recommended Action: {action_name}
+- DQN Confidence: {dqn_confidence}
+- Risk Assessment: {dqn_risk}
+- Current Deployment: {TARGET_DEPLOYMENT} in namespace {TARGET_NAMESPACE}
+- Current Replicas: {state['current_replicas']}
+
+CURRENT SYSTEM METRICS:
+- Response Time: {state['current_metrics'].get('avg_response_time', 0):.1f}ms
+- Memory Usage: {state['current_metrics'].get('process_resident_memory_bytes', 0)/(1024*1024):.1f}MB
+- Network Queue: {state['current_metrics'].get('node_network_transmit_queue_length', 0)}
+
+DQN REASONING FACTORS:
+{chr(10).join(f"- {factor}" for factor in dqn_explanation.get('reasoning_factors', ['No reasoning available']))}
+
+VALIDATION REQUIREMENTS:
+1. Assess if the scaling action is safe and appropriate
+2. Consider potential risks and benefits
+3. Evaluate if the action aligns with best practices
+4. Check for any red flags or concerns
+5. Provide confidence level in your validation
+
+You may use your Kubernetes tools to check cluster state if needed.
+
+Respond ONLY with a valid JSON object in this exact format:
+{{
+    "approved": boolean,
+    "confidence": "high|medium|low",
+    "reasoning": "detailed explanation of your validation decision",
+    "risk_factors": ["list", "of", "identified", "risks"],
+    "benefits": ["list", "of", "expected", "benefits"],
+    "alternative_actions": ["list", "of", "alternative", "suggestions", "if", "any"],
+    "cluster_check_performed": boolean,
+    "validation_score": 0.0-1.0
+}}"""
+
     try:
+        logger.info(f"  - 🤖 Validating DQN recommendation: '{action_name}' (DQN confidence: {dqn_confidence})")
+        
+        # Invoke the validator agent
         response = await validator_agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
         last_message = response['messages'][-1].content
-        # TODO: Robust JSON parsing from last_message
-        return {"llm_validation_response": {"approved": True, "reason": last_message}}
+        
+        logger.info(f"  - 📝 LLM validation response received ({len(last_message)} chars)")
+        
+        # Enhanced JSON parsing with fallback
+        validation_result = parse_llm_json_response(last_message, action_name)
+        
+        # Enhanced logging with validation outcome - single comprehensive log
+        approval_status = "✅ APPROVED" if validation_result['approved'] else "❌ REJECTED"
+        logger.info(f"  - {approval_status} by LLM validator (confidence: {validation_result['confidence']})")
+        
+        # Log validation reasoning only if detailed reasoning is enabled
+        if ENABLE_DETAILED_REASONING:
+            logger.info("  - 🧠 LLM VALIDATION REASONING:")
+            logger.info(f"    • Approved: {validation_result['approved']}")
+            logger.info(f"    • Confidence: {validation_result['confidence']}")
+            logger.info(f"    • Validation Score: {validation_result.get('validation_score', 'N/A')}")
+            logger.info(f"    • Reasoning: {validation_result['reasoning'][:200]}...")
+            
+            if validation_result.get('risk_factors'):
+                logger.info(f"    • Risk Factors: {len(validation_result['risk_factors'])} identified")
+                for risk in validation_result['risk_factors'][:3]:  # Top 3 risks
+                    logger.info(f"      - {risk}")
+            
+            if validation_result.get('benefits'):
+                logger.info(f"    • Benefits: {len(validation_result['benefits'])} identified")
+                for benefit in validation_result['benefits'][:2]:  # Top 2 benefits
+                    logger.info(f"      - {benefit}")
+        
+        if not validation_result['approved']:
+            logger.warning(f"  - ⚠️ REJECTION REASON: {validation_result['reasoning'][:100]}...")
+            if validation_result.get('alternative_actions'):
+                logger.info(f"  - 💡 Suggested alternatives: {', '.join(validation_result['alternative_actions'])}")
+        
+        return {"llm_validation_response": validation_result}
+        
     except Exception as e:
         logger.error(f"LLM validation failed: {e}")
-        return {"llm_validation_response": {"approved": True, "reason": f"Validation failed: {e}"}}
+        
+        # Enhanced fallback validation
+        fallback_result = {
+            "approved": True,  # Default to approval when validation fails
+            "confidence": "low",
+            "reasoning": f"Validation system error: {str(e)}. Defaulting to approval with caution.",
+            "risk_factors": ["Validation system unavailable", "Decision made without LLM oversight"],
+            "benefits": ["DQN recommendation preserved"],
+            "alternative_actions": ["Monitor system closely", "Consider manual review"],
+            "cluster_check_performed": False,
+            "validation_score": 0.3,
+            "fallback_mode": True
+        }
+        
+        logger.warning(f"  - 🔄 FALLBACK VALIDATION: Approved with caution due to validation error")
+        return {"llm_validation_response": fallback_result}
+
+def parse_llm_json_response(response_text: str, action_name: str) -> Dict[str, Any]:
+    """Parse LLM JSON response with robust error handling and fallbacks."""
+    try:
+        # Try to extract JSON from the response
+        import re
+        
+        # Look for JSON object in the response
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group()
+            parsed = json.loads(json_str)
+            
+            # Validate required fields
+            required_fields = ['approved', 'confidence', 'reasoning']
+            if all(field in parsed for field in required_fields):
+                
+                # Ensure all expected fields exist with defaults
+                defaults = {
+                    'risk_factors': [],
+                    'benefits': [],
+                    'alternative_actions': [],
+                    'cluster_check_performed': False,
+                    'validation_score': 0.5
+                }
+                
+                for key, default_value in defaults.items():
+                    if key not in parsed:
+                        parsed[key] = default_value
+                
+                return parsed
+        
+        # If JSON parsing fails, try to extract key information
+        logger.warning("  - ⚠️ Could not parse JSON, attempting text analysis...")
+        
+        # Simple text analysis fallback
+        text_lower = response_text.lower()
+        
+        # Determine approval
+        if 'approve' in text_lower or 'safe' in text_lower or 'good' in text_lower:
+            approved = True
+        elif 'reject' in text_lower or 'deny' in text_lower or 'dangerous' in text_lower:
+            approved = False
+        else:
+            approved = True  # Default to approval
+        
+        # Determine confidence
+        if 'high confidence' in text_lower or 'very confident' in text_lower:
+            confidence = 'high'
+        elif 'low confidence' in text_lower or 'uncertain' in text_lower:
+            confidence = 'low'
+        else:
+            confidence = 'medium'
+        
+        return {
+            'approved': approved,
+            'confidence': confidence,
+            'reasoning': response_text[:500],  # First 500 chars
+            'risk_factors': ['JSON parsing failed - text analysis used'],
+            'benefits': [f'Action {action_name} analyzed via text parsing'],
+            'alternative_actions': [],
+            'cluster_check_performed': False,
+            'validation_score': 0.4,
+            'parsing_fallback': True
+        }
+        
+    except Exception as e:
+        logger.error(f"  - ❌ JSON parsing completely failed: {e}")
+        
+        # Ultimate fallback
+        return {
+            'approved': True,
+            'confidence': 'low',
+            'reasoning': f'Complete parsing failure. Original response: {response_text[:200]}...',
+            'risk_factors': ['Complete validation parsing failure'],
+            'benefits': ['Preserving DQN recommendation'],
+            'alternative_actions': ['Manual review recommended'],
+            'cluster_check_performed': False,
+            'validation_score': 0.2,
+            'complete_fallback': True
+        }
 
 def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     logger.info("==> Node: plan_final_action")
     current_replicas = state['current_replicas']
+    
     # Handle missing dqn_prediction gracefully
     dqn_prediction = state.get('dqn_prediction', {'action_name': 'Keep Same'})
     action_name = dqn_prediction.get('action_name', 'Keep Same')
+    dqn_confidence = dqn_prediction.get('confidence', 'unknown')
+    dqn_risk = dqn_prediction.get('risk_assessment', 'unknown')
     
+    # Get LLM validation results
+    llm_validation = state.get('llm_validation_response', {})
+    llm_approved = llm_validation.get('approved', True)
+    llm_confidence = llm_validation.get('confidence', 'unknown')
+    llm_reasoning = llm_validation.get('reasoning', 'No validation reasoning available')
+    
+    # Calculate new replica count
     new_replicas = current_replicas
-    if action_name == 'Scale Up': new_replicas += 1
-    elif action_name == 'Scale Down': new_replicas -= 1
+    if action_name == 'Scale Up': 
+        new_replicas += 1
+    elif action_name == 'Scale Down': 
+        new_replicas -= 1
     
-    final_decision = max(1, new_replicas)
+    final_decision = max(1, new_replicas)  # Never go below 1 replica
+    
+    # Create comprehensive decision explanation
+    decision_explanation = {
+        'timestamp': datetime.now().isoformat(),
+        'decision_pipeline': {
+            'dqn_recommendation': {
+                'action': action_name,
+                'confidence': dqn_confidence,
+                'risk_assessment': dqn_risk
+            },
+            'llm_validation': {
+                'approved': llm_approved,
+                'confidence': llm_confidence,
+                'reasoning_summary': llm_reasoning[:100] + '...' if len(llm_reasoning) > 100 else llm_reasoning
+            },
+            'final_decision': {
+                'from_replicas': current_replicas,
+                'to_replicas': final_decision,
+                'action_executed': 'Scale Up' if final_decision > current_replicas else 'Scale Down' if final_decision < current_replicas else 'Keep Same'
+            }
+        },
+        'decision_factors': [],
+        'risk_mitigation': [],
+        'expected_outcomes': []
+    }
+    
+    # Add decision factors
+    if llm_approved:
+        decision_explanation['decision_factors'].append("LLM validator approved the DQN recommendation")
+    else:
+        decision_explanation['decision_factors'].append("LLM validator rejected DQN recommendation - proceeding with caution")
+        decision_explanation['risk_mitigation'].append("Enhanced monitoring recommended due to LLM concerns")
+    
+    # Add confidence assessment
+    overall_confidence = 'high'
+    if dqn_confidence == 'low' or llm_confidence == 'low':
+        overall_confidence = 'low'
+    elif dqn_confidence == 'medium' or llm_confidence == 'medium':
+        overall_confidence = 'medium'
+    
+    decision_explanation['overall_confidence'] = overall_confidence
+    
+    # Add expected outcomes based on action
+    if final_decision > current_replicas:
+        decision_explanation['expected_outcomes'].extend([
+            "Improved response times and reduced latency",
+            "Better handling of increased load",
+            "Higher resource costs"
+        ])
+        decision_explanation['risk_mitigation'].append("Monitor for over-provisioning")
+    elif final_decision < current_replicas:
+        decision_explanation['expected_outcomes'].extend([
+            "Reduced resource costs",
+            "Optimized resource utilization",
+            "Potential slight increase in response times"
+        ])
+        decision_explanation['risk_mitigation'].append("Monitor for performance degradation")
+    else:
+        decision_explanation['expected_outcomes'].append("Maintained current performance and cost balance")
+    
+    # Update the Prometheus gauge
     DESIRED_REPLICAS_GAUGE.set(final_decision)
-    logger.info(f"  - Final Decision: Scale from {current_replicas} to {final_decision}. Gauge updated.")
-    return {"final_decision": final_decision}
+    
+    # Create comprehensive audit trail
+    if 'dqn_prediction' in state and 'explanation' in dqn_prediction:
+        audit_trail = decision_reasoning.create_audit_trail(
+            explanation=dqn_prediction['explanation'],
+            final_decision=final_decision,
+            llm_validation=llm_validation
+        )
+        decision_explanation['audit_trail_id'] = audit_trail['decision_id']
+    
+    # Enhanced logging with complete decision reasoning
+    logger.info(f"  - 🎯 FINAL DECISION: Scale from {current_replicas} to {final_decision} replicas")
+    logger.info(f"  - 📊 Decision confidence: {overall_confidence} (DQN: {dqn_confidence}, LLM: {llm_confidence})")
+    logger.info(f"  - ✅ LLM approval: {'Yes' if llm_approved else 'No'}")
+    logger.info(f"  - 📈 Prometheus gauge updated to {final_decision}")
+    
+    if ENABLE_DETAILED_REASONING:
+        logger.info("  - 🔍 FINAL DECISION ANALYSIS:")
+        logger.info(f"    • Action Path: {action_name} → {decision_explanation['decision_pipeline']['final_decision']['action_executed']}")
+        logger.info(f"    • Risk Level: {dqn_risk}")
+        logger.info(f"    • Expected Outcomes: {len(decision_explanation['expected_outcomes'])} identified")
+        for outcome in decision_explanation['expected_outcomes']:
+            logger.info(f"      - {outcome}")
+        
+        if decision_explanation['risk_mitigation']:
+            logger.info(f"    • Risk Mitigation: {len(decision_explanation['risk_mitigation'])} measures")
+            for mitigation in decision_explanation['risk_mitigation']:
+                logger.info(f"      - {mitigation}")
+    
+    # Warning for low confidence decisions
+    if overall_confidence == 'low':
+        logger.warning(f"  - ⚠️ LOW CONFIDENCE DECISION: Enhanced monitoring recommended")
+        logger.warning(f"  - 🔍 Consider manual review if issues arise")
+    
+    # Warning for LLM rejection but proceeding anyway
+    if not llm_approved:
+        logger.warning(f"  - ⚠️ PROCEEDING DESPITE LLM CONCERNS")
+        logger.warning(f"  - 💭 LLM reasoning: {llm_reasoning[:150]}...")
+    
+    return {
+        "final_decision": final_decision,
+        "decision_explanation": decision_explanation,
+        "overall_confidence": overall_confidence,
+        "llm_approved": llm_approved
+    }
 
 async def wait_for_system_to_stabilize(state: ScalingState) -> None:
     logger.info(f"==> Node: wait_for_system_to_stabilize (waiting {STABILIZATION_PERIOD_SECONDS}s)")
@@ -869,7 +1254,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     global prometheus_client, llm, scaler, dqn_model, validator_agent, redis_client, minio_client, metrics_server, dqn_trainer, evaluator
     
     prometheus_client = PrometheusClient() # Use our custom PrometheusClient
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = ChatOpenAI(model=AI_MODEL, temperature=AI_TEMPERATURE)
 
     # Initialize MinIO client
     try:
@@ -978,6 +1363,13 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         # Initialize combined trainer for real-time learning
         dqn_trainer = CombinedDQNTrainer(dqn_model, device, FEATURE_ORDER)
         
+        # Ensure model is saved to MinIO (in case it was loaded but trainer is new)
+        try:
+            await dqn_trainer._save_model()
+            logger.info("💾 DQN model state saved to MinIO")
+        except Exception as save_error:
+            logger.error(f"Failed to save loaded model to MinIO: {save_error}")
+        
         # Start background training loop
         asyncio.create_task(dqn_trainer.continuous_training_loop())
         logger.info("🚀 Combined DQN training loop started")
@@ -994,7 +1386,19 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
             logger.info("🎯 Starting with fresh DQN model")
             
             # Initialize trainer with fresh model
+            logger.info("🔧 About to initialize CombinedDQNTrainer...")
             dqn_trainer = CombinedDQNTrainer(dqn_model, device, FEATURE_ORDER)
+            logger.info("🔧 CombinedDQNTrainer initialized successfully")
+            
+            # Save fresh model to MinIO immediately (synchronous to catch errors)
+            logger.info("🔧 About to save fresh model to MinIO...")
+            try:
+                await dqn_trainer._save_model()
+                logger.info("💾 Fresh DQN model saved to MinIO")
+            except Exception as save_error:
+                logger.error(f"Failed to save fresh model to MinIO: {save_error}")
+                # Continue anyway - the system can still function without saving
+            
             asyncio.create_task(dqn_trainer.continuous_training_loop())
             logger.info("🚀 Combined DQN training loop started with fresh model")
             
@@ -1165,3 +1569,180 @@ class PrometheusClient:
         except Exception as e:
             logger.error(f"Prometheus query failed for '{promql}': {e}")
             return 0.0
+
+# --- Explainable AI Helper Functions ---
+class DecisionReasoning:
+    """Comprehensive decision reasoning and explanation system."""
+    
+    def __init__(self):
+        self.decision_history = []
+        self.reasoning_logger = logging.getLogger("AI_Reasoning")
+        
+        # Set reasoning log level
+        if REASONING_LOG_LEVEL == "DEBUG":
+            self.reasoning_logger.setLevel(logging.DEBUG)
+        else:
+            self.reasoning_logger.setLevel(logging.INFO)
+    
+    def analyze_metrics(self, metrics: Dict[str, float], current_replicas: int) -> Dict[str, Any]:
+        """Analyze current metrics and provide detailed insights."""
+        analysis = {
+            'timestamp': datetime.now().isoformat(),
+            'current_replicas': current_replicas,
+            'raw_metrics': metrics.copy(),
+            'insights': {},
+            'risk_factors': [],
+            'performance_indicators': {}
+        }
+        
+        # Analyze key performance indicators
+        avg_response_time = metrics.get('avg_response_time', 0)
+        memory_usage = metrics.get('process_resident_memory_bytes', 0) / (1024 * 1024)  # MB
+        
+        # Response time analysis
+        if avg_response_time > 500:
+            analysis['insights']['latency'] = "HIGH LATENCY DETECTED"
+            analysis['risk_factors'].append(f"Response time {avg_response_time:.1f}ms exceeds 500ms threshold")
+            analysis['performance_indicators']['latency_severity'] = 'critical'
+        elif avg_response_time > 200:
+            analysis['insights']['latency'] = "ELEVATED LATENCY"
+            analysis['risk_factors'].append(f"Response time {avg_response_time:.1f}ms approaching 500ms threshold")
+            analysis['performance_indicators']['latency_severity'] = 'warning'
+        else:
+            analysis['insights']['latency'] = "LATENCY NORMAL"
+            analysis['performance_indicators']['latency_severity'] = 'normal'
+        
+        # Memory analysis
+        if memory_usage > 2000:  # 2GB
+            analysis['insights']['memory'] = "HIGH MEMORY USAGE"
+            analysis['risk_factors'].append(f"Memory usage {memory_usage:.1f}MB exceeds 2GB threshold")
+            analysis['performance_indicators']['memory_severity'] = 'critical'
+        elif memory_usage > 1000:  # 1GB
+            analysis['insights']['memory'] = "ELEVATED MEMORY USAGE"
+            analysis['risk_factors'].append(f"Memory usage {memory_usage:.1f}MB approaching 2GB threshold")
+            analysis['performance_indicators']['memory_severity'] = 'warning'
+        else:
+            analysis['insights']['memory'] = "MEMORY USAGE NORMAL"
+            analysis['performance_indicators']['memory_severity'] = 'normal'
+        
+        return analysis
+    
+    def explain_dqn_decision(self, metrics: Dict[str, float], q_values: List[float], 
+                           action_name: str, exploration_type: str, epsilon: float,
+                           current_replicas: int) -> Dict[str, Any]:
+        """Provide detailed explanation of DQN decision."""
+        explanation = {
+            'timestamp': datetime.now().isoformat(),
+            'decision_type': 'DQN_RECOMMENDATION',
+            'recommended_action': action_name,
+            'exploration_strategy': exploration_type,
+            'confidence_metrics': {},
+            'reasoning_factors': [],
+            'model_analysis': {},
+            'risk_assessment': 'low'
+        }
+        
+        # Q-value analysis
+        action_map = {0: "Scale Down", 1: "Keep Same", 2: "Scale Up"}
+        q_value_analysis = {}
+        for i, (action, q_val) in enumerate(zip(action_map.values(), q_values)):
+            q_value_analysis[action] = {
+                'q_value': q_val,
+                'confidence': 'high' if q_val > 0.7 else 'medium' if q_val > 0.3 else 'low'
+            }
+        
+        explanation['model_analysis']['q_values'] = q_value_analysis
+        
+        # Confidence calculation
+        max_q = max(q_values)
+        second_max_q = sorted(q_values, reverse=True)[1] if len(q_values) > 1 else 0
+        confidence_gap = max_q - second_max_q
+        
+        explanation['confidence_metrics'] = {
+            'max_q_value': max_q,
+            'confidence_gap': confidence_gap,
+            'decision_confidence': 'high' if confidence_gap > 0.3 else 'medium' if confidence_gap > 0.1 else 'low',
+            'epsilon': epsilon,
+            'exploration_probability': epsilon
+        }
+        
+        # Reasoning factors based on metrics
+        analysis = self.analyze_metrics(metrics, current_replicas)
+        explanation['reasoning_factors'] = [
+            f"Current system state: {len(analysis['risk_factors'])} risk factors detected",
+            f"Latency status: {analysis['insights'].get('latency', 'unknown')}",
+            f"Memory status: {analysis['insights'].get('memory', 'unknown')}",
+            f"Decision confidence: {explanation['confidence_metrics']['decision_confidence']}",
+            f"Exploration strategy: {exploration_type} (ε={epsilon:.3f})"
+        ]
+        
+        # Risk assessment
+        critical_risks = len([r for r in analysis['risk_factors'] if 'critical' in r.lower() or 'exceeds' in r.lower()])
+        if critical_risks > 0:
+            explanation['risk_assessment'] = 'high'
+        elif len(analysis['risk_factors']) > 0:
+            explanation['risk_assessment'] = 'medium'
+        
+        # Add specific action reasoning
+        if action_name == "Scale Up":
+            explanation['reasoning_factors'].append("🔺 SCALE UP reasoning: System showing signs of stress or approaching capacity limits")
+        elif action_name == "Scale Down":
+            explanation['reasoning_factors'].append("🔻 SCALE DOWN reasoning: System has excess capacity and can operate efficiently with fewer resources")
+        else:
+            explanation['reasoning_factors'].append("⚖️ KEEP SAME reasoning: System is operating within acceptable parameters")
+        
+        return explanation
+    
+    def log_decision_reasoning(self, explanation: Dict[str, Any], metrics: Dict[str, float]) -> None:
+        """Log comprehensive decision reasoning."""
+        if not ENABLE_DETAILED_REASONING:
+            return
+            
+        self.reasoning_logger.info("🧠 AI DECISION REASONING ANALYSIS")
+        self.reasoning_logger.info("=" * 80)
+        self.reasoning_logger.info(f"⏰ Timestamp: {explanation['timestamp']}")
+        self.reasoning_logger.info(f"🎯 Recommended Action: {explanation['recommended_action']}")
+        self.reasoning_logger.info(f"🔍 Exploration Strategy: {explanation['exploration_strategy']}")
+        self.reasoning_logger.info(f"⚠️ Risk Assessment: {explanation['risk_assessment'].upper()}")
+        self.reasoning_logger.info(f"📊 Decision Confidence: {explanation['confidence_metrics']['decision_confidence'].upper()} (gap: {explanation['confidence_metrics']['confidence_gap']:.3f})")
+        self.reasoning_logger.info(f"🎲 Exploration Rate: {explanation['confidence_metrics']['epsilon']:.3f}")
+        
+        if 'q_values' in explanation['model_analysis']:
+            self.reasoning_logger.info("🧮 Q-Value Analysis:")
+            for action, data in explanation['model_analysis']['q_values'].items():
+                self.reasoning_logger.info(f"   {action}: {data['q_value']:.3f} (confidence: {data['confidence']})")
+        
+        self.reasoning_logger.info("💭 Key Reasoning Factors:")
+        for factor in explanation['reasoning_factors']:
+            self.reasoning_logger.info(f"   • {factor}")
+        
+        self.reasoning_logger.info("📈 Key Metrics:")
+        self.reasoning_logger.info(f"   • Response Time: {metrics.get('avg_response_time', 0):.1f}ms")
+        self.reasoning_logger.info(f"   • Memory Usage: {metrics.get('process_resident_memory_bytes', 0)/(1024*1024):.1f}MB")
+        self.reasoning_logger.info(f"   • Network Queue: {metrics.get('node_network_transmit_queue_length', 0)}")
+        self.reasoning_logger.info("=" * 80)
+    
+    def create_audit_trail(self, explanation: Dict[str, Any], final_decision: int, llm_validation: Dict[str, Any]) -> Dict[str, Any]:
+        """Create comprehensive audit trail for compliance."""
+        import uuid
+        
+        audit_trail = {
+            'decision_id': str(uuid.uuid4()),
+            'timestamp': datetime.now().isoformat(),
+            'dqn_explanation': explanation,
+            'llm_validation': llm_validation,
+            'final_decision': final_decision,
+            'explainable': True,
+            'auditable': True,
+            'reversible': True
+        }
+        
+        # Store in decision history (keep last 100)
+        self.decision_history.append(audit_trail)
+        if len(self.decision_history) > 100:
+            self.decision_history.pop(0)
+        
+        return audit_trail
+
+# Initialize decision reasoning system
+decision_reasoning = DecisionReasoning()
