@@ -639,7 +639,7 @@ async def get_live_metrics(state: ScalingState, is_next_state: bool = False) -> 
         "kube_deployment_spec_replicas_ma_10": f'avg_over_time(kube_deployment_spec_replicas{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}}[10m]) or kube_deployment_spec_replicas{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}}',
         
         # 4. Current scaling state (Score: 105.90)
-        "kube_deployment_status_replicas_unavailable": f'kube_deployment_status_replicas_unavailable{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}} or 0',
+        "kube_deployment_status_replicas_unavailable": f'kube_deployment_status_replicas_unavailable{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}} or vector(0)',
         
         # 5. 10-minute memory trend (Score: 90.25) - computed from memory growth rate
         "process_resident_memory_bytes": 'process_resident_memory_bytes{job="prometheus.scrape.nimbusguard_consumer"} or process_resident_memory_bytes{instance="consumer:8000"} or process_resident_memory_bytes{instance=~".*:8000"}',

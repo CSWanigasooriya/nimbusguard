@@ -320,10 +320,51 @@ deploy: docker-build ## Build images and deploy all components to the cluster
 
 dev: deploy ## Alias for 'deploy' - builds and deploys all components for development
 
-clean: ## Delete all deployed resources from the cluster
-	@echo "🗑️  Deleting all resources in the nimbusguard namespace..."
-	@kubectl delete namespace nimbusguard --ignore-not-found=true
-	@echo "✅ Cleanup complete."
+clean: ## Delete all deployed resources from the cluster (AGGRESSIVE termination)
+	@echo "🗑️  AGGRESSIVE cleanup: Force deleting all resources in the nimbusguard namespace..."
+	@echo ""
+	
+	# Step 1: Try to remove KEDA finalizers first (most common cause of stuck termination)
+	@echo "🔧 Removing KEDA finalizers from ScaledObjects..."
+	@kubectl get scaledobjects -n nimbusguard -o name 2>/dev/null | xargs -I {} kubectl patch -n nimbusguard {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+	
+	# Step 2: Remove KEDA HPA resources that might be stuck
+	@echo "🔧 Cleaning up KEDA HPA resources..."
+	@kubectl delete hpa -n nimbusguard --all --force --grace-period=0 2>/dev/null || true
+	
+	# Step 3: Uninstall KEDA helm release
+	@echo "🔧 Uninstalling KEDA Helm release..."
+	@helm uninstall keda -n nimbusguard 2>/dev/null || true
+	
+	# Step 4: Try graceful namespace deletion first
+	@echo "🔧 Attempting graceful namespace deletion..."
+	@kubectl delete namespace nimbusguard --ignore-not-found=true --timeout=30s 2>/dev/null || true
+	
+	# Step 5: Check if namespace is stuck in Terminating state
+	@echo "🔍 Checking namespace status..."
+	@if kubectl get namespace nimbusguard 2>/dev/null | grep -q "Terminating"; then \
+		echo "⚠️  Namespace stuck in Terminating state - applying aggressive removal..."; \
+		echo "🔨 Force removing namespace finalizers..."; \
+		kubectl get namespace nimbusguard -o json | jq '.spec.finalizers = []' | kubectl replace --raw /api/v1/namespaces/nimbusguard/finalize -f - 2>/dev/null || true; \
+		sleep 3; \
+		if kubectl get namespace nimbusguard 2>/dev/null; then \
+			echo "⚠️  Namespace still exists - attempting direct API deletion..."; \
+			kubectl delete namespace nimbusguard --force --grace-period=0 2>/dev/null || true; \
+		fi; \
+	fi
+	
+	# Step 6: Final verification
+	@echo "🔍 Final verification..."
+	@if kubectl get namespace nimbusguard 2>/dev/null; then \
+		echo "❌ Namespace still exists. Manual intervention may be required."; \
+		echo "   Try: kubectl get namespace nimbusguard -o yaml"; \
+		echo "   Or restart your Kubernetes cluster if this persists."; \
+	else \
+		echo "✅ Namespace successfully deleted!"; \
+	fi
+	
+	@echo ""
+	@echo "✅ AGGRESSIVE cleanup complete!"
 
 # Port forwards
 ports: ## Port forward all relevant services in the background
