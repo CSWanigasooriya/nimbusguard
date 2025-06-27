@@ -1,0 +1,8 @@
+torch
+redis
+minio
+numpy
+joblib
+scikit-learn
+pandas
+python-dotenv
