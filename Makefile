@@ -320,51 +320,90 @@ deploy: docker-build ## Build images and deploy all components to the cluster
 
 dev: deploy ## Alias for 'deploy' - builds and deploys all components for development
 
-clean: ## Delete all deployed resources from the cluster (AGGRESSIVE termination)
-	@echo "🗑️  AGGRESSIVE cleanup: Force deleting all resources in the nimbusguard namespace..."
+clean: ## Delete all deployed resources from ALL namespaces (AGGRESSIVE cluster-wide termination)
+	@echo "🗑️  AGGRESSIVE CLUSTER-WIDE cleanup: Force deleting all NimbusGuard resources..."
+	@echo "⚠️  WARNING: This will clean up resources across ALL namespaces!"
 	@echo ""
 	
-	# Step 1: Try to remove KEDA finalizers first (most common cause of stuck termination)
-	@echo "🔧 Removing KEDA finalizers from ScaledObjects..."
-	@kubectl get scaledobjects -n nimbusguard -o name 2>/dev/null | xargs -I {} kubectl patch -n nimbusguard {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
-	
-	# Step 2: Remove KEDA HPA resources that might be stuck
-	@echo "🔧 Cleaning up KEDA HPA resources..."
-	@kubectl delete hpa -n nimbusguard --all --force --grace-period=0 2>/dev/null || true
-	
-	# Step 3: Uninstall KEDA helm release
-	@echo "🔧 Uninstalling KEDA Helm release..."
-	@helm uninstall keda -n nimbusguard 2>/dev/null || true
-	
-	# Step 4: Try graceful namespace deletion first
-	@echo "🔧 Attempting graceful namespace deletion..."
-	@kubectl delete namespace nimbusguard --ignore-not-found=true --timeout=30s 2>/dev/null || true
-	
-	# Step 5: Check if namespace is stuck in Terminating state
-	@echo "🔍 Checking namespace status..."
-	@if kubectl get namespace nimbusguard 2>/dev/null | grep -q "Terminating"; then \
-		echo "⚠️  Namespace stuck in Terminating state - applying aggressive removal..."; \
-		echo "🔨 Force removing namespace finalizers..."; \
-		kubectl get namespace nimbusguard -o json | jq '.spec.finalizers = []' | kubectl replace --raw /api/v1/namespaces/nimbusguard/finalize -f - 2>/dev/null || true; \
-		sleep 3; \
-		if kubectl get namespace nimbusguard 2>/dev/null; then \
-			echo "⚠️  Namespace still exists - attempting direct API deletion..."; \
-			kubectl delete namespace nimbusguard --force --grace-period=0 2>/dev/null || true; \
+	# Step 1: List all project-related namespaces
+	@echo "🔍 Discovering project-related namespaces..."
+	@PROJECT_NAMESPACES=$$(kubectl get namespaces -o name | grep -E "(nimbusguard|kubeflow|keda|monitoring)" | cut -d'/' -f2) || true; \
+	if [ -n "$$PROJECT_NAMESPACES" ]; then \
+		echo "📋 Found namespaces: $$PROJECT_NAMESPACES"; \
+	else \
+		echo "📋 No project-related namespaces found, checking nimbusguard specifically..."; \
+		PROJECT_NAMESPACES="nimbusguard"; \
+	fi; \
+	\
+	# Step 2: Clean up KEDA resources across all namespaces first \
+	echo "🔧 Removing KEDA finalizers from ScaledObjects in all namespaces..."; \
+	for ns in $$PROJECT_NAMESPACES; do \
+		if kubectl get namespace $$ns >/dev/null 2>&1; then \
+			echo "   Cleaning KEDA resources in namespace: $$ns"; \
+			kubectl get scaledobjects -n $$ns -o name 2>/dev/null | xargs -I {} kubectl patch -n $$ns {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
+			kubectl delete hpa -n $$ns --all --force --grace-period=0 2>/dev/null || true; \
 		fi; \
-	fi
+	done
 	
-	# Step 6: Final verification
+	# Step 3: Clean up cluster-wide KEDA installation
+	@echo "🔧 Removing cluster-wide KEDA installations..."
+	@kubectl get crd | grep keda | awk '{print $$1}' | xargs kubectl delete crd 2>/dev/null || true
+	@helm uninstall keda -n keda-system 2>/dev/null || true
+	@helm uninstall keda -n nimbusguard 2>/dev/null || true
+	@kubectl delete namespace keda-system --ignore-not-found=true --timeout=30s 2>/dev/null || true
+	
+	# Step 4: Clean up metrics-server if it was installed by this project
+	@echo "🔧 Cleaning up metrics-server..."
+	@kubectl delete deployment metrics-server -n kube-system 2>/dev/null || true
+	
+	# Step 5: Remove cluster-wide RBAC resources
+	@echo "🔧 Removing cluster-wide RBAC resources..."
+	@kubectl delete clusterrole,clusterrolebinding -l app=nimbusguard 2>/dev/null || true
+	@kubectl delete clusterrole,clusterrolebinding | grep -E "(nimbusguard|dqn-adapter|mcp-server|alloy|beyla|prometheus|kube-state-metrics)" | awk '{print $$1}' | xargs kubectl delete 2>/dev/null || true
+	
+	# Step 6: Aggressively delete all project namespaces
+	@echo "🔧 Force deleting all project namespaces..."
+	@PROJECT_NAMESPACES=$$(kubectl get namespaces -o name | grep -E "(nimbusguard|kubeflow|monitoring)" | cut -d'/' -f2 || echo "nimbusguard"); \
+	for ns in $$PROJECT_NAMESPACES; do \
+		if kubectl get namespace $$ns >/dev/null 2>&1; then \
+			echo "   Deleting namespace: $$ns"; \
+			kubectl delete namespace $$ns --ignore-not-found=true --timeout=30s 2>/dev/null || true; \
+			\
+			# Check if stuck in Terminating state \
+			if kubectl get namespace $$ns 2>/dev/null | grep -q "Terminating"; then \
+				echo "   ⚠️  Namespace $$ns stuck in Terminating state - applying aggressive removal..."; \
+				kubectl get namespace $$ns -o json | jq '.spec.finalizers = []' | kubectl replace --raw /api/v1/namespaces/$$ns/finalize -f - 2>/dev/null || true; \
+				sleep 2; \
+				kubectl delete namespace $$ns --force --grace-period=0 2>/dev/null || true; \
+			fi; \
+		fi; \
+	done
+	
+	# Step 7: Clean up any remaining stuck resources
+	@echo "🔧 Cleaning up any remaining stuck resources..."
+	@kubectl get pods --all-namespaces --field-selector=status.phase=Failed -o name | xargs kubectl delete 2>/dev/null || true
+	@kubectl get pods --all-namespaces --field-selector=status.phase=Succeeded -o name | xargs kubectl delete 2>/dev/null || true
+	
+	# Step 8: Clean up any remaining KEDA webhooks and operators
+	@echo "🔧 Removing any remaining KEDA webhooks..."
+	@kubectl delete validatingwebhookconfiguration -l app.kubernetes.io/name=keda-admission-webhooks 2>/dev/null || true
+	@kubectl delete mutatingwebhookconfiguration -l app.kubernetes.io/name=keda-admission-webhooks 2>/dev/null || true
+	
+	# Step 9: Final verification
 	@echo "🔍 Final verification..."
-	@if kubectl get namespace nimbusguard 2>/dev/null; then \
-		echo "❌ Namespace still exists. Manual intervention may be required."; \
-		echo "   Try: kubectl get namespace nimbusguard -o yaml"; \
+	@REMAINING_NS=$$(kubectl get namespaces -o name | grep -E "(nimbusguard|kubeflow|monitoring)" | cut -d'/' -f2 || true); \
+	if [ -n "$$REMAINING_NS" ]; then \
+		echo "❌ Some namespaces still exist: $$REMAINING_NS"; \
+		echo "   Manual intervention may be required."; \
+		echo "   Try: kubectl get namespace <namespace> -o yaml"; \
 		echo "   Or restart your Kubernetes cluster if this persists."; \
 	else \
-		echo "✅ Namespace successfully deleted!"; \
+		echo "✅ All project namespaces successfully deleted!"; \
 	fi
 	
 	@echo ""
-	@echo "✅ AGGRESSIVE cleanup complete!"
+	@echo "✅ AGGRESSIVE CLUSTER-WIDE cleanup complete!"
+	@echo "🔄 You may want to run 'make setup' to reinitialize the environment."
 
 # Port forwards
 ports: ## Port forward all relevant services in the background
