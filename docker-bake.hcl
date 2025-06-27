@@ -15,7 +15,7 @@ group "base" {
 }
 
 group "all" {
-  targets = ["nimbusguard-base", "consumer", "generator"]
+  targets = ["nimbusguard-base", "consumer", "generator", "learner", "dqn-adapter"]
 }
 
 target "_common" {
@@ -61,6 +61,32 @@ target "generator" {
   tags = [
     "${REGISTRY}/nimbusguard-generator:${TAG}",
     "${REGISTRY}/nimbusguard-generator:latest"
+  ]
+  contexts = {
+    nimbusguard-base = "target:nimbusguard-base"
+  }
+}
+
+target "learner" {
+  inherits = ["_common"]
+  context = "src/learner"
+  dockerfile = "Dockerfile"
+  tags = [
+    "${REGISTRY}/nimbusguard-learner:${TAG}",
+    "${REGISTRY}/nimbusguard-learner:latest"
+  ]
+  contexts = {
+    nimbusguard-base = "target:nimbusguard-base"
+  }
+}
+
+target "dqn-adapter" {
+  inherits = ["_common"]
+  context = "src/dqn-adapter"
+  dockerfile = "Dockerfile"
+  tags = [
+    "${REGISTRY}/nimbusguard-dqn-adapter:${TAG}",
+    "${REGISTRY}/nimbusguard-dqn-adapter:latest"
   ]
   contexts = {
     nimbusguard-base = "target:nimbusguard-base"

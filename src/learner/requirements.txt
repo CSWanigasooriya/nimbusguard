@@ -2,7 +2,10 @@ torch
 redis
 minio
 numpy
-joblib
+requests
 scikit-learn
+matplotlib
+seaborn
 pandas
+joblib
 python-dotenv

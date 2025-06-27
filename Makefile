@@ -336,14 +336,11 @@ load-clean-all: ## Clean up ALL load test jobs (including running ones)
 
 docker-build-base: ## Build the base Docker image
 	@echo "🔨 Building nimbusguard-base image..."
-	@docker build -t nimbusguard-base:latest -f docker/base.Dockerfile .
+	@docker buildx bake base
 
-docker-build: docker-build-base ## Build all necessary Docker images from the base
-	@echo "🔨 Building application images from nimbusguard-base..."
-	docker build -t nimbusguard-consumer:latest -f src/consumer/Dockerfile .
-	docker build -t nimbusguard-dqn-adapter:latest -f src/dqn-adapter/Dockerfile .
-	docker build -t nimbusguard-learner:latest -f src/learner/Dockerfile .
-	docker build -t nimbusguard-generator:latest -f src/generator/Dockerfile .
+docker-build: docker-build-base ## Build all necessary Docker images using docker buildx bake
+	@echo "🔨 Building application images using docker buildx bake..."
+	docker buildx bake all
 
 # Push Docker images
 docker-push: ## Push all necessary Docker images to a registry

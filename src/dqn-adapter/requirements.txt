@@ -13,4 +13,5 @@ joblib
 scikit-learn
 torch
 redis
-kopf 
+kopf
+aiohttp 
