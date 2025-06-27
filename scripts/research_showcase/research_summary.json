@@ -1,0 +1,37 @@
+{
+  "feature_engineering_summary": {
+    "total_samples": 894,
+    "total_features": 11,
+    "time_range": {
+      "start": "N/A",
+      "end": "N/A",
+      "duration_hours": "N/A"
+    },
+    "action_distribution": {
+      "2": 795,
+      "1": 72,
+      "0": 27
+    },
+    "feature_categories": {
+      "response_time": 1,
+      "health_metrics": 6,
+      "request_metrics": 6,
+      "resource_metrics": 1,
+      "rpc_metrics": 0
+    }
+  },
+  "data_quality_metrics": {
+    "missing_values": 0,
+    "duplicate_rows": 17,
+    "feature_variance_stats": {
+      "mean_variance": 330760874560964.06,
+      "std_variance": 1145789279672365.5,
+      "note": "Calculated on raw features - use normalized variance for feature importance"
+    }
+  },
+  "scaling_insights": {
+    "scale_up_percentage": 0.0,
+    "scale_down_percentage": 0.0,
+    "keep_same_percentage": 0.0
+  }
+}
