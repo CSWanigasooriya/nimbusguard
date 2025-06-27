@@ -2,7 +2,7 @@
 
 This service is the intelligent core of the NimbusGuard autoscaling system. It combines the predictive power of a Deep Q-Network (DQN) model with real-time learning capabilities and robust execution through KEDA. It runs a continuous reconciliation loop to determine the optimal number of replicas for a target service and exposes this decision as a Prometheus metric.
 
-The adapter uses **11 scientifically selected features** identified through advanced statistical analysis and mutual information techniques from real Prometheus metrics, ensuring optimal performance and decision accuracy.
+The adapter uses **8 scientifically selected features** identified through advanced statistical analysis using 6 rigorous methods (Mutual Information, Random Forest, Correlation Analysis, RFECV, Statistical Significance, and VIF Analysis) from 894 real per-minute decision points, ensuring optimal performance and decision accuracy.
 
 ## 🧠 Explainable AI Features
 

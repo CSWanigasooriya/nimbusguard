@@ -206,7 +206,7 @@ class DQNFeatureShowcase:
         
         # Create subplot layout
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle('11-Feature DQN Analysis', fontsize=20, fontweight='bold', y=0.98)
+        fig.suptitle(f'{len(selected_features)}-Feature DQN Analysis', fontsize=20, fontweight='bold', y=0.98)
         
         # 1. Selected Features Ranking
         final_scores = feature_analysis['final_scores']
@@ -217,10 +217,24 @@ class DQNFeatureShowcase:
         y_pos = np.arange(len(features))
         bars = ax1.barh(y_pos, scores, color=self.colors['primary'], alpha=0.8)
         ax1.set_yticks(y_pos)
-        ax1.set_yticklabels([f.replace('_', ' ').title()[:25] + '...' if len(f) > 25 else f.replace('_', ' ').title() 
-                            for f in features])
+        
+        # Create better feature labels (shorten intelligently)
+        def shorten_feature_name(name):
+            # Remove common prefixes and use abbreviations
+            name = name.replace('kube_pod_container_', 'pod_')
+            name = name.replace('kube_deployment_', 'deploy_')
+            name = name.replace('status_', '')
+            name = name.replace('_ma_10', ' (10min avg)')
+            name = name.replace('_dev_10', ' (10min dev)')
+            name = name.replace('_seconds_', '_sec_')
+            name = name.replace('http_request_duration_highr_', 'http_dur_')
+            if len(name) > 30:
+                name = name[:27] + '...'
+            return name.replace('_', ' ').title()
+        
+        ax1.set_yticklabels([shorten_feature_name(f) for f in features])
         ax1.set_xlabel('Ensemble Score')
-        ax1.set_title('11 Selected Features (Ranked by Ensemble Score)', fontsize=14, fontweight='bold')
+        ax1.set_title(f'{len(selected_features)} Selected Features (Ranked by Ensemble Score)', fontsize=14, fontweight='bold')
         ax1.grid(axis='x', alpha=0.3)
         
         # Add score labels
@@ -235,7 +249,7 @@ class DQNFeatureShowcase:
         mi_top = list(feature_analysis['selection_methods']['mutual_information'].keys())[:10]
         rf_top = list(feature_analysis['selection_methods']['random_forest'].keys())[:10]
         corr_top = [item[0] for item in list(feature_analysis['selection_methods']['correlation'].items())[:10]]
-        rfe_selected = feature_analysis['selection_methods']['fast_selected']
+        rfe_selected = feature_analysis['selection_methods']['rfecv_selected']
         
         method_coverage = [
             len([f for f in selected_features if f in mi_top]),
@@ -247,7 +261,7 @@ class DQNFeatureShowcase:
         bars = ax2.bar(methods, method_coverage, color=[self.colors['primary'], self.colors['secondary'], 
                                                        self.colors['accent'], self.colors['success']], alpha=0.8)
         ax2.set_ylabel('Features in Final Selection')
-        ax2.set_title('Method Contribution to Final 11 Features', fontsize=14, fontweight='bold')
+        ax2.set_title(f'Method Contribution to Final {len(selected_features)} Features', fontsize=14, fontweight='bold')
         ax2.set_ylim(0, 12)
         
         # Add value labels
@@ -274,13 +288,14 @@ class DQNFeatureShowcase:
                     f'{count}\n({count/total*100:.1f}%)',
                     ha='center', va='bottom', fontweight='bold')
         
-        # 4. Feature Type Distribution
+        # 4. Feature Type Distribution (Kubernetes Focus)
         feature_types = {
-            'Response Time': [f for f in selected_features if 'response_time' in f or 'latency' in f],
-            'Health Metrics': [f for f in selected_features if 'health' in f or 'ratio' in f],
-            'Request Metrics': [f for f in selected_features if 'request' in f or 'http' in f],
-            'Resource Metrics': [f for f in selected_features if 'memory' in f or 'cpu' in f or 'alloy' in f],
-            'RPC Metrics': [f for f in selected_features if 'rpc' in f]
+            'Response Time': [f for f in selected_features if 'response_time' in f],
+            'Pod Status': [f for f in selected_features if 'kube_pod_container_status' in f],
+            'Deployment': [f for f in selected_features if 'kube_deployment' in f],
+            'Health Ratios': [f for f in selected_features if 'health_ratio' in f],
+            'Resource Limits': [f for f in selected_features if 'resource_limits' in f],
+            'Deviation Features': [f for f in selected_features if '_dev_' in f],
         }
         
         # Filter out empty categories and count features
@@ -326,7 +341,7 @@ class DQNFeatureShowcase:
         sns.heatmap(corr_matrix, mask=mask, annot=True, cmap='RdYlBu_r', center=0,
                    square=True, fmt='.2f', cbar_kws={"shrink": .8})
         
-        plt.title('Feature Correlation Matrix\n(11 Selected DQN Features)', 
+        plt.title(f'Feature Correlation Matrix\n({len(available_features)} Selected DQN Features)', 
                  fontsize=16, fontweight='bold', pad=20)
         plt.xticks(rotation=45, ha='right')
         plt.yticks(rotation=0)
@@ -336,112 +351,95 @@ class DQNFeatureShowcase:
         print("✅ Created correlation heatmap")
     
     def create_performance_metrics_comparison(self):
-        """Create performance metrics comparison and distributions."""
-        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle('DQN Feature Analysis', fontsize=20, fontweight='bold')
+        """Create feature distributions analysis."""
+        # Create subplot layout - only top two charts
+        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+        fig.suptitle('DQN Feature Analysis', fontsize=20, fontweight='bold', y=0.98)
         
-        # 1. Response Time Distribution
+        # 1. Response Time Distribution (with outlier handling)
         if 'avg_response_time' in self.df.columns:
-            ax1 = axes[0, 0]
-            ax1.hist(self.df['avg_response_time'], bins=30, color=self.colors['primary'], alpha=0.7, edgecolor='black')
-            ax1.set_xlabel('Average Response Time (ms)')
-            ax1.set_ylabel('Frequency')
-            ax1.set_title('Response Time Distribution', fontweight='bold')
-            ax1.axvline(self.df['avg_response_time'].mean(), color='red', linestyle='--', linewidth=2, label='Mean')
-            ax1.axvline(self.df['avg_response_time'].median(), color='orange', linestyle='--', linewidth=2, label='Median')
-            ax1.legend()
-            ax1.grid(alpha=0.3)
-        
-        # 2. Health Ratio Distribution (or alternative health metric)
-        health_column = None
-        for col in ['health_ratio', 'up', 'kube_deployment_status_replicas_available']:
+            # Handle extreme outliers by using 95th percentile as upper limit for visualization
+            response_data = self.df['avg_response_time']
+            q95 = response_data.quantile(0.95)
+            
+            # Create histogram with outlier-aware binning
+            axes[0].hist(response_data.clip(upper=q95), bins=50, color=self.colors['primary'], alpha=0.7, edgecolor='black')
+            axes[0].set_xlabel('Average Response Time (ms)')
+            axes[0].set_ylabel('Frequency')
+            axes[0].set_title('Response Time Distribution\n(Clipped at 95th percentile for visualization)', fontweight='bold')
+            axes[0].axvline(response_data.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean ({response_data.mean():.0f}ms)')
+            axes[0].axvline(response_data.median(), color='orange', linestyle='--', linewidth=2, label=f'Median ({response_data.median():.0f}ms)')
+            
+            # Add outlier information
+            outlier_count = (response_data > q95).sum()
+            if outlier_count > 0:
+                axes[0].text(0.98, 0.98, f'{outlier_count} outliers\n(>{q95:.0f}ms)', 
+                        transform=axes[0].transAxes, ha='right', va='top',
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            
+            axes[0].legend()
+            axes[0].grid(alpha=0.3)
+        else:
+            axes[0].text(0.5, 0.5, 'Response time data\nnot available', 
+                        ha='center', va='center', transform=axes[0].transAxes,
+                        fontsize=12, color=self.colors['dark'])
+            axes[0].set_title('Response Time Distribution', fontweight='bold')
+
+        # 2. Pod Health Metrics Distribution (with outlier handling)
+        pod_health_column = None
+        for col in ['kube_pod_container_status_ready', 'kube_pod_container_status_ready_ma_5']:
             if col in self.df.columns:
-                health_column = col
+                pod_health_column = col
                 break
         
-        if health_column:
-            axes[0, 1].hist(self.df[health_column], bins=30, 
-                          color=self.colors['secondary'], alpha=0.7, edgecolor='black')
-            axes[0, 1].set_xlabel(health_column.replace('_', ' ').title())
-            axes[0, 1].set_ylabel('Frequency')
-            axes[0, 1].set_title(f'{health_column.replace("_", " ").title()} Distribution', fontweight='bold')
-            axes[0, 1].axvline(self.df[health_column].mean(), 
-                             color='red', linestyle='--', linewidth=2, label='Mean')
-            axes[0, 1].legend()
-            axes[0, 1].grid(alpha=0.3)
-        else:
-            axes[0, 1].text(0.5, 0.5, 'No health metrics\navailable', 
-                          ha='center', va='center', transform=axes[0, 1].transAxes,
-                          fontsize=12, color=self.colors['dark'])
-            axes[0, 1].set_title('Health Metrics Distribution', fontweight='bold')
-        
-        # 3. Feature Correlation Scatter
-        if 'http_requests_total' in self.df.columns and 'avg_response_time' in self.df.columns:
-            scatter = axes[1, 0].scatter(self.df['http_requests_total'], self.df['avg_response_time'], 
-                                       c=self.df['scaling_action'], cmap='viridis', alpha=0.6, s=30)
-            axes[1, 0].set_xlabel('HTTP Requests Total')
-            axes[1, 0].set_ylabel('Average Response Time (ms)')
-            axes[1, 0].set_title('Requests vs Response Time (colored by action)', fontweight='bold')
-            axes[1, 0].grid(alpha=0.3)
+        if pod_health_column:
+            # Handle outliers using IQR method
+            pod_data = self.df[pod_health_column]
+            q1 = pod_data.quantile(0.25)
+            q3 = pod_data.quantile(0.75)
+            iqr = q3 - q1
+            lower_bound = q1 - 1.5 * iqr
+            upper_bound = q3 + 1.5 * iqr
             
-            # Add colorbar
-            cbar = plt.colorbar(scatter, ax=axes[1, 0])
-            cbar.set_label('Scaling Action')
-            cbar.set_ticks([0, 1, 2])
-            cbar.set_ticklabels(['Scale Down', 'Keep Same', 'Scale Up'])
-        else:
-            # Use alternative features for scatter plot
-            numeric_features = self.df.select_dtypes(include=[np.number]).columns
-            available_features = [f for f in numeric_features if f not in ['scaling_action', 'timestamp']]
-            if len(available_features) >= 2:
-                feat1, feat2 = available_features[:2]
-                scatter = axes[1, 0].scatter(self.df[feat1], self.df[feat2], 
-                                           c=self.df['scaling_action'], cmap='viridis', alpha=0.6, s=30)
-                axes[1, 0].set_xlabel(feat1.replace('_', ' ').title())
-                axes[1, 0].set_ylabel(feat2.replace('_', ' ').title())
-                axes[1, 0].set_title('Feature Correlation (colored by action)', fontweight='bold')
-                axes[1, 0].grid(alpha=0.3)
-                
-                # Add colorbar
-                cbar = plt.colorbar(scatter, ax=axes[1, 0])
-                cbar.set_label('Scaling Action')
-                cbar.set_ticks([0, 1, 2])
-                cbar.set_ticklabels(['Scale Down', 'Keep Same', 'Scale Up'])
-            else:
-                axes[1, 0].text(0.5, 0.5, 'No suitable features\nfor scatter plot', 
-                              ha='center', va='center', transform=axes[1, 0].transAxes,
-                              fontsize=12, color=self.colors['dark'])
-                axes[1, 0].set_title('Feature Correlation', fontweight='bold')
-        
-        # 4. Memory Usage Distribution
-        memory_column = None
-        for col in ['alloy_resources_process_resident_memory_bytes', 'process_resident_memory_bytes', 'go_memstats_alloc_bytes']:
-            if col in self.df.columns:
-                memory_column = col
-                break
-        
-        if memory_column:
-            if 'bytes' in memory_column.lower():
-                memory_mb = self.df[memory_column] / (1024 * 1024)
-                axes[1, 1].hist(memory_mb, bins=30, color=self.colors['info'], alpha=0.7, edgecolor='black')
-                axes[1, 1].set_xlabel('Memory Usage (MB)')
-            else:
-                axes[1, 1].hist(self.df[memory_column], bins=30, color=self.colors['info'], alpha=0.7, edgecolor='black')
-                axes[1, 1].set_xlabel(memory_column.replace('_', ' ').title())
+            # Count outliers
+            outliers_low = (pod_data < lower_bound).sum()
+            outliers_high = (pod_data > upper_bound).sum()
+            total_outliers = outliers_low + outliers_high
             
-            axes[1, 1].set_ylabel('Frequency')
-            axes[1, 1].set_title('Memory Usage Distribution', fontweight='bold')
-            if 'bytes' in memory_column.lower():
-                axes[1, 1].axvline(memory_mb.mean(), color='red', linestyle='--', linewidth=2, label='Mean')
-            else:
-                axes[1, 1].axvline(self.df[memory_column].mean(), color='red', linestyle='--', linewidth=2, label='Mean')
-            axes[1, 1].legend()
-            axes[1, 1].grid(alpha=0.3)
+            # Clip data for visualization
+            clipped_data = pod_data.clip(lower=lower_bound, upper=upper_bound)
+            
+            axes[1].hist(clipped_data, bins=50, color=self.colors['secondary'], alpha=0.7, edgecolor='black')
+            axes[1].set_xlabel('Kube Pod Container Status Ready')
+            axes[1].set_ylabel('Frequency')
+            axes[1].set_title('Pod Health Metrics Distribution\n(Outliers clipped for visualization)', fontweight='bold')
+            axes[1].axvline(pod_data.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean ({pod_data.mean():.3f})')
+            axes[1].axvline(pod_data.median(), color='orange', linestyle='--', linewidth=2, label=f'Median ({pod_data.median():.3f})')
+            
+            # Add outlier information
+            if total_outliers > 0:
+                axes[1].text(0.98, 0.98, f'{total_outliers} outliers\n({total_outliers/len(pod_data)*100:.1f}%)', 
+                           transform=axes[1].transAxes, ha='right', va='top',
+                           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            
+            # Add explanation of decimal values
+            explanation_text = ('Decimal Values Explained:\n'
+                              '0.941 = 94.1% containers ready\n'
+                              '0.888 ≈ 8/9 containers ready\n'
+                              '0.700 ≈ 70% containers ready\n\n'
+                              'Formula: ready_containers/total_containers')
+            axes[1].text(0.02, 0.98, explanation_text, 
+                        transform=axes[1].transAxes, ha='left', va='top',
+                        bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.9),
+                        fontsize=9, fontweight='normal')
+            
+            axes[1].legend()
+            axes[1].grid(alpha=0.3)
         else:
-            axes[1, 1].text(0.5, 0.5, 'No memory metrics\navailable', 
-                          ha='center', va='center', transform=axes[1, 1].transAxes,
-                          fontsize=12, color=self.colors['dark'])
-            axes[1, 1].set_title('Memory Usage Distribution', fontweight='bold')
+            axes[1].text(0.5, 0.5, 'Pod health metrics\nnot available', 
+                        ha='center', va='center', transform=axes[1].transAxes,
+                        fontsize=12, color=self.colors['dark'])
+            axes[1].set_title('Pod Health Metrics Distribution', fontweight='bold')
         
         plt.tight_layout()
         plt.savefig(self.output_dir / "feature_distributions.png", dpi=300, bbox_inches='tight')
@@ -453,101 +451,163 @@ class DQNFeatureShowcase:
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
         fig.suptitle('Data Quality Assessment', fontsize=20, fontweight='bold')
         
-        # 1. Missing values heatmap
-        feature_cols = [col for col in self.df.columns if col not in ['timestamp', 'action', 'optimal_replicas']]
-        missing_data = self.df[feature_cols].isnull().sum()
-        missing_data = missing_data[missing_data > 0].sort_values(ascending=False)
+        # 1. Scaling Action Distribution Pie Chart
+        action_counts = self.df['scaling_action'].value_counts().sort_index()
+        action_labels = ['Scale Down', 'Keep Same', 'Scale Up']
+        action_colors = [self.colors['primary'], self.colors['accent'], self.colors['success']]
         
-        if len(missing_data) > 0:
-            ax1.barh(range(len(missing_data)), missing_data.values, color=self.colors['success'])
-            ax1.set_yticks(range(len(missing_data)))
-            ax1.set_yticklabels([name.replace('_', ' ').title() for name in missing_data.index])
-            ax1.set_xlabel('Number of Missing Values')
-            ax1.set_title('Missing Values by Feature', fontweight='bold')
-        else:
-            ax1.text(0.5, 0.5, 'No Missing Values\n✅ Perfect Data Quality', 
-                    ha='center', va='center', transform=ax1.transAxes,
-                    fontsize=16, fontweight='bold', color=self.colors['success'])
-            ax1.set_title('Missing Values Assessment', fontweight='bold')
+        # Create pie chart
+        wedges, texts, autotexts = ax1.pie(action_counts.values, 
+                                          labels=action_labels,
+                                          colors=action_colors,
+                                          autopct='%1.1f%%',
+                                          startangle=90,
+                                          explode=(0.05, 0.05, 0.05))
         
-        # 2. Feature value ranges (normalized and filtered)
-        numeric_cols = self.df[feature_cols].select_dtypes(include=[np.number]).columns
+        # Enhance text appearance
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+            autotext.set_fontsize(12)
         
-        # Filter out features with extreme ranges and normalize
-        reasonable_features = []
-        for col in numeric_cols:
-            col_range = self.df[col].max() - self.df[col].min()
-            col_std = self.df[col].std()
-            # Only include features with reasonable ranges (not extreme outliers)
-            if col_range > 0 and col_std > 0 and col_range < 1e6:  # Filter extreme ranges
-                reasonable_features.append(col)
+        for text in texts:
+            text.set_fontweight('bold')
+            text.set_fontsize(11)
         
-        # Take top 10 by coefficient of variation (std/mean)
-        cv_scores = []
-        for col in reasonable_features[:15]:  # Limit to first 15 to avoid too many
-            if self.df[col].mean() != 0:
-                cv = self.df[col].std() / abs(self.df[col].mean())
-                cv_scores.append((col, cv))
+        ax1.set_title('Scaling Action Distribution', fontweight='bold', fontsize=14)
         
-        cv_scores.sort(key=lambda x: x[1], reverse=True)
-        top_features = [item[0] for item in cv_scores[:10]]
+        # Add sample count in center (if possible)
+        total_samples = len(self.df)
+        ax1.text(0, 0, f'{total_samples}\nSamples', ha='center', va='center',
+                fontsize=12, fontweight='bold', color=self.colors['dark'])
         
-        if len(top_features) > 0:
-            ranges = []
-            names = []
-            for col in top_features:
-                ranges.append([self.df[col].min(), self.df[col].max()])
-                names.append(col.replace('_', ' ').title()[:20])
+        # 2. Pod Health vs Response Time Scatter (with outlier handling)
+        if 'kube_pod_container_status_ready' in self.df.columns and 'avg_response_time' in self.df.columns:
+            # Handle outliers for better visualization
+            response_data = self.df['avg_response_time']
+            q99 = response_data.quantile(0.99)
             
-            ranges = np.array(ranges)
-            ax2.barh(range(len(names)), ranges[:, 1] - ranges[:, 0], 
-                    left=ranges[:, 0], color=self.colors['primary'], alpha=0.7)
-            ax2.set_yticks(range(len(names)))
-            ax2.set_yticklabels(names)
-            ax2.set_xlabel('Value Range')
-            ax2.set_title('Top Features by Coefficient of Variation', fontweight='bold')
+            # Create scatter plot colored by scaling action
+            action_colors = {0: self.colors['primary'], 1: self.colors['accent'], 2: self.colors['success']}
+            action_labels = {0: 'Scale Down', 1: 'Keep Same', 2: 'Scale Up'}
+            
+            for action in [0, 1, 2]:
+                mask = self.df['scaling_action'] == action
+                if mask.sum() > 0:
+                    # Clip response times for better visualization
+                    y_data = self.df[mask]['avg_response_time'].clip(upper=q99)
+                    ax2.scatter(self.df[mask]['kube_pod_container_status_ready'], 
+                              y_data,
+                              c=action_colors[action], 
+                              alpha=0.6, 
+                              label=action_labels[action],
+                              s=30)
+            
+            ax2.set_xlabel('Pod Container Status Ready (Fraction)')
+            ax2.set_ylabel('Average Response Time (ms)')
+            ax2.set_title('Pod Health vs Response Time\n(Response time clipped at 99th percentile)', fontweight='bold')
+            
+            # Add text about readiness range
+            readiness_min = self.df['kube_pod_container_status_ready'].min()
+            readiness_max = self.df['kube_pod_container_status_ready'].max()
+            ax2.text(0.02, 0.98, f'Readiness range:\n{readiness_min:.2f} - {readiness_max:.2f}', 
+                    transform=ax2.transAxes, ha='left', va='top',
+                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+            
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
         else:
-            ax2.text(0.5, 0.5, 'No suitable features\nfor range analysis', 
+            ax2.text(0.5, 0.5, 'Pod Health or Response Time\ndata not available', 
                     ha='center', va='center', transform=ax2.transAxes,
                     fontsize=12, color=self.colors['dark'])
-            ax2.set_title('Feature Value Ranges', fontweight='bold')
+            ax2.set_title('Pod Health vs Response Time Analysis', fontweight='bold')
         
-        # 3. Feature Value Ranges (Box Plot)
+        # 3. Feature Value Distributions (Box Plot) - Using Robust Normalization
         selected_features = self.metadata['selected_features'][:6]  # Top 6 features for readability
         feature_data = []
         feature_names = []
         
         for feature in selected_features:
             if feature in self.df.columns:
-                # Normalize the feature for comparison
-                normalized_values = (self.df[feature] - self.df[feature].min()) / (self.df[feature].max() - self.df[feature].min())
+                # Use robust normalization (z-score with clipping for outliers)
+                feature_values = self.df[feature].copy()
+                
+                # Handle edge cases
+                if feature_values.std() == 0:
+                    # Constant feature - normalize to 0.5
+                    normalized_values = pd.Series([0.5] * len(feature_values))
+                else:
+                    # Z-score normalization
+                    normalized_values = (feature_values - feature_values.mean()) / feature_values.std()
+                    
+                    # Clip extreme outliers to [-3, 3] range and rescale to [0, 1]
+                    normalized_values = normalized_values.clip(-3, 3)
+                    normalized_values = (normalized_values + 3) / 6  # Scale to [0, 1]
+                
                 feature_data.append(normalized_values)
                 feature_names.append(feature.replace('_', ' ').title()[:15])
         
         if feature_data:
-            ax3.boxplot(feature_data, labels=feature_names)
-            ax3.set_ylabel('Normalized Feature Values')
-            ax3.set_title('Feature Value Distributions (Normalized)', fontweight='bold')
+            # Create box plot without outliers for cleaner visualization
+            box_plot = ax3.boxplot(feature_data, labels=feature_names, showfliers=False)
+            ax3.set_ylabel('Standardized Feature Values')
+            ax3.set_title('Feature Value Distributions (Standardized)\n(Outliers clipped for clarity)', fontweight='bold')
             ax3.tick_params(axis='x', rotation=45)
             ax3.grid(True, alpha=0.3)
+            ax3.set_ylim(-0.1, 1.1)  # Set consistent y-axis range
+            
+            # Add note about outlier handling
+            ax3.text(0.02, 0.98, 'Outliers clipped\nat ±3σ range', 
+                    transform=ax3.transAxes, ha='left', va='top',
+                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8),
+                    fontsize=9)
+        else:
+            ax3.text(0.5, 0.5, 'No feature data\navailable for boxplot', 
+                    ha='center', va='center', transform=ax3.transAxes,
+                    fontsize=12, color=self.colors['dark'])
+            ax3.set_title('Feature Value Distributions', fontweight='bold')
         
-        # 4. Feature engineering impact
-        original_features = [col for col in self.df.columns if not any(x in col for x in ['_ma_', '_trend_', '_score', '_ratio', '_per_', 'hour', 'day'])]
-        engineered_features = [col for col in self.df.columns if any(x in col for x in ['_ma_', '_trend_', '_score', '_ratio', '_per_'])]
+        # 4. Feature Type Analysis (Consumer Pod Features)
+        # Categorize the actual selected features
+        selected_features = self.metadata['selected_features']
         
-        categories = ['Original\nMetrics', 'Engineered\nFeatures']
-        counts = [len(original_features), len(engineered_features)]
-        colors = [self.colors['primary'], self.colors['secondary']]
+        base_features = [f for f in selected_features if not any(x in f for x in ['_dev_', '_ma_', '_volatility', 'memory_growth_rate'])]
+        derived_features = [f for f in selected_features if any(x in f for x in ['_dev_', '_ma_', '_volatility'])]
+        computed_features = [f for f in selected_features if f == 'memory_growth_rate']  # memory_growth_rate is computed feature
+        
+        # Only include categories that have features
+        categories = []
+        counts = []
+        colors = []
+        
+        if len(base_features) > 0:
+            categories.append('Base\nMetrics')
+            counts.append(len(base_features))
+            colors.append(self.colors['primary'])
+        
+        if len(derived_features) > 0:
+            categories.append('Derived\nFeatures')
+            counts.append(len(derived_features))
+            colors.append(self.colors['secondary'])
+        
+        if len(computed_features) > 0:
+            categories.append('Computed\nFeatures')
+            counts.append(len(computed_features))
+            colors.append(self.colors['accent'])
         
         bars = ax4.bar(categories, counts, color=colors, alpha=0.8)
         ax4.set_ylabel('Number of Features')
-        ax4.set_title('Feature Engineering Impact', fontweight='bold')
+        ax4.set_title('Selected Feature Types Analysis', fontweight='bold')
         
         # Add value labels on bars
         for bar, count in zip(bars, counts):
             height = bar.get_height()
-            ax4.text(bar.get_x() + bar.get_width()/2., height + 0.5,
+            ax4.text(bar.get_x() + bar.get_width()/2., height + 0.05,
                     f'{count}', ha='center', va='bottom', fontweight='bold', fontsize=14)
+        
+        # Set y-axis to show whole numbers only
+        ax4.set_ylim(0, max(counts) + 1)
+        ax4.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
         
         plt.tight_layout()
         plt.savefig(self.output_dir / "data_quality_report.png", dpi=300, bbox_inches='tight')
@@ -567,11 +627,12 @@ class DQNFeatureShowcase:
                 },
                 "action_distribution": self.metadata['dataset_info']['action_distribution'],
                 "feature_categories": {
-                    "response_time": len([f for f in self.metadata['selected_features'] if 'response_time' in f or 'latency' in f]),
-                    "health_metrics": len([f for f in self.metadata['selected_features'] if 'health' in f or 'ratio' in f]),
-                    "request_metrics": len([f for f in self.metadata['selected_features'] if 'request' in f or 'http' in f]),
-                    "resource_metrics": len([f for f in self.metadata['selected_features'] if 'memory' in f or 'cpu' in f or 'alloy' in f]),
-                    "rpc_metrics": len([f for f in self.metadata['selected_features'] if 'rpc' in f])
+                    "response_time": len([f for f in self.metadata['selected_features'] if 'response_time' in f]),
+                    "pod_status": len([f for f in self.metadata['selected_features'] if 'kube_pod_container_status' in f]),
+                    "deployment_metrics": len([f for f in self.metadata['selected_features'] if 'kube_deployment' in f]),
+                    "health_ratios": len([f for f in self.metadata['selected_features'] if 'health_ratio' in f]),
+                    "resource_limits": len([f for f in self.metadata['selected_features'] if 'resource_limits' in f]),
+                    "deviation_features": len([f for f in self.metadata['selected_features'] if '_dev_' in f])
                 }
             },
             "data_quality_metrics": {
@@ -584,9 +645,9 @@ class DQNFeatureShowcase:
                  }
             },
             "scaling_insights": {
-                "scale_up_percentage": float(self.metadata['dataset_info']['action_distribution'].get(2, 0) / len(self.df) * 100),
-                "scale_down_percentage": float(self.metadata['dataset_info']['action_distribution'].get(0, 0) / len(self.df) * 100),
-                "keep_same_percentage": float(self.metadata['dataset_info']['action_distribution'].get(1, 0) / len(self.df) * 100)
+                "scale_up_percentage": float(self.metadata['dataset_info']['action_distribution'].get('2', self.metadata['dataset_info']['action_distribution'].get(2, 0)) / len(self.df) * 100),
+                "scale_down_percentage": float(self.metadata['dataset_info']['action_distribution'].get('0', self.metadata['dataset_info']['action_distribution'].get(0, 0)) / len(self.df) * 100),
+                "keep_same_percentage": float(self.metadata['dataset_info']['action_distribution'].get('1', self.metadata['dataset_info']['action_distribution'].get(1, 0)) / len(self.df) * 100)
             }
         }
         
@@ -606,12 +667,13 @@ This document summarizes the advanced feature selection process for DQN-based Ku
 - **Selection Methods**: Mutual Information, Random Forest, Correlation Analysis, RFE
 - **Statistical Validation**: ✅ Applied
 
-## Selected Feature Categories
+## Selected Feature Categories (Kubernetes Focus)
 - **Response Time Metrics**: {summary['feature_engineering_summary']['feature_categories']['response_time']} features
-- **Health Metrics**: {summary['feature_engineering_summary']['feature_categories']['health_metrics']} features  
-- **Request Metrics**: {summary['feature_engineering_summary']['feature_categories']['request_metrics']} features
-- **Resource Metrics**: {summary['feature_engineering_summary']['feature_categories']['resource_metrics']} features
-- **RPC Metrics**: {summary['feature_engineering_summary']['feature_categories']['rpc_metrics']} features
+- **Pod Status Metrics**: {summary['feature_engineering_summary']['feature_categories']['pod_status']} features  
+- **Deployment Metrics**: {summary['feature_engineering_summary']['feature_categories']['deployment_metrics']} features
+- **Health Ratio Metrics**: {summary['feature_engineering_summary']['feature_categories']['health_ratios']} features
+- **Resource Limit Metrics**: {summary['feature_engineering_summary']['feature_categories']['resource_limits']} features
+- **Deviation Features**: {summary['feature_engineering_summary']['feature_categories']['deviation_features']} features
 
 ## Scaling Decision Distribution
 - **Scale Up**: {summary['scaling_insights']['scale_up_percentage']:.1f}% ({summary['feature_engineering_summary']['action_distribution'].get(2, 0)} samples)
@@ -630,11 +692,10 @@ This document summarizes the advanced feature selection process for DQN-based Ku
 4. Multi-method feature selection ensures robust and statistically significant feature choices.
 
 ## Generated Visualizations
-1. **pipeline_diagram.png**: 11-feature selection pipeline overview
-2. **feature_analysis.png**: Feature importance and method comparison
-3. **correlation_heatmap.png**: Selected feature correlations
-4. **feature_distributions.png**: Feature distribution analysis
-5. **data_quality_report.png**: Data quality assessment
+1. **feature_analysis.png**: Feature importance and method comparison
+2. **correlation_heatmap.png**: Selected feature correlations
+3. **feature_distributions.png**: Feature distribution analysis
+4. **data_quality_report.png**: Data quality assessment
 
 ---
 *Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
@@ -650,7 +711,7 @@ This document summarizes the advanced feature selection process for DQN-based Ku
         print("\n🎨 GENERATING RESEARCH SHOWCASE VISUALIZATIONS")
         print("=" * 60)
         
-        self.create_pipeline_diagram()
+        # Skip pipeline diagram generation (not needed)
         self.create_feature_importance_analysis()
         self.create_correlation_heatmap()
         self.create_performance_metrics_comparison()
