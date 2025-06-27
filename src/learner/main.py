@@ -8,6 +8,7 @@ from io import BytesIO
 from urllib.parse import urlparse
 from datetime import datetime
 import pickle
+import asyncio
 
 import torch
 import torch.nn as nn
@@ -22,9 +23,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 
+# Kopf for Kubernetes operator functionality
+import kopf
+import kubernetes.client as k8s_client
+from kubernetes.client.rest import ApiException
+
 # --- Basic Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("DQN_Learner")
+logger = logging.getLogger("DQN_Learner_Operator")
 
 # --- Environment & Configuration ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis.nimbusguard.svc:6379")
@@ -38,6 +44,8 @@ SCALER_NAME = os.getenv("SCALER_NAME", "feature_scaler.pkl")
 BUCKET_NAME = os.getenv("BUCKET_NAME", "models")
 REPLAY_BUFFER_KEY = "replay_buffer"
 EVALUATION_RESULTS_KEY = "evaluation_results"
+TARGET_NAMESPACE = os.getenv("TARGET_NAMESPACE", "nimbusguard")
+SCALEDOBJECT_NAME = os.getenv("SCALEDOBJECT_NAME", "consumer-scaler-dqn")
 
 # Enhanced DQN Parameters
 MEMORY_CAPACITY = int(os.getenv("MEMORY_CAPACITY", 50000))
@@ -58,6 +66,11 @@ ACTION_NAMES = ["Scale Down", "Keep Same", "Scale Up"]
 
 # Experience tuple for prioritized replay
 Experience = namedtuple('Experience', ['state', 'action', 'reward', 'next_state', 'done', 'priority'])
+
+# Global trainer instance
+trainer = None
+last_save_time = time.time()
+last_evaluation_step = 0
 
 # --- Enhanced Feature Engineering ---
 class PrometheusFeatureExtractor:
@@ -227,7 +240,7 @@ class PrioritizedReplayBuffer:
         for idx, priority in zip(indices, priorities):
             self.priorities[idx] = priority
             self.max_priority = max(self.max_priority, priority)
-    
+
     def __len__(self):
         return len(self.buffer)
 
@@ -261,7 +274,7 @@ class EnhancedQNetwork(nn.Module):
         if isinstance(module, nn.Linear):
             torch.nn.init.xavier_uniform_(module.weight)
             torch.nn.init.constant_(module.bias, 0)
-    
+
     def forward(self, x):
         return self.network(x)
 
@@ -414,7 +427,7 @@ class AdvancedDQNTrainer:
             next_actions = self.policy_net(next_states).max(1)[1]
             next_q_values = self.target_net(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
             target_q_values = rewards + (GAMMA * next_q_values * ~dones)
-
+        
         # Compute TD errors for priority updates
         td_errors = torch.abs(current_q_values - target_q_values).detach().cpu().numpy()
 
@@ -593,7 +606,15 @@ except Exception as e:
     logger.error(f"Failed to connect to MinIO: {e}", exc_info=True)
     exit(1)
 
-def main():
+# --- Kopf Operator Event Handlers ---
+
+@kopf.on.startup()
+async def startup_handler(**kwargs):
+    """Initialize the DQN trainer when the operator starts."""
+    global trainer, last_save_time, last_evaluation_step
+    
+    logger.info("🚀 DQN Learner Operator starting up...")
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
@@ -607,7 +628,7 @@ def main():
         for _ in range(50):
             features = feature_extractor.extract_features()
             initial_features.append(features)
-            time.sleep(2)
+            await asyncio.sleep(2)
         
         if initial_features:
             feature_extractor.fit_scaler(np.array(initial_features))
@@ -622,77 +643,119 @@ def main():
     last_save_time = time.time()
     last_evaluation_step = 0
 
-    logger.info("🎓 Advanced DQN Learner started - ready for continuous learning!")
+    logger.info("✅ DQN Learner Operator ready - listening for ScaledObject events!")
+
+@kopf.on.create('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'})
+@kopf.on.update('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'})
+async def on_scaledobject_event(spec, status, meta, **kwargs):
+    """React to ScaledObject events and trigger learning."""
+    global trainer, last_save_time, last_evaluation_step
     
-    while True:
-        try:
-            # Blocking pop from Redis replay buffer
-            result = redis_client.brpop(REPLAY_BUFFER_KEY, timeout=30)
+    if not trainer:
+        logger.warning("Trainer not initialized yet, skipping event")
+        return
+    
+    logger.info(f"🎯 ScaledObject event: {meta['name']} - {kwargs.get('reason', 'unknown')}")
+    
+    # Check if this is our target ScaledObject
+    if meta['name'] != SCALEDOBJECT_NAME:
+        return
+    
+    # Extract scaling information
+    min_replicas = spec.get('minReplicaCount', 1)
+    max_replicas = spec.get('maxReplicaCount', 50)
+    current_replicas = status.get('originalReplicaCount', 1)
+    
+    # Check if ScaledObject is active
+    is_active = False
+    conditions = status.get('conditions', [])
+    for condition in conditions:
+        if condition.get('type') == 'Active' and condition.get('status') == 'True':
+            is_active = True
+            break
+    
+    logger.info(f"📊 ScaledObject state: {current_replicas} replicas, Active: {is_active}, Range: {min_replicas}-{max_replicas}")
+    
+    # Process any pending experiences from Redis
+    await process_redis_experiences()
+    
+    # Trigger model evaluation if enough training has occurred
+    if trainer.batches_trained - last_evaluation_step >= EVALUATION_INTERVAL:
+        trainer.evaluate_model()
+        last_evaluation_step = trainer.batches_trained
+    
+    # Periodic saves
+    current_time = time.time()
+    if current_time - last_save_time > SAVE_INTERVAL_SECONDS:
+        trainer.save_model()
+        trainer.create_visualizations()
+        last_save_time = current_time
+        
+        logger.info(f"🎓 Training progress - Batches: {trainer.batches_trained}, "
+                  f"Buffer size: {len(trainer.memory)}, "
+                  f"Recent loss: {np.mean(trainer.training_losses[-10:]):.4f}")
+
+async def process_redis_experiences():
+    """Process experiences from Redis replay buffer."""
+    global trainer
+    
+    if not trainer:
+        return
+    
+    try:
+        # Non-blocking check for experiences
+        while True:
+            result = redis_client.lpop(REPLAY_BUFFER_KEY)
+            if not result:
+                break
+                
+            exp = json.loads(result)
             
-            if result:
-                _, experience_json = result
-                exp = json.loads(experience_json)
-                
-                # Extract and validate experience
-                state_dict = exp.get("state")
-                action_str = exp.get("action")
-                reward = exp.get("reward")
-                next_state_dict = exp.get("next_state")
-                done = exp.get("done", False)
-                
-                if not all([state_dict is not None, action_str, isinstance(reward, (int, float)), next_state_dict is not None]):
-                    logger.warning(f"Skipping malformed experience: {experience_json}")
-                    continue
-
-                # Convert to feature vectors
-                state_vec = trainer._dict_to_feature_vector(state_dict)
-                next_state_vec = trainer._dict_to_feature_vector(next_state_dict)
-                action_idx = ACTION_MAP.get(action_str)
-
-                if action_idx is None:
-                    logger.warning(f"Unknown action: {action_str}")
-                    continue
-
-                # Store in prioritized replay buffer
-                experience = Experience(state_vec, action_idx, reward, next_state_vec, done, priority=1.0)
-                trainer.memory.push(experience)
-                
-                # Perform training step
-                if len(trainer.memory) >= BATCH_SIZE:
-                    loss = trainer.train_step()
-                    
-                    # Periodic evaluation
-                    if trainer.batches_trained - last_evaluation_step >= EVALUATION_INTERVAL:
-                        trainer.evaluate_model()
-                        last_evaluation_step = trainer.batches_trained
-                
-                # Periodic saves
-                current_time = time.time()
-                if current_time - last_save_time > SAVE_INTERVAL_SECONDS:
-                    trainer.save_model()
-                    trainer.create_visualizations()
-                    last_save_time = current_time
-                    
-                    logger.info(f"Training progress - Batches: {trainer.batches_trained}, "
-                              f"Buffer size: {len(trainer.memory)}, "
-                              f"Recent loss: {np.mean(trainer.training_losses[-10:]):.4f}")
+            # Extract and validate experience
+            state_dict = exp.get("state")
+            action_str = exp.get("action")
+            reward = exp.get("reward")
+            next_state_dict = exp.get("next_state")
+            done = exp.get("done", False)
             
-        except redis.exceptions.TimeoutError:
-            # Timeout is expected - continue loop
-            logger.debug("Redis timeout - continuing...")
-            continue
-        except redis.exceptions.ConnectionError as e:
-            logger.error(f"Redis connection error: {e}. Retrying in 5 seconds...")
-            time.sleep(5)
-            continue
-        except redis.exceptions.RedisError as e:
-            logger.error(f"Redis error: {e}. Reconnecting...")
-            time.sleep(5)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode experience JSON: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error in learner loop: {e}", exc_info=True)
-            time.sleep(5)
+            if not all([state_dict is not None, action_str, isinstance(reward, (int, float)), next_state_dict is not None]):
+                logger.warning(f"Skipping malformed experience: {result}")
+                continue
+
+            # Convert to feature vectors
+            state_vec = trainer._dict_to_feature_vector(state_dict)
+            next_state_vec = trainer._dict_to_feature_vector(next_state_dict)
+            action_idx = ACTION_MAP.get(action_str)
+
+            if action_idx is None:
+                logger.warning(f"Unknown action: {action_str}")
+                continue
+
+            # Store in prioritized replay buffer
+            experience = Experience(state_vec, action_idx, reward, next_state_vec, done, priority=1.0)
+            trainer.memory.push(experience)
+            
+            # Perform training step
+            if len(trainer.memory) >= BATCH_SIZE:
+                loss = trainer.train_step()
+                logger.info(f"🎯 Experience processed: Action={action_str}, Reward={reward:.2f}, Loss={loss:.4f}")
+                
+    except redis.exceptions.ConnectionError as e:
+        logger.error(f"Redis connection error: {e}")
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to decode experience JSON: {e}")
+    except Exception as e:
+        logger.error(f"Error processing experiences: {e}", exc_info=True)
+
+# Fallback timer to ensure we still process experiences even without ScaledObject events
+@kopf.timer('v1', 'namespaces', interval=30)
+async def periodic_experience_processing(**kwargs):
+    """Fallback timer to process experiences periodically."""
+    await process_redis_experiences()
 
 if __name__ == "__main__":
-    main()
+    # Run the Kopf operator
+    kopf.run(
+        clusterwide=True,
+        liveness_endpoint=f"http://0.0.0.0:8080/healthz"
+    )
