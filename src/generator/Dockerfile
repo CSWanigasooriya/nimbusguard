@@ -4,12 +4,12 @@ FROM nimbusguard-base:latest
 WORKDIR /app
 
 # Copy requirements and install Python dependencies
-COPY src/generator/requirements.txt .
+COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 # Copy the load generator scripts
-COPY src/generator/ .
+COPY . .
 
 # Make scripts executable
 RUN chmod +x load_generator.py quick_test.py

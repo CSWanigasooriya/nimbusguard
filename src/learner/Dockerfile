@@ -5,12 +5,12 @@ FROM nimbusguard-base:latest
 WORKDIR /app
 
 # Copy the requirements file and install dependencies
-COPY src/learner/requirements.txt .
+COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 # Copy the rest of the application's code
-COPY src/learner/ .
+COPY . .
 
 # Command to run the application
 CMD ["python", "main.py"]
