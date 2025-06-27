@@ -1,7 +1,7 @@
 {
   "methodology": {
     "approach": "Advanced multi-method feature selection",
-    "target_features": 11,
+    "target_features": 8,
     "selection_methods": [
       "mutual_information",
       "random_forest",
@@ -13,271 +13,292 @@
   },
   "dataset_info": {
     "n_samples": 894,
-    "n_features": 11,
+    "n_features": 8,
     "time_range": null,
     "action_distribution": {
-      "2": 795,
-      "1": 72,
-      "0": 27
+      "0": 476,
+      "2": 379,
+      "1": 39
     }
   },
   "selected_features": [
     "avg_response_time",
+    "kube_pod_container_status_ready",
+    "kube_deployment_spec_replicas_ma_10",
+    "kube_deployment_status_replicas_unavailable",
+    "memory_growth_rate_ma_10",
+    "process_cpu_seconds_total_dev_10",
     "http_request_duration_highr_seconds_sum",
-    "http_request_duration_seconds_sum",
-    "process_resident_memory_bytes",
-    "node_network_iface_link",
-    "node_network_transmit_queue_length",
-    "http_request_duration_seconds_sum_dev_10",
-    "http_request_duration_seconds_sum_ma_5",
-    "http_request_duration_highr_seconds_sum_ma_10",
-    "node_network_flags",
-    "http_request_duration_highr_seconds_sum_ma_5"
+    "kube_pod_container_resource_limits"
   ],
   "feature_analysis": {
     "selection_methods": {
       "mutual_information": {
-        "avg_response_time": 0.36497229741434367,
-        "http_request_duration_highr_seconds_sum": 0.2356087527554651,
-        "http_request_duration_seconds_sum": 0.22360243464681062,
-        "node_disk_discarded_sectors_total": 0.15673344153511604,
-        "go_memstats_last_gc_time_seconds": 0.15260472681867654,
-        "prometheus_remote_storage_queue_highest_sent_timestamp_seconds": 0.15254324492658888,
-        "http_request_size_bytes_created": 0.15173128016033033,
-        "http_response_size_bytes_created": 0.15165302676059778,
-        "http_request_duration_seconds_created": 0.15144968533442693,
-        "http_requests_created": 0.15090836625939552
+        "avg_response_time": 0.6193420096171662,
+        "http_request_duration_highr_seconds_sum": 0.5737497048709415,
+        "http_request_duration_highr_seconds_sum_log": 0.5631170441575888,
+        "process_cpu_seconds_total": 0.4952706591810019,
+        "process_cpu_seconds_total_dev_10": 0.3345917110154959,
+        "scrape_duration_seconds": 0.31411810749996594,
+        "http_request_duration_highr_seconds_bucket": 0.3106162332046205,
+        "http_request_duration_highr_seconds_bucket_log": 0.30555634005479426,
+        "http_request_duration_highr_seconds_created": 0.2778766439553104,
+        "kube_pod_container_status_ready": 0.25751118365541803
       },
       "random_forest": {
-        "avg_response_time": 0.8391971732472612,
-        "health_ratio_log": 0.08547350372481885,
-        "health_ratio": 0.0712845718198424,
-        "health_ratio_dev_10": 0.0010780557900232817,
-        "kube_pod_container_status_ready_dev_10": 0.0007965712267641691,
-        "go_memstats_last_gc_time_seconds_volatility": 0.000654168348809045,
-        "kube_pod_container_status_ready": 0.00029785424447388565,
-        "kube_deployment_status_replicas_unavailable_dev_10": 0.0002882130068208808,
-        "scrape_duration_seconds_dev_5": 0.0002454174109103686,
-        "kube_pod_created_dev_10": 0.00022003806773431323
+        "avg_response_time": 0.7214234196331306,
+        "kube_deployment_status_replicas_unavailable": 0.13064661652445714,
+        "kube_pod_container_status_ready": 0.09976736884868075,
+        "node_disk_discard_time_seconds_total_volatility": 0.004772143274266251,
+        "kube_deployment_spec_replicas_ma_10": 0.004366044910676386,
+        "health_ratio_volatility": 0.0028645408485487157,
+        "memory_usage_mb_ma_10": 0.0026026679244698626,
+        "memory_growth_rate_ma_10": 0.0021928086847965854,
+        "kube_pod_container_resource_limits": 0.0017747477435666019,
+        "kube_pod_container_status_running_volatility": 0.0017336356245114648
       },
       "correlation": {
-        "avg_response_time": [
-          0.3407290109406064,
-          9.710044098655683e-26
+        "http_request_duration_highr_seconds_sum_log": [
+          0.6770703706405383,
+          6.418366311689035e-121
         ],
-        "http_request_duration_seconds_sum": [
-          0.335537508481977,
-          5.775535838650114e-25
+        "process_cpu_seconds_total": [
+          0.584598670476551,
+          4.565884873718215e-83
+        ],
+        "process_cpu_seconds_total_dev_10": [
+          0.4933855017481757,
+          4.9986145410393175e-56
         ],
         "http_request_duration_highr_seconds_sum": [
-          0.3176662668104217,
-          2.0713419131980874e-22
+          0.4418270297019435,
+          5.170823173451224e-44
         ],
-        "avg_response_time_ma_5": [
-          0.2686731530462791,
-          3.0137131969994395e-16
+        "kube_pod_container_resource_limits": [
+          0.3986929968553694,
+          1.9614951677928446e-35
         ],
-        "process_resident_memory_bytes_log": [
-          0.268570514224537,
-          3.0958110505254824e-16
+        "avg_response_time": [
+          0.3954267306416993,
+          7.80825490721757e-35
         ],
-        "http_request_duration_seconds_sum_dev_10": [
-          0.25689819462934577,
-          6.104456602758464e-15
+        "kube_deployment_spec_replicas_ma_10": [
+          0.3555163890562022,
+          5.008494115240877e-28
         ],
-        "http_request_duration_seconds_sum_ma_5": [
-          0.23503701001250923,
-          1.097619214719991e-12
+        "kube_pod_container_status_ready": [
+          0.3521687480234046,
+          1.6916206574559417e-27
         ],
-        "http_request_duration_seconds_sum_dev_5": [
-          0.2333347022061369,
-          1.6102296662271845e-12
+        "hour_cos": [
+          0.3440993255822674,
+          2.9962484623288196e-26
         ],
-        "avg_response_time_dev_10": [
-          0.23324373875837853,
-          1.6434053121190967e-12
-        ],
-        "process_resident_memory_bytes": [
-          0.23097620798666452,
-          2.7247514812059663e-12
+        "node_disk_flush_requests_total_volatility": [
+          0.341767519045727,
+          6.769282193341498e-26
         ]
       },
-      "fast_selected": [
-        "http_request_duration_highr_seconds_sum",
-        "http_request_duration_seconds_sum",
-        "node_network_flags",
-        "node_network_iface_link",
-        "node_network_transmit_queue_length",
-        "process_resident_memory_bytes",
+      "rfecv_selected": [
+        "kube_deployment_status_replicas_unavailable",
+        "kube_pod_container_status_ready",
         "avg_response_time",
-        "http_request_duration_highr_seconds_sum_ma_5",
-        "http_request_duration_highr_seconds_sum_dev_5",
-        "http_request_duration_highr_seconds_sum_ma_10",
-        "http_request_duration_highr_seconds_sum_dev_10",
-        "http_request_duration_seconds_sum_ma_5",
-        "http_request_duration_seconds_sum_dev_5",
-        "http_request_duration_seconds_sum_ma_10",
-        "http_request_duration_seconds_sum_dev_10",
-        "process_resident_memory_bytes_log",
-        "process_resident_memory_bytes_ma_5",
-        "process_resident_memory_bytes_ma_10",
-        "avg_response_time_ma_5",
-        "avg_response_time_dev_5",
-        "avg_response_time_ma_10",
-        "avg_response_time_dev_10"
+        "kube_deployment_spec_replicas_ma_10",
+        "memory_growth_rate_ma_10"
+      ],
+      "statistical_significance": {
+        "http_request_duration_highr_seconds_sum_log": [
+          377.2175111523316,
+          2.0770592950182753e-119
+        ],
+        "process_cpu_seconds_total": [
+          232.8323245988215,
+          4.508317912655028e-82
+        ],
+        "process_cpu_seconds_total_dev_10": [
+          148.43810879770209,
+          2.290620520583076e-56
+        ],
+        "http_request_duration_highr_seconds_sum": [
+          113.01406765170476,
+          1.8111532722635732e-44
+        ],
+        "kube_pod_container_resource_limits": [
+          87.33162000932731,
+          2.3217411380845934e-35
+        ],
+        "avg_response_time": [
+          85.09644452660665,
+          1.51057613179701e-34
+        ],
+        "kube_deployment_spec_replicas_ma_10": [
+          65.13877322060702,
+          3.953315735292092e-27
+        ],
+        "kube_pod_container_status_ready": [
+          63.23206595225224,
+          2.092928701494269e-26
+        ],
+        "hour_cos": [
+          60.04019038463441,
+          3.4553753289727036e-25
+        ],
+        "node_disk_flush_requests_total_volatility": [
+          58.93171662807588,
+          9.18737336176727e-25
+        ]
+      },
+      "low_vif_features": [
+        "hour_sin_dev_10",
+        "memory_growth_rate",
+        "request_rate_velocity_ma_15",
+        "request_rate_velocity_ma_10",
+        "hour_cos_dev_10",
+        "is_business_hours_volatility",
+        "is_business_hours_dev_10",
+        "http_request_duration_highr_seconds_created_dev_10",
+        "response_time_p95_dev_10",
+        "kube_pod_deletion_timestamp_dev_10",
+        "system_stability_dev_10",
+        "hour_sin_volatility",
+        "avg_response_time",
+        "request_rate_velocity",
+        "kube_pod_completion_time_dev_10",
+        "day_sin_dev_10",
+        "kube_pod_container_status_terminated_volatility",
+        "kube_pod_init_container_status_ready_volatility",
+        "response_time_p95_volatility",
+        "hour_cos_volatility"
       ]
     },
+    "advanced_metrics": {
+      "rfecv_optimal_features": 5,
+      "statistically_significant_count": 81,
+      "low_multicollinearity_count": 39,
+      "ensemble_weights": {
+        "mutual_information": 0.25,
+        "random_forest": 0.25,
+        "correlation": 0.15,
+        "rfecv": 0.2,
+        "statistical_significance": 0.1,
+        "vif_bonus": 0.05
+      }
+    },
     "final_scores": {
-      "avg_response_time": 980.0,
-      "http_request_duration_highr_seconds_sum": 965.8000000000001,
-      "http_request_duration_seconds_sum": 964.5,
-      "process_resident_memory_bytes": 884.6,
-      "node_network_iface_link": 861.0,
-      "node_network_transmit_queue_length": 847.1999999999999,
-      "http_request_duration_seconds_sum_dev_10": 806.5,
-      "http_request_duration_seconds_sum_ma_5": 803.6,
-      "http_request_duration_highr_seconds_sum_ma_10": 797.7,
-      "node_network_flags": 796.7,
-      "http_request_duration_highr_seconds_sum_ma_5": 787.0
+      "avg_response_time": 120.25,
+      "kube_pod_container_status_ready": 110.7,
+      "kube_deployment_spec_replicas_ma_10": 108.45,
+      "kube_deployment_status_replicas_unavailable": 105.89999999999999,
+      "memory_growth_rate_ma_10": 90.25,
+      "process_cpu_seconds_total_dev_10": 85.75,
+      "http_request_duration_highr_seconds_sum": 82.3,
+      "kube_pod_container_resource_limits": 81.5
     },
     "selected_features": [
       "avg_response_time",
+      "kube_pod_container_status_ready",
+      "kube_deployment_spec_replicas_ma_10",
+      "kube_deployment_status_replicas_unavailable",
+      "memory_growth_rate_ma_10",
+      "process_cpu_seconds_total_dev_10",
       "http_request_duration_highr_seconds_sum",
-      "http_request_duration_seconds_sum",
-      "process_resident_memory_bytes",
-      "node_network_iface_link",
-      "node_network_transmit_queue_length",
-      "http_request_duration_seconds_sum_dev_10",
-      "http_request_duration_seconds_sum_ma_5",
-      "http_request_duration_highr_seconds_sum_ma_10",
-      "node_network_flags",
-      "http_request_duration_highr_seconds_sum_ma_5"
+      "kube_pod_container_resource_limits"
     ]
   },
   "scaler_statistics": {
     "scaler_type": "RobustScaler",
     "features": [
       "avg_response_time",
+      "kube_pod_container_status_ready",
+      "kube_deployment_spec_replicas_ma_10",
+      "kube_deployment_status_replicas_unavailable",
+      "memory_growth_rate_ma_10",
+      "process_cpu_seconds_total_dev_10",
       "http_request_duration_highr_seconds_sum",
-      "http_request_duration_seconds_sum",
-      "process_resident_memory_bytes",
-      "node_network_iface_link",
-      "node_network_transmit_queue_length",
-      "http_request_duration_seconds_sum_dev_10",
-      "http_request_duration_seconds_sum_ma_5",
-      "http_request_duration_highr_seconds_sum_ma_10",
-      "node_network_flags",
-      "http_request_duration_highr_seconds_sum_ma_5"
+      "kube_pod_container_resource_limits"
     ],
-    "n_features": 11,
+    "n_features": 8,
     "n_samples": 894,
     "feature_statistics": {
       "avg_response_time": {
-        "median": 567.1684196074266,
-        "scale": 542.5235586187948,
-        "original_mean": 635.9348203459826,
-        "original_std": 534.7098110848888,
+        "median": 4.373002168152223,
+        "scale": 248.07957686758226,
+        "original_mean": 430.43116772346826,
+        "original_std": 1217.2216861639442,
+        "original_min": 0.5116879294438988,
+        "original_max": 11753.099531285861
+      },
+      "kube_pod_container_status_ready": {
+        "median": 0.9473684210526315,
+        "scale": 0.030612244897959107,
+        "original_mean": 0.9405031017180199,
+        "original_std": 0.02832926138273111,
+        "original_min": 0.7009722222222222,
+        "original_max": 0.9775280898876404
+      },
+      "kube_deployment_spec_replicas_ma_10": {
+        "median": 2.026923076923077,
+        "scale": 1.252207977207977,
+        "original_mean": 2.1264404951291973,
+        "original_std": 0.8270648410149908,
+        "original_min": 1.037037037037037,
+        "original_max": 4.555761538461542
+      },
+      "kube_deployment_status_replicas_unavailable": {
+        "median": 0.0,
+        "scale": 0.07407407407407407,
+        "original_mean": 0.040535440448192135,
+        "original_std": 0.08757000018411402,
         "original_min": 0.0,
-        "original_max": 5193.484473140101
+        "original_max": 1.3241538461538591
+      },
+      "memory_growth_rate_ma_10": {
+        "median": 0.7271093609122543,
+        "scale": 1.5366391766834249,
+        "original_mean": 0.9804431880078791,
+        "original_std": 1.0040932192796828,
+        "original_min": -0.14290046115063443,
+        "original_max": 5.383527544348199
+      },
+      "process_cpu_seconds_total_dev_10": {
+        "median": -1.5424999999999989,
+        "scale": 13.823500000000001,
+        "original_mean": 0.01355165422037753,
+        "original_std": 15.979561606489494,
+        "original_min": -41.227999999999994,
+        "original_max": 88.24616300000014
       },
       "http_request_duration_highr_seconds_sum": {
-        "median": 67.11862850550555,
-        "scale": 98.24594656320272,
-        "original_mean": 87.0384680387999,
-        "original_std": 82.68325279813627,
-        "original_min": 0.0,
-        "original_max": 768.0393717149964
+        "median": 0.3417938720012898,
+        "scale": 9.016828706241087,
+        "original_mean": 96.57618578148242,
+        "original_std": 247.16308820562236,
+        "original_min": 0.0007872088812282336,
+        "original_max": 1877.231694676603
       },
-      "http_request_duration_seconds_sum": {
-        "median": 20.717914042745903,
-        "scale": 27.47969194650795,
-        "original_mean": 24.53059466105577,
-        "original_std": 21.77954409745862,
-        "original_min": 0.0,
-        "original_max": 192.0098429287491
-      },
-      "process_resident_memory_bytes": {
-        "median": 167634782.31578946,
-        "scale": 84314149.23636363,
-        "original_mean": 178603336.9502098,
-        "original_std": 63001035.66097002,
-        "original_min": 17002496.0,
-        "original_max": 498085888.0
-      },
-      "node_network_iface_link": {
-        "median": 8.197802197802197,
-        "scale": 0.8555045871559628,
-        "original_mean": 8.20214587343698,
-        "original_std": 0.5321214642836664,
-        "original_min": 6.642857142857143,
-        "original_max": 9.711538461538462
-      },
-      "node_network_transmit_queue_length": {
-        "median": 956.5217391304348,
-        "scale": 12.616822429906506,
-        "original_mean": 956.7035794474523,
-        "original_std": 8.494700758295457,
-        "original_min": 928.5714285714286,
-        "original_max": 980.7692307692307
-      },
-      "http_request_duration_seconds_sum_dev_10": {
-        "median": 0.0,
-        "scale": 12.00290848423265,
-        "original_mean": 0.1307742174117011,
-        "original_std": 14.199103812023143,
-        "original_min": -64.24940637829678,
-        "original_max": 105.16503537079332
-      },
-      "http_request_duration_seconds_sum_ma_5": {
-        "median": 20.869270581052582,
-        "scale": 25.9124962440773,
-        "original_mean": 24.486097336658702,
-        "original_std": 19.158581710044736,
-        "original_min": 0.0,
-        "original_max": 99.60415361850825
-      },
-      "http_request_duration_highr_seconds_sum_ma_10": {
-        "median": 75.68257368870573,
-        "scale": 90.94346247536576,
-        "original_mean": 86.59142751728939,
-        "original_std": 66.06427105719753,
-        "original_min": 0.0,
-        "original_max": 329.6104754715752
-      },
-      "node_network_flags": {
-        "median": 2712.521739130435,
-        "scale": 402.3378504672896,
-        "original_mean": 2718.320444999804,
-        "original_std": 270.8875124812838,
-        "original_min": 1821.2142857142858,
-        "original_max": 3485.75
-      },
-      "http_request_duration_highr_seconds_sum_ma_5": {
-        "median": 71.31868799370712,
-        "scale": 92.17315129521313,
-        "original_mean": 86.88713882408896,
-        "original_std": 71.70723559800655,
-        "original_min": 0.0,
-        "original_max": 386.17617746748135
+      "kube_pod_container_resource_limits": {
+        "median": 342913479.30277777,
+        "scale": 75846735.14591151,
+        "original_mean": 335182487.5635828,
+        "original_std": 64278353.872185715,
+        "original_min": 204031248.6847186,
+        "original_max": 438526298.3612676
       }
     }
   },
   "quality_metrics": {
     "missing_data_percentage": 0.0,
     "feature_stability": {
-      "avg_response_time": 0.8408248662231659,
-      "http_request_duration_highr_seconds_sum": 0.9499621685817776,
-      "http_request_duration_seconds_sum": 0.8878522314904623,
-      "process_resident_memory_bytes": 0.3527427691820383,
-      "node_network_iface_link": 0.06487587609616766,
-      "node_network_transmit_queue_length": 0.00887913553571365,
-      "http_request_duration_seconds_sum_dev_10": 108.5764114413369,
-      "http_request_duration_seconds_sum_ma_5": 0.782426887560195,
-      "http_request_duration_highr_seconds_sum_ma_10": 0.7629423857351738,
-      "node_network_flags": 0.09965253098835845,
-      "http_request_duration_highr_seconds_sum_ma_5": 0.8252917030435628
+      "avg_response_time": 2.827912508691841,
+      "kube_pod_container_status_ready": 0.030121358674546996,
+      "kube_deployment_spec_replicas_ma_10": 0.38894314417276754,
+      "kube_deployment_status_replicas_unavailable": 2.160278485626616,
+      "memory_growth_rate_ma_10": 1.0241207317673584,
+      "process_cpu_seconds_total_dev_10": 1179.0724788405587,
+      "http_request_duration_highr_seconds_sum": 2.559254992795114,
+      "kube_pod_container_resource_limits": 0.19177121793987573
     }
   },
-  "created_at": "2025-06-27T18:41:57.200107",
+  "created_at": "2025-06-27T22:21:20.114334",
   "research_grade": true
 }

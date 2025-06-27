@@ -1,37 +1,38 @@
 {
   "feature_engineering_summary": {
     "total_samples": 894,
-    "total_features": 11,
+    "total_features": 8,
     "time_range": {
       "start": "N/A",
       "end": "N/A",
       "duration_hours": "N/A"
     },
     "action_distribution": {
-      "2": 795,
-      "1": 72,
-      "0": 27
+      "0": 476,
+      "2": 379,
+      "1": 39
     },
     "feature_categories": {
       "response_time": 1,
-      "health_metrics": 6,
-      "request_metrics": 6,
-      "resource_metrics": 1,
-      "rpc_metrics": 0
+      "pod_status": 1,
+      "deployment_metrics": 2,
+      "health_ratios": 0,
+      "resource_limits": 1,
+      "deviation_features": 1
     }
   },
   "data_quality_metrics": {
     "missing_values": 0,
-    "duplicate_rows": 17,
+    "duplicate_rows": 66,
     "feature_variance_stats": {
-      "mean_variance": 330760874560964.06,
-      "std_variance": 1145789279672365.5,
+      "mean_variance": 459078530895656.56,
+      "std_variance": 1377235592108353.5,
       "note": "Calculated on raw features - use normalized variance for feature importance"
     }
   },
   "scaling_insights": {
-    "scale_up_percentage": 0.0,
-    "scale_down_percentage": 0.0,
-    "keep_same_percentage": 0.0
+    "scale_up_percentage": 42.39373601789709,
+    "scale_down_percentage": 53.24384787472036,
+    "keep_same_percentage": 4.3624161073825505
   }
 }
