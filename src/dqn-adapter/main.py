@@ -22,6 +22,28 @@ load_dotenv()
 # Note: kopf handles its own logging setup, we'll configure it in the startup handler
 logger = logging.getLogger("DQN_Adapter")
 
+# --- Kopf Health Check Probes ---
+@kopf.on.probe(id='status')
+def health_status(**kwargs):
+    """Health status probe for Kopf liveness check"""
+    return {"status": "healthy", "service": "dqn-adapter"}
+
+@kopf.on.probe(id='redis_connection')
+def redis_health(**kwargs):
+    """Check Redis connection health"""
+    try:
+        if redis_client and redis_client.ping():
+            return {"redis": "connected"}
+        else:
+            return {"redis": "disconnected"}
+    except Exception as e:
+        return {"redis": f"error: {str(e)}"}
+
+@kopf.on.probe(id='scaler_loaded')
+def scaler_health(**kwargs):
+    """Check if the feature scaler is loaded"""
+    return {"scaler": "loaded" if scaler else "not_loaded"}
+
 # --- Environment & Configuration ---
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus.nimbusguard.svc:9090")
 KSERVE_URL = os.getenv("KSERVE_URL")
@@ -29,7 +51,7 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
 POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", 30))
 TARGET_DEPLOYMENT = os.getenv("TARGET_DEPLOYMENT", "consumer")
 TARGET_NAMESPACE = os.getenv("TARGET_NAMESPACE", "nimbusguard")
-SCALER_PATH = os.getenv("SCALER_PATH", "/app/models/feature_scaler.joblib")
+SCALER_PATH = os.getenv("SCALER_PATH", "/app/feature_scaler.gz")
 STABILIZATION_PERIOD_SECONDS = int(os.getenv("STABILIZATION_PERIOD_SECONDS", 60)) # Time to wait after action
 REWARD_LATENCY_WEIGHT = float(os.getenv("REWARD_LATENCY_WEIGHT", 10.0)) # Higher = more penalty for latency
 REWARD_REPLICA_COST = float(os.getenv("REWARD_REPLICA_COST", 0.1)) # Cost per replica
@@ -218,9 +240,6 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     logging.getLogger().handlers.clear()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    # Make kopf's health checks available at the root
-    settings.server.health_endpoint = "/health"
-    
     logger.info("🚀 NimbusGuard DQN Operator starting up...")
     
     # Initialize all global clients
@@ -245,8 +264,13 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         
     if MCP_SERVER_URL:
         try:
-            mcp_client = MultiServerMCPClient(mcp_server_url=MCP_SERVER_URL)
-            tools = mcp_client.get_tools()
+            mcp_client = MultiServerMCPClient({
+                "kubernetes": {
+                    "url": f"{MCP_SERVER_URL}/sse/",
+                    "transport": "streamable_http"
+                }
+            })
+            tools = await mcp_client.get_tools()
             validator_agent = create_react_agent(llm, tools=tools)
             logger.info(f"LLM validator agent initialized with {len(tools)} tools from MCP.")
         except Exception as e:
