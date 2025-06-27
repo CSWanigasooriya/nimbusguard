@@ -1,13 +1,15 @@
 # Use base image
 FROM nimbusguard-base:latest
 
+WORKDIR /app
+
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY src/consumer/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 # Copy application code
-COPY . .
+COPY src/consumer/ .
 
 # Switch to non-root user
 USER app

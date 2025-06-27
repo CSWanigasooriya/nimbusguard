@@ -106,19 +106,33 @@ setup: ## Setup development environment (install latest tools)
 		fi; \
 	fi
 	
-	# Setup Helm repositories (only update if needed)
 	@echo ""
 	@echo "📦 Checking Helm repositories..."
 	@if ! helm repo list | grep -q kedacore 2>/dev/null; then \
 		echo "📥 Adding Helm repositories..."; \
-		helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true; \
-		helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true; \
-		helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true; \
-		helm repo add jetstack https://charts.jetstack.io 2>/dev/null || true; \
-		helm repo update; \
+		helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1; \
 		echo "✅ Helm repositories configured"; \
 	else \
 		echo "✅ Helm repositories already configured"; \
+	fi
+	
+	@echo ""
+	@echo "🔧 Creating 'nimbusguard' namespace if it doesn't exist..."
+	@kubectl create namespace nimbusguard >/dev/null 2>&1 || echo "✅ Namespace 'nimbusguard' already exists."
+	@echo ""
+	@echo "🔑 Configuring OpenAI API Key..."
+	@echo "The dqn-adapter requires an OpenAI API key to function."
+	@echo "You can get one from https://platform.openai.com/api-keys"
+	@read -s -p "Enter your OpenAI API Key (leave blank to skip): " OPENAI_API_KEY; \
+	if [ -n "$$OPENAI_API_KEY" ]; then \
+		kubectl create secret generic openai-api-key --namespace=nimbusguard \
+			--from-literal=key=$$OPENAI_API_KEY \
+			--dry-run=client -o yaml | kubectl apply -f - >/dev/null; \
+		echo "\n✅ OpenAI API Key secret configured in 'nimbusguard' namespace."; \
+	else \
+		echo "\n⚠️  Skipped OpenAI API Key configuration. The dqn-adapter may not work."; \
+		echo "   You can create the secret manually later with: "; \
+		echo "   kubectl create secret generic openai-api-key -n nimbusguard --from-literal=key=YOUR_API_KEY"; \
 	fi
 	
 	# Install metrics-server for CPU/Memory monitoring
@@ -144,307 +158,150 @@ setup: ## Setup development environment (install latest tools)
 	@echo "   • yq: $$(yq --version 2>/dev/null || echo 'not installed')"
 	@echo "   • k9s: $$(k9s version -s 2>/dev/null || echo 'not installed')"
 	@echo ""
-	@echo "🚀 Ready to deploy! Try: make helm-dev (recommended) or make dev (legacy)"
-
+	@echo "🧠 Installing KServe platform (this may take a few minutes)..."
+	@$(MAKE) kserve-install
 	@echo ""
-	@echo "🔍 Checking Kubeflow Pipelines installation..."
-	@if kubectl get ns kubeflow >/dev/null 2>&1; then \
-		echo "✅ Kubeflow Pipelines already installed"; \
-	else \
-		echo "📥 Installing Kubeflow Pipelines (version $(PIPELINE_VERSION))..."; \
-		$(MAKE) kfp-install; \
-	fi
-
-# Default Kubeflow Pipelines version (override with PIPELINE_VERSION=x.y.z)
-PIPELINE_VERSION ?= 2.4.0
+	@echo "🚀 Ready to deploy!"
 
 # -----------------------------------------------------------------------------
-# Kubeflow Pipelines
+# MLOps Platform Installation
 # -----------------------------------------------------------------------------
 
-kfp-install: ## Install stand-alone Kubeflow Pipelines into the current cluster
-	@echo "🚀 Installing Kubeflow Pipelines ($(PIPELINE_VERSION))..."
-	@kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref=$(PIPELINE_VERSION)" >/dev/null
-	@kubectl wait --for condition=established --timeout=60s crd/applications.app.k8s.io || true
-	@kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic?ref=$(PIPELINE_VERSION)" >/dev/null
-	@echo "✅ Kubeflow Pipelines installed"
-
-kfp-delete: ## Remove Kubeflow Pipelines from the cluster
-	@echo "🗑️  Deleting Kubeflow Pipelines..."
-	@kubectl delete -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic?ref=$(PIPELINE_VERSION)" 2>/dev/null || true
-	@kubectl delete -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref=$(PIPELINE_VERSION)" 2>/dev/null || true
-	@kubectl delete namespace kubeflow --ignore-not-found=true
-	@echo "✅ Kubeflow Pipelines removed"
-
-setup-update: ## Update all existing tools to latest versions
-	@echo "🔄 Updating all tools to latest versions..."
-	@if [ "$$(uname)" = "Darwin" ]; then \
-		brew update && brew upgrade kubernetes-cli helm jq yq k9s 2>/dev/null; \
-		brew upgrade --cask docker 2>/dev/null || true; \
+kserve-install: ## Install KServe and all its dependencies (cert-manager, Knative)
+	@echo "🔧 Installing KServe MLOps Platform..."
+	@echo ""
+	@echo "🔐 Step 1: Installing cert-manager..."
+	@if ! kubectl get namespace cert-manager >/dev/null 2>&1; then \
+		echo "📥 Applying cert-manager manifests..."; \
+		kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.15.1/cert-manager.yaml; \
+		echo "⏳ Waiting for cert-manager webhook to be ready..."; \
+		kubectl wait --for=condition=Available deployment/cert-manager-webhook --namespace cert-manager --timeout=300s; \
+		echo "✅ cert-manager installed."; \
 	else \
-		echo "🐧 For Linux, please run 'make setup' to get latest versions"; \
+		echo "✅ cert-manager already installed."; \
 	fi
-	@helm repo update
-	@echo "✅ All tools updated!"
-
-## 🎯 Helm Chart Commands (Recommended)
-
-helm-lint: ## Lint the Helm chart
-	@echo "🔍 Linting Helm chart..."
-	@helm lint helm-chart
-	@echo "✅ Helm chart linting complete"
-
-helm-template: ## Generate Kubernetes manifests from Helm chart (dry-run)
-	@echo "📋 Generating Kubernetes manifests from Helm chart..."
-	@helm template nimbusguard helm-chart --debug
-
-helm-install: build-all ## Install NimbusGuard using Helm chart
-	@echo "🚀 Installing NimbusGuard with Helm..."
-	@echo "🔧 Adding required Helm repositories..."
-	@helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
-	@helm repo update
-	@echo "📦 Installing NimbusGuard..."
-	@helm install nimbusguard helm-chart --create-namespace --wait --timeout=600s
-	@echo "✅ NimbusGuard installed successfully!"
-
-helm-upgrade: build-all ## Upgrade NimbusGuard installation
-	@echo "🔄 Upgrading NimbusGuard with Helm..."
-	@helm upgrade nimbusguard helm-chart --wait --timeout=600s
-	@echo "✅ NimbusGuard upgraded successfully!"
-
-helm-dev: build-all ## Install/upgrade NimbusGuard for development
-	@echo "🚀 Deploying NimbusGuard for development..."
-	@helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
-	@helm repo update
-	@if helm list | grep -q nimbusguard 2>/dev/null; then \
-		echo "🔄 Upgrading existing installation..."; \
-		helm upgrade nimbusguard helm-chart \
-			--set monitoring.grafana.adminPassword=admin \
-			--set consumer.image.tag=latest \
-			--set keda.scaledObject.minReplicaCount=1 \
-			--wait --timeout=600s; \
+	@echo ""
+	@echo "🚀 Step 2: Installing Knative Serving..."
+	@if ! kubectl get namespace knative-serving >/dev/null 2>&1; then \
+		echo "📥 Applying Knative Serving CRDs..."; \
+		kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.14.1/serving-crds.yaml; \
+		echo "📥 Applying Knative Serving core components..."; \
+		kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.14.1/serving-core.yaml; \
+		echo "⏳ Waiting for Knative Serving to be ready..."; \
+		kubectl wait --for=condition=Available deployment/controller --namespace knative-serving --timeout=300s; \
+		echo "✅ Knative Serving installed."; \
 	else \
-		echo "📦 Installing fresh deployment..."; \
-		helm install nimbusguard helm-chart \
-			--set monitoring.grafana.adminPassword=admin \
-			--set consumer.image.tag=latest \
-			--set keda.scaledObject.minReplicaCount=1 \
-			--create-namespace --wait --timeout=600s; \
+		echo "✅ Knative Serving already installed."; \
 	fi
-	@echo "✅ Development deployment complete!"
-
-helm-prod: build-all ## Install/upgrade NimbusGuard for production
-	@echo "🚀 Deploying NimbusGuard for production..."
-	@helm repo add kedacore https://kedacore.github.io/charts 2>/dev/null || true
-	@helm repo update
-	@if [ -z "$$GRAFANA_PASSWORD" ]; then \
-		echo "❌ GRAFANA_PASSWORD environment variable is required for production"; \
-		echo "   Set it with: export GRAFANA_PASSWORD=your-secure-password"; \
-		exit 1; \
-	fi
-	@if helm list | grep -q nimbusguard 2>/dev/null; then \
-		echo "🔄 Upgrading existing installation..."; \
-		helm upgrade nimbusguard helm-chart \
-			--set monitoring.grafana.adminPassword=$$GRAFANA_PASSWORD \
-			--set consumer.image.tag=latest \
-			--set keda.scaledObject.minReplicaCount=2 \
-			--set keda.scaledObject.maxReplicaCount=20 \
-			--wait --timeout=600s; \
+	@echo ""
+	@echo "🌐 Step 3: Installing Kourier Ingress for Knative..."
+	@if ! kubectl get namespace kourier-system >/dev/null 2>&1; then \
+		echo "📥 Applying Kourier manifests..."; \
+		kubectl apply -f https://github.com/knative/net-kourier/releases/download/knative-v1.14.0/kourier.yaml; \
+		echo "⏳ Waiting for Kourier gateway to be ready..."; \
+		kubectl wait --for=condition=ready --timeout=180s -n kourier-system pod -l app=3scale-kourier-gateway; \
+		echo "⚙️  Configuring Knative to use Kourier as default ingress..."; \
+		kubectl patch configmap/config-network --namespace knative-serving --type merge --patch '{"data":{"ingress.class":"kourier.ingress.networking.knative.dev"}}'; \
+		echo "🔗 Configuring Knative domain with magic DNS (sslip.io)..."; \
+		IP_ADDRESS=$$(kubectl get svc -n kourier-system kourier -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1"); \
+		if [ "$$IP_ADDRESS" = "127.0.0.1" ]; then echo "⚠️  Could not get Kourier external IP, defaulting to 127.0.0.1. You may need to configure domain manually."; fi; \
+		kubectl patch configmap/config-domain --namespace knative-serving --type merge --patch "{\"data\":{\"$${IP_ADDRESS}.sslip.io\":\"\"}}"; \
+		echo "✅ Kourier installed and configured."; \
 	else \
-		echo "📦 Installing fresh deployment..."; \
-		helm install nimbusguard helm-chart \
-			--set monitoring.grafana.adminPassword=$$GRAFANA_PASSWORD \
-			--set consumer.image.tag=latest \
-			--set keda.scaledObject.minReplicaCount=2 \
-			--set keda.scaledObject.maxReplicaCount=20 \
-			--create-namespace --wait --timeout=600s; \
+		echo "✅ Kourier already installed and configured."; \
 	fi
-	@echo "✅ Production deployment complete!"
+	@echo ""
+	@echo "🧠 Step 4: Installing KServe..."
+	@if ! kubectl get namespace kserve >/dev/null 2>&1; then \
+		echo "📥 Applying KServe manifests..."; \
+		kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.13.0/kserve.yaml; \
+		echo "⏳ Waiting for KServe controller to be ready..."; \
+		kubectl wait --for=condition=Available deployment/kserve-controller-manager --namespace kserve --timeout=300s; \
+		echo "📚 Installing KServe built-in runtimes..."; \
+		kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.13.0/kserve-cluster-resources.yaml; \
+		echo "✅ KServe installed."; \
+	else \
+		echo "✅ KServe already installed."; \
+	fi
 
-helm-test: ## Run Helm chart tests
-	@echo "🧪 Running Helm chart tests..."
-	@helm test nimbusguard
-	@echo "✅ Helm tests completed!"
+# -----------------------------------------------------------------------------
+# KEDA Installation
+# -----------------------------------------------------------------------------
 
-helm-uninstall: ## Uninstall NimbusGuard Helm release
-	@echo "🗑️  Uninstalling NimbusGuard..."
-	@helm uninstall nimbusguard 2>/dev/null || echo "NimbusGuard not found"
-	@echo "🗑️  Cleaning up KEDA..."
-	@helm uninstall keda -n keda 2>/dev/null || echo "KEDA not found"
-	@kubectl delete namespace keda --ignore-not-found=true
-	@kubectl delete namespace nimbusguard --ignore-not-found=true
-	@echo "✅ Cleanup complete!"
-
-## 🛠️ Legacy Kubernetes Commands (for reference)
-
-keda-install: ## Install KEDA using Helm
-	@echo "🎯 Installing KEDA..."
-	@if ! helm list -n keda | grep -q keda 2>/dev/null; then \
-		helm install keda kedacore/keda --namespace keda --create-namespace \
-			--set operator.replicaCount=1 \
-			--set webhooks.enabled=true \
-			--set prometheus.metricServer.enabled=false; \
-		echo "⏳ Waiting for KEDA operator to be ready..."; \
-		sleep 30; \
+keda-install: ## Install the KEDA operator in the 'nimbusguard' namespace
+	@echo "📦 Installing KEDA operator into nimbusguard namespace..."
+	@if ! helm list -n nimbusguard | grep -q keda 2>/dev/null; then \
+		helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1; \
+		helm repo update kedacore >/dev/null 2>&1; \
+		helm install keda kedacore/keda --namespace nimbusguard --wait; \
 		echo "✅ KEDA installed successfully"; \
 	else \
-		echo "✅ KEDA already installed"; \
+		echo "✅ KEDA already installed in nimbusguard namespace"; \
 	fi
-	@kubectl get pods -n keda 2>/dev/null || echo "KEDA pods starting..."
 
-# Remove KEDA-managed objects that are no longer present in the manifests (eg, after commenting out the KEDA component)
-keda-prune: ## Prune KEDA ScaledObjects/HPA that no longer exist in manifests
-	@echo "🧹 Deleting ScaledObjects and HPAs managed by KEDA in nimbusguard namespace..."
-	@kubectl delete scaledobject -n nimbusguard --ignore-not-found=true --all
-	@kubectl delete hpa -n nimbusguard -l app.kubernetes.io/managed-by=keda-operator --ignore-not-found=true
-	@echo "✅ Autoscaling disabled – KEDA resources cleaned up"
+keda-uninstall: ## Uninstall the KEDA operator
+	@echo "🗑️  Uninstalling KEDA operator from nimbusguard namespace..."
+	@helm uninstall keda -n nimbusguard 2>/dev/null || true
+	@echo "✅ KEDA uninstalled"
 
-# Pause and resume autoscaling via annotations
-keda-pause: ## Pause KEDA autoscaling (REPLICAS=<n> to keep n replicas)
+# -----------------------------------------------------------------------------
+# KEDA Management Commands
+# -----------------------------------------------------------------------------
+
+keda-pause: ## Pause KEDA autoscaling (REPLICAS=<n> to set replica count)
 	@echo "⏸️  Pausing KEDA autoscaling..."
 	@if [ -z "$(REPLICAS)" ]; then \
-		kubectl annotate scaledobject -n nimbusguard consumer-scaler autoscaling.keda.sh/paused="true" --overwrite; \
+		kubectl annotate scaledobject -n nimbusguard nimbusguard-scaler autoscaling.keda.sh/paused="true" --overwrite; \
 	else \
-		kubectl annotate scaledobject -n nimbusguard consumer-scaler \
+		kubectl annotate scaledobject -n nimbusguard nimbusguard-scaler \
 			autoscaling.keda.sh/paused="true" autoscaling.keda.sh/paused-replicas="$(REPLICAS)" --overwrite; \
 	fi
-	@echo "✅ Autoscaling paused"
+	@echo "✅ Autoscaling paused."
 
-keda-resume: ## Resume KEDA autoscaling (remove pause annotations)
+keda-resume: ## Resume KEDA autoscaling
 	@echo "▶️  Resuming KEDA autoscaling..."
-	@kubectl annotate scaledobject -n nimbusguard consumer-scaler \
+	@kubectl annotate scaledobject -n nimbusguard nimbusguard-scaler \
 		autoscaling.keda.sh/paused- autoscaling.keda.sh/paused-replicas- --overwrite
 	@echo "✅ Autoscaling resumed"
 
-keda-uninstall: ## Uninstall KEDA
-	@echo "🗑️  Uninstalling KEDA..."
-	@helm uninstall keda -n keda 2>/dev/null || true
-	@kubectl delete namespace keda --ignore-not-found=true
-	@echo "✅ KEDA uninstalled"
+# -----------------------------------------------------------------------------
+# Load Testing Commands
+# -----------------------------------------------------------------------------
 
-build-base: ## Build base Docker image
-	@echo "🔨 Building nimbusguard-base image..."
-	@docker buildx bake -f docker-bake.hcl --set *.output=type=docker nimbusguard-base
-	@echo "✅ Base image built"
-
-build-consumer: build-base ## Build consumer Docker image
-	@echo "🔨 Building nimbusguard-consumer image..."
-	@docker buildx bake -f docker-bake.hcl --set *.output=type=docker consumer
-	@echo "✅ Consumer image built"
-
-build-generator: build-base ## Build load generator Docker image
-	@echo "🔨 Building nimbusguard-generator image..."
-	@docker buildx bake -f docker-bake.hcl --set *.output=type=docker generator
-	@echo "✅ Generator image built"
-
-build-all: ## Build all Docker images
-	@echo "🔨 Building all nimbusguard images..."
-	@docker buildx bake -f docker-bake.hcl --set *.output=type=docker all
-	@echo "✅ All images built"
-
-build: build-all ## Alias for build-all
-
-dev: build-all ## Build images and deploy to development (legacy)
-	@echo "🚀 Building images and deploying to development..."
-	@echo "🔍 Checking KEDA installation..."
-	@if ! helm list -n keda | grep -q keda 2>/dev/null; then \
-		echo "⚠️  KEDA not found, installing it first..."; \
-		$(MAKE) keda-install; \
-	else \
-		echo "✅ KEDA already installed"; \
-	fi
-	@echo "🚀 Deploying to development..."
-	kubectl apply -k kubernetes-manifests/overlays/development
-	@echo "✅ Development deployment complete!"
-	@echo "💡 Consider using 'make helm-dev' for better deployment management!"
-
-prod: ## Deploy to production (legacy)
-	kubectl apply -k kubernetes-manifests/overlays/production
-
-run: ## Dry run deployment (legacy)
-	kubectl apply -k kubernetes-manifests/overlays/development --dry-run=client
-
-forward: stop-forward ## Port forward ALL services at once
-	@echo "🚀 Starting all port forwarding in background..."
-	# NimbusGuard namespace
-	@kubectl port-forward -n nimbusguard svc/consumer 8000:8000 > /dev/null 2>&1 &
-	@kubectl port-forward -n nimbusguard svc/prometheus 9090:9090 > /dev/null 2>&1 &
-	@kubectl port-forward -n nimbusguard svc/grafana 3000:3000 > /dev/null 2>&1 &
-	@kubectl port-forward -n nimbusguard svc/loki 3100:3100 > /dev/null 2>&1 &
-	@kubectl port-forward -n nimbusguard svc/tempo 3200:3200 > /dev/null 2>&1 &
-	@kubectl port-forward -n nimbusguard svc/alloy 8080:8080 > /dev/null 2>&1 &
-	# Kubeflow (KFP) namespace
-	@kubectl port-forward -n kubeflow svc/ml-pipeline-ui 8081:80 > /dev/null 2>&1 &
-	@kubectl port-forward -n kubeflow svc/minio-service 9000:9000 > /dev/null 2>&1 &
-	@sleep 2
-	@echo "✅ All services forwarded!"
-	@echo "📊 Consumer:           http://localhost:8000"
-	@echo "📈 Prometheus:         http://localhost:9090"
-	@echo "📋 Grafana:            http://localhost:3000  (admin/admin)"
-	@echo "📜 Loki:               http://localhost:3100"
-	@echo "🔍 Tempo:              http://localhost:3200"
-	@echo "🤖 Alloy:              http://localhost:8080"
-	@echo "🚀 Kubeflow Pipelines: http://localhost:8081"
-	@echo "💾 MinIO (KFP):        http://localhost:9000  (minio/minio1234)"
-	@echo ""
-	@echo "Use 'make stop-forward' to stop all forwarding"
-
-stop-forward: ## Stop ALL port forwarding
-	@echo "🛑 Stopping all port forwarding..."
-	@pkill -f "kubectl port-forward.*nimbusguard" || true
-	@pkill -f "kubectl port-forward.*kubeflow" || true
-	@echo "✅ All port forwarding stopped"
-
-status: ## Check deployment status
-	kubectl get pods,svc -n nimbusguard -l app=nimbusguard
-
-logs: ## Follow consumer logs
-	kubectl logs -n nimbusguard -l app.kubernetes.io/name=consumer -f
-
-restart: ## Restart consumer deployment
-	kubectl rollout restart deployment/consumer -n nimbusguard
-
-clean: ## Delete all resources (legacy)
-	kubectl delete namespace nimbusguard --ignore-not-found=true
-
-## 🧪 Load Testing Commands
-
-load-test-light: build-generator ## Run light load test (quick validation)
+load-test-light: docker-build ## Run light load test (quick validation)
 	@echo "🟢 Starting LIGHT load test..."
 	@kubectl apply -f kubernetes-manifests/components/load-generator/job-light.yaml
 	@echo "✅ Light load test job applied. Monitor with k9s in nimbusguard namespace."
 
-load-test-medium: build-generator ## Run medium load test (moderate scaling)
+load-test-medium: docker-build ## Run medium load test (moderate scaling)
 	@echo "🟡 Starting MEDIUM load test..."
 	@kubectl apply -f kubernetes-manifests/components/load-generator/job-medium.yaml
 	@echo "✅ Medium load test job applied. Monitor with k9s in nimbusguard namespace."
 
-load-test-heavy: build-generator ## Run heavy load test (trigger immediate KEDA scaling)
+load-test-heavy: docker-build ## Run heavy load test (trigger immediate KEDA scaling)
 	@echo "🔴 Starting HEAVY load test..."
 	@kubectl apply -f kubernetes-manifests/components/load-generator/job-heavy.yaml
 	@echo "✅ Heavy load test job applied. Monitor with k9s in nimbusguard namespace."
 
-load-test-sustained: build-generator ## Run sustained load test (long-term scaling cycle)
+load-test-sustained: docker-build ## Run sustained load test (long-term scaling cycle)
 	@echo "🔵 Starting SUSTAINED load test..."
 	@kubectl apply -f kubernetes-manifests/components/load-generator/job-sustained.yaml
 	@echo "✅ Sustained load test job applied. Monitor with k9s in nimbusguard namespace."
 
-load-test-burst: build-generator ## Run burst load test (sudden spikes)
+load-test-burst: docker-build ## Run burst load test (sudden spikes)
 	@echo "⚡ Starting BURST load test..."
 	@kubectl apply -f kubernetes-manifests/components/load-generator/job-burst.yaml
 	@echo "✅ Burst load test job applied. Monitor with k9s in nimbusguard namespace."
 
-load-test-memory: build-generator ## Run memory stress test (test memory-based scaling)
+load-test-memory: docker-build ## Run memory stress test (test memory-based scaling)
 	@echo "🧠 Starting MEMORY stress test..."
 	@kubectl apply -f kubernetes-manifests/components/load-generator/job-memory-stress.yaml
 	@echo "✅ Memory stress test job applied. Monitor with k9s in nimbusguard namespace."
 
-load-test-cpu: build-generator ## Run CPU stress test (test CPU-based scaling)
+load-test-cpu: docker-build ## Run CPU stress test (test CPU-based scaling)
 	@echo "⚙️  Starting CPU stress test..."
 	@kubectl apply -f kubernetes-manifests/components/load-generator/job-cpu-stress.yaml
 	@echo "✅ CPU stress test job applied. Monitor with k9s in nimbusguard namespace."
-
-
 
 load-status: ## Show status of all load test jobs and consumer pods
 	@echo "📊 Load Test Status Report"
@@ -476,3 +333,77 @@ load-clean-all: ## Clean up ALL load test jobs (including running ones)
 		kubectl delete -n nimbusguard $$job 2>/dev/null || true; \
 	done
 	@echo "✅ All load test jobs deleted"
+
+docker-build-base: ## Build the base Docker image
+	@echo "🔨 Building nimbusguard-base image..."
+	@docker build -t nimbusguard-base:latest -f docker/base.Dockerfile .
+
+docker-build: docker-build-base ## Build all necessary Docker images from the base
+	@echo "🔨 Building application images from nimbusguard-base..."
+	docker build -t nimbusguard-consumer:latest -f src/consumer/Dockerfile .
+	docker build -t nimbusguard-dqn-adapter:latest -f src/dqn-adapter/Dockerfile .
+	docker build -t nimbusguard-learner:latest -f src/learner/Dockerfile .
+	docker build -t nimbusguard-generator:latest -f src/generator/Dockerfile .
+
+# Push Docker images
+docker-push: ## Push all necessary Docker images to a registry
+	$(eval REPO_URL := $(shell echo $(DOCKER_REPO_URL)))
+	docker tag nimbusguard-consumer:latest $(REPO_URL)/nimbusguard-consumer:latest
+	docker tag nimbusguard-dqn-adapter:latest $(REPO_URL)/nimbusguard-dqn-adapter:latest
+	docker tag nimbusguard-learner:latest $(REPO_URL)/nimbusguard-learner:latest
+	docker tag nimbusguard-generator:latest $(REPO_URL)/nimbusguard-generator:latest
+	docker push $(REPO_URL)/nimbusguard-consumer:latest
+	docker push $(REPO_URL)/nimbusguard-dqn-adapter:latest
+	docker push $(REPO_URL)/nimbusguard-learner:latest
+	docker push $(REPO_URL)/nimbusguard-generator:latest
+
+# -----------------------------------------------------------------------------
+# Deployment Commands
+# -----------------------------------------------------------------------------
+
+deploy: docker-build ## Build images and deploy all components to the cluster
+	@echo "🔍 Checking KEDA installation..."
+	@if ! helm list -n nimbusguard | grep -q keda 2>/dev/null; then \
+		echo "⚠️  KEDA operator not found in nimbusguard namespace, installing it first..."; \
+		$(MAKE) keda-install; \
+	else \
+		echo "✅ KEDA operator already installed"; \
+	fi
+	@echo "🚀 Deploying all components to the cluster..."
+	@kubectl apply -k kubernetes-manifests/overlays/development
+	@echo "✅ Deployment complete! Use 'make ports' to access services."
+
+dev: deploy ## Alias for 'deploy' - builds and deploys all components for development
+
+clean: ## Delete all deployed resources from the cluster
+	@echo "🗑️  Deleting all resources in the nimbusguard namespace..."
+	@kubectl delete namespace nimbusguard --ignore-not-found=true
+	@echo "✅ Cleanup complete."
+
+# Port forwards
+ports: ## Port forward all relevant services in the background
+	@echo "🚀 Starting all port forwarding in the background..."
+	@nohup kubectl port-forward -n nimbusguard svc/prometheus 9090:9090 > .ports.log 2>&1 &
+	@nohup kubectl port-forward -n nimbusguard svc/grafana 3000:3000 > .ports.log 2>&1 &
+	@nohup kubectl port-forward -n nimbusguard svc/dqn-adapter 8001:8000 > .ports.log 2>&1 &
+	@nohup kubectl port-forward -n nimbusguard svc/redis 6379:6379 > .ports.log 2>&1 &
+	@nohup kubectl port-forward -n nimbusguard svc/minio 9000:9000 > .ports.log 2>&1 &
+	@nohup kubectl port-forward -n nimbusguard svc/minio 9001:9001 > .ports.log 2>&1 &
+	@sleep 2
+	@echo "✅ All services are being forwarded in the background."
+	@echo "   Use 'make ports-stop' to terminate them."
+	@echo "-----------------------------------------"
+	@echo "📈 Prometheus:         http://localhost:9090"
+	@echo "📋 Grafana:            http://localhost:3000  (admin/admin)"
+	@echo "🧠 DQN Adapter:        http://localhost:8001"
+	@echo "💾 Redis (CLI):        redis-cli -p 6379"
+	@echo "🗄️ MinIO API:          http://localhost:9000"
+	@echo "🖥️ MinIO Console:      http://localhost:9001  (minioadmin/minioadmin)"
+	@echo "-----------------------------------------"
+
+# Stop port forwards
+ports-stop:
+	@echo "🛑 Stopping all port forwarding..."
+	@pkill -f "kubectl port-forward.*nimbusguard" || true
+	@pkill -f "kubectl port-forward.*kubeflow" || true
+	@echo "✅ All port forwarding stopped"

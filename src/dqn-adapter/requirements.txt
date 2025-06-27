@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+langchain
+langgraph
+langchain_openai
+langchain_mcp_adapters
+prometheus_client
+requests
+python-dotenv
+pandas
+numpy
+joblib
+scikit-learn
+torch
+redis
+kopf 
