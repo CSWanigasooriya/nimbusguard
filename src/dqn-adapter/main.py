@@ -6,6 +6,7 @@ import random
 from typing import TypedDict, List, Dict, Any
 import json
 from datetime import datetime
+import pandas as pd
 
 import requests
 import numpy as np
@@ -29,6 +30,9 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 # Import evaluator
 from evaluator import DQNEvaluator
+
+# Import LSTM forecaster for temporal predictions
+from lstm_forecaster import create_lstm_predictor, LSTMWorkloadPredictor
 
 # --- Basic Setup ---
 load_dotenv()
@@ -116,6 +120,7 @@ AI_MODEL = os.getenv("AI_MODEL", "gpt-3.5-turbo")  # More cost-effective than gp
 AI_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", 0.1))  # Low temperature for consistent reasoning
 ENABLE_DETAILED_REASONING = os.getenv("ENABLE_DETAILED_REASONING", "true").lower() == "true"
 REASONING_LOG_LEVEL = os.getenv("REASONING_LOG_LEVEL", "INFO")  # INFO, DEBUG for more detail
+ENABLE_LLM_VALIDATION = os.getenv("ENABLE_LLM_VALIDATION", "true").lower() == "true"  # Allow disabling LLM validation
 
 # MinIO Configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio.nimbusguard.svc:9000")
@@ -124,20 +129,57 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 BUCKET_NAME = os.getenv("BUCKET_NAME", "models")
 SCALER_NAME = os.getenv("SCALER_NAME", "feature_scaler.gz")
 
-# Advanced statistically selected 8 features using 6 rigorous methods:
-# 1. Mutual Information (25%), 2. Random Forest (25%), 3. Correlation (15%)
-# 4. RFECV with Cross-Validation (20%), 5. Statistical Significance (10%), 6. VIF Analysis (5%)
-# Final ensemble ranking from comprehensive feature analysis (894 samples, per-minute data)
-FEATURE_ORDER = [
-    'avg_response_time',                           # Score: 120.25 - Core performance metric
-    'kube_pod_container_status_ready',             # Score: 110.70 - Pod health status  
-    'kube_deployment_spec_replicas_ma_10',         # Score: 108.45 - 10-minute replica trend
-    'kube_deployment_status_replicas_unavailable', # Score: 105.90 - Current scaling state
-    'memory_growth_rate_ma_10',                    # Score: 90.25 - 10-minute memory trend
-    'process_cpu_seconds_total_dev_10',            # Score: 85.75 - 10-minute CPU deviation
-    'http_request_duration_highr_seconds_sum',     # Score: 82.30 - Request latency
-    'kube_pod_container_resource_limits'           # Score: 81.50 - Resource constraints
+# --- Clean Feature Architecture ---
+# This service is the intelligent core of the NimbusGuard autoscaling system. It combines the predictive power of a Deep Q-Network (DQN) model with real-time learning capabilities and robust execution through KEDA. It runs a continuous reconciliation loop to determine the optimal number of replicas for a target service and exposes this decision as a Prometheus metric.
+
+# The adapter uses **5 scientifically selected raw features** identified through advanced statistical analysis using 6 rigorous methods (Mutual Information, Random Forest, Correlation Analysis, RFECV, Statistical Significance, and VIF Analysis) from 894 real per-minute decision points. These are combined with **6 LSTM temporal features** for predictive intelligence, creating a total of **11 features** with zero overlap and no redundancy.
+
+# ## 🏗️ Clean Feature Architecture
+
+# The system uses a **clean separation** approach with **zero redundancy**:
+
+# ### 📊 RAW BASE FEATURES (5)
+# Current system state observations without any temporal computations:
+# 1. **Scaling Issues** (`kube_deployment_status_replicas_unavailable`) - Score: 22.35
+# 2. **Pod Health** (`kube_pod_container_status_ready`) - Score: 21.85  
+# 3. **CPU Usage** (`process_cpu_seconds_total`) - Score: 17.55
+# 4. **HTTP Latency** (`http_request_duration_highr_seconds_sum`) - Score: 17.30
+# 5. **System Stability** (`kube_pod_container_status_restarts_total`) - Score: 16.40
+
+# ### 🧠 LSTM TEMPORAL FEATURES (6)
+# Predictive intelligence and pattern-based features:
+# 1. **Predicted Response Time** (5-minute forecast)
+# 2. **Predicted Memory Usage** (5-minute forecast)  
+# 3. **Workload Trend Direction** (-1: decreasing, 0: stable, 1: increasing)
+# 4. **Pattern Confidence** (confidence in detected patterns)
+# 5. **Anomaly Score** (0-1 anomaly detection score)
+# 6. **Optimal Replicas Forecast** (LSTM's replica recommendation)
+
+# **Total: 11 features with ZERO overlap between raw metrics and temporal intelligence!**
+
+# CLEAN FEATURE ARCHITECTURE: Raw base features + LSTM temporal features (no computed temporal features)
+
+# Raw base features (current state observations) - exactly as selected by balanced feature_selector.py
+BASE_FEATURE_ORDER = [
+    'http_request_duration_highr_seconds_bucket',   # HTTP Traffic patterns
+    'process_resident_memory_bytes',                # Memory resource usage  
+    'process_cpu_seconds_total',                    # CPU resource usage
+    'scrape_samples_scraped',                       # Health monitoring
+    'http_response_size_bytes_sum'                  # Response size patterns
 ]
+
+# LSTM temporal features (PURE temporal intelligence - no current state redundancy)
+LSTM_FEATURE_ORDER = [
+    'next_30sec_pressure',                          # LSTM: PROACTIVE - Load pressure in 30 seconds
+    'next_60sec_pressure',                          # LSTM: PROACTIVE - Load pressure in 60 seconds
+    'trend_velocity',                               # LSTM: How fast the trend is changing (-1 to 1)
+    'pattern_type_spike',                           # LSTM: Probability of spike pattern (0-1)
+    'pattern_type_gradual',                         # LSTM: Probability of gradual pattern (0-1)
+    'pattern_type_cyclical',                        # LSTM: Probability of cyclical pattern (0-1)
+]
+
+# Clean feature architecture: 5 raw base + 6 LSTM temporal = 11 total features (no redundancy)
+FEATURE_ORDER = BASE_FEATURE_ORDER + LSTM_FEATURE_ORDER
 
 # Exploration parameters for epsilon-greedy strategy
 EPSILON_START = float(os.getenv("EPSILON_START", 0.3))
@@ -230,7 +272,7 @@ class SimpleReplayBuffer:
         return len(self.buffer)
 
 class CombinedDQNTrainer:
-    """Combined DQN trainer that handles both inference and learning."""
+    """Combines real-time training with historical data loading."""
     
     def __init__(self, policy_net, device, feature_order):
         self.device = device
@@ -240,12 +282,12 @@ class CombinedDQNTrainer:
         self.policy_net = policy_net
         self.target_net = EnhancedQNetwork(len(feature_order), 3).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
         
         # Training components
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LR)
+        self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=LR)
         self.memory = SimpleReplayBuffer(MEMORY_CAPACITY)
-        self.training_queue = asyncio.Queue()
-        self.model_lock = asyncio.Lock()
+        self.training_queue = asyncio.Queue(maxsize=1000)
         
         # Training state
         self.batches_trained = 0
@@ -253,23 +295,50 @@ class CombinedDQNTrainer:
         self.last_research_time = time.time()
         self.training_losses = []
         
-        logger.info(f"🎓 Combined DQN Trainer initialized (device: {device})")
+        logger.info(f"TRAINER: initialized device={device}")
         
         # Try to initialize replay buffer with historical data
         asyncio.create_task(self._load_historical_data())
     
     def _dict_to_feature_vector(self, state_dict):
-        """Convert state dictionary to feature vector."""
+        """Convert state dictionary to feature vector with enhanced LSTM feature importance."""
         if not scaler:
             return np.zeros(len(self.feature_order))
         
-        feature_vector = [state_dict.get(feat, 0.0) for feat in self.feature_order]
         try:
-            scaled_features = scaler.transform([feature_vector])
-            return scaled_features[0]
+            # Scale the 5 raw base features from Prometheus
+            raw_features = [state_dict.get(feat, 0.0) for feat in BASE_FEATURE_ORDER]
+            scaled_raw_features = scaler.transform([raw_features])
+            
+            # Get LSTM features with enhanced importance for temporal predictions
+            lstm_features = []
+            for feat in LSTM_FEATURE_ORDER:
+                value = state_dict.get(feat, 0.0)
+                
+                # Boost importance of key predictive features
+                if feat in ['next_30sec_pressure', 'next_60sec_pressure']:
+                    # Amplify pressure predictions (these are most critical for proactive scaling)
+                    value = value * 1.5  # 50% boost
+                elif feat == 'trend_velocity':
+                    # Amplify trend velocity (indicates acceleration/deceleration)
+                    value = value * 1.3  # 30% boost
+                elif feat == 'optimal_replicas_forecast':
+                    # Normalize optimal replicas to 0-1 range for better DQN learning
+                    value = min(value / 10.0, 1.0)  # Scale down from 1-10 to 0.1-1.0
+                
+                lstm_features.append(value)
+            
+            # Combine scaled raw features + enhanced LSTM features
+            final_feature_vector = scaled_raw_features[0].tolist() + lstm_features
+            
+            return np.array(final_feature_vector)
+            
         except Exception as e:
             logger.warning(f"Feature scaling failed: {e}")
-            return np.array(feature_vector)
+            # Fallback: Return unscaled features in correct order
+            raw_features = [state_dict.get(feat, 0.0) for feat in BASE_FEATURE_ORDER]
+            lstm_features = [state_dict.get(feat, 0.0) for feat in LSTM_FEATURE_ORDER]
+            return np.array(raw_features + lstm_features)
     
     async def add_experience_for_training(self, experience_dict):
         """Add experience to training queue (non-blocking)."""
@@ -280,7 +349,7 @@ class CombinedDQNTrainer:
     
     async def continuous_training_loop(self):
         """Background training loop that doesn't block decision making."""
-        logger.info("🔄 Starting continuous training loop...")
+        logger.info("TRAINING: continuous_loop_started")
         
         while True:
             try:
@@ -346,7 +415,7 @@ class CombinedDQNTrainer:
             loss = await loop.run_in_executor(None, self._sync_train_step)
             
             if self.batches_trained % 10 == 0:  # Log every 10 steps
-                logger.info(f"🎯 Training: Batch {self.batches_trained}, Loss={loss:.4f}, Buffer={len(self.memory)}")
+                logger.info(f"TRAINING: batch={self.batches_trained} loss={loss:.4f} buffer_size={len(self.memory)}")
                 
         except Exception as e:
             logger.error(f"Training step error: {e}")
@@ -396,7 +465,7 @@ class CombinedDQNTrainer:
             self.batches_trained += 1
             if self.batches_trained % TARGET_UPDATE_INTERVAL == 0:
                 self.target_net.load_state_dict(self.policy_net.state_dict())
-                logger.info(f"🎯 Target network updated at batch {self.batches_trained}")
+                logger.info(f"TRAINING: target_network_updated batch={self.batches_trained}")
             
             self.training_losses.append(loss.item())
             
@@ -417,7 +486,7 @@ class CombinedDQNTrainer:
     
     async def _save_model(self):
         """Save model to MinIO."""
-        logger.info("🔄 Attempting to save DQN model to MinIO...")
+        logger.info("MODEL_SAVE: attempting_minio_upload")
         try:
             global minio_client, BUCKET_NAME
             if not minio_client:
@@ -443,19 +512,14 @@ class CombinedDQNTrainer:
             torch.save(checkpoint, buffer)
             buffer.seek(0)
             
-            # Upload to MinIO
             minio_client.put_object(
-                BUCKET_NAME,
-                "dqn_model.pt",
-                data=buffer,
-                length=buffer.getbuffer().nbytes,
+                BUCKET_NAME, "dqn_model.pt", data=buffer, length=buffer.getbuffer().nbytes,
                 content_type='application/octet-stream'
             )
-            
-            logger.info(f"📁 Model saved to MinIO (batch {self.batches_trained}, size: {buffer.getbuffer().nbytes} bytes)")
+            logger.info(f"MODEL_SAVE: success batch={self.batches_trained} size={buffer.getbuffer().nbytes}")
             
         except Exception as e:
-            logger.error(f"Failed to save model: {e}", exc_info=True)
+            logger.error(f"MODEL_SAVE: failed error={e}")
     
     async def _load_historical_data(self):
         """Load historical training data to initialize replay buffer."""
@@ -463,7 +527,7 @@ class CombinedDQNTrainer:
             if not minio_client:
                 return
             
-            logger.info("📚 Attempting to load historical training data...")
+            logger.info("HISTORICAL_DATA: loading_from_minio")
             
             # Try to load the dataset from MinIO
             response = minio_client.get_object(BUCKET_NAME, "dqn_features.parquet")
@@ -483,15 +547,20 @@ class CombinedDQNTrainer:
             
             for _, row in sampled_df.iterrows():
                 try:
-                    # Create state from features
-                    state_dict = {feat: row[feat] for feat in self.feature_order if feat in row}
+                    # Create state from features (adapt to current feature order)
+                    state_dict = {}
+                    for feat in self.feature_order:
+                        if feat in row:
+                            state_dict[feat] = row[feat]
+                        else:
+                            state_dict[feat] = 0.0  # Default value for missing features
                     
                     # Create a simple next state (assume minimal change)
                     next_state_dict = state_dict.copy()
                     
                     experience_dict = {
                         'state': state_dict,
-                        'action': action_map.get(row['scaling_action'], "Keep Same"),
+                        'action': action_map.get(row.get('scaling_action', 1), "Keep Same"),
                         'reward': 0.0,  # Historical reward unknown, use neutral
                         'next_state': next_state_dict
                     }
@@ -502,7 +571,7 @@ class CombinedDQNTrainer:
                     
                     training_exp = TrainingExperience(
                         state=state_vec,
-                        action=row['scaling_action'],
+                        action=row.get('scaling_action', 1),
                         reward=0.0,
                         next_state=next_state_vec,
                         done=False
@@ -514,18 +583,18 @@ class CombinedDQNTrainer:
                 except Exception as exp_error:
                     continue  # Skip malformed experiences
             
-            logger.info(f"📚 Loaded {loaded_count} historical experiences into replay buffer")
+            logger.info(f"HISTORICAL_DATA: loaded_experiences count={loaded_count}")
             
         except Exception as e:
-            logger.info(f"📚 Could not load historical data (continuing without it): {e}")
+            logger.info(f"HISTORICAL_DATA: load_failed error={e}")
 
     async def _generate_evaluation_outputs(self):
-        """Generate evaluation outputs."""
+        """Generate and save all evaluation outputs."""
         try:
             if not evaluator:
                 return
             
-            logger.info("🔬 Generating evaluation outputs...")
+            logger.info("EVALUATION: generating_outputs")
             
             # Get model state information
             total_params = sum(p.numel() for p in self.policy_net.parameters())
@@ -545,7 +614,7 @@ class CombinedDQNTrainer:
                 model_state
             )
             
-            logger.info(f"✅ Evaluation complete. Generated {len(saved_files)} files")
+            logger.info(f"EVALUATION: completed files_generated={len(saved_files)}")
             
         except Exception as e:
             logger.error(f"Failed to generate evaluation outputs: {e}")
@@ -562,6 +631,7 @@ minio_client = None
 metrics_server = None
 dqn_trainer = None  # Combined trainer for real-time learning
 evaluator = None  # Evaluation system
+lstm_predictor = None  # LSTM workload predictor for temporal features
 
 # --- LangGraph State ---
 class Experience(TypedDict):
@@ -580,39 +650,19 @@ class ScalingState(TypedDict):
     error: str
 
 # --- Feature Engineering Helper ---
-def _calculate_computed_features(metrics: Dict[str, float]) -> Dict[str, float]:
-    """Calculate computed features to match the scientifically selected features."""
+def _ensure_raw_features(metrics: Dict[str, float]) -> Dict[str, float]:
+    """Ensure raw base features have fallback values - no computed features."""
     
-    # 1. Memory growth rate (10-minute moving average) - Feature 5
-    # Since we don't have historical data in real-time, approximate based on current memory
-    memory_base = metrics.get('process_resident_memory_bytes', 0)
-    if memory_base > 0:
-        # Approximate memory growth rate as a small percentage of current usage
-        # This is a proxy for the actual 10-minute growth rate
-        metrics['memory_growth_rate_ma_10'] = memory_base * 0.02  # 2% growth proxy
-    else:
-        metrics['memory_growth_rate_ma_10'] = 0.0
-    
-    # 2. CPU deviation (10-minute) - Feature 6  
-    # Approximate CPU deviation based on current CPU usage
-    cpu_base = metrics.get('process_cpu_seconds_total', 0)
-    if cpu_base > 0:
-        # Use a percentage of current CPU as deviation proxy
-        metrics['process_cpu_seconds_total_dev_10'] = cpu_base * 0.1  # 10% variation proxy
-    else:
-        metrics['process_cpu_seconds_total_dev_10'] = 0.0
-    
-    # 3. Ensure all other features have fallback values
+    # Raw feature defaults (no computations, no temporal features) - balanced selection
     feature_defaults = {
-        'avg_response_time': 100.0,  # Default 100ms response time
-        'kube_pod_container_status_ready': 1.0,  # Default to ready
-        'kube_deployment_spec_replicas_ma_10': 1.0,  # Default 1 replica
-        'kube_deployment_status_replicas_unavailable': 0.0,  # Default no unavailable
-        'http_request_duration_highr_seconds_sum': 0.0,  # Default no high-res latency
-        'kube_pod_container_resource_limits': 1.0  # Default resource limit
+        'http_request_duration_highr_seconds_bucket': 0.0,   # Default no HTTP traffic bucket
+        'process_resident_memory_bytes': 100000000.0,        # Default ~100MB memory
+        'process_cpu_seconds_total': 0.0,                    # Default no CPU usage
+        'scrape_samples_scraped': 300.0,                     # Default ~300 samples per scrape
+        'http_response_size_bytes_sum': 0.0                  # Default no response size
     }
     
-    # Apply defaults for missing features
+    # Apply defaults for missing raw base features only
     for feature, default_value in feature_defaults.items():
         if feature not in metrics or metrics[feature] == 0:
             metrics[feature] = default_value
@@ -622,37 +672,31 @@ def _calculate_computed_features(metrics: Dict[str, float]) -> Dict[str, float]:
 # --- LangGraph Nodes ---
 async def get_live_metrics(state: ScalingState, is_next_state: bool = False) -> Dict[str, Any]:
     node_name = "observe_next_state" if is_next_state else "get_live_metrics"
-    logger.info(f"==> Node: {node_name}")
+    logger.info(f"NODE_START: {node_name}")
+    logger.info("=" * 60)
     
     from datetime import datetime
     current_time = datetime.now()
     
-    # Scientifically selected feature queries (matching the 8 optimal features from research)
+    # Raw base feature queries (exactly the 5 balanced selected features - no computed temporal features)
     queries = {
-        # 1. Core response time metric (Score: 120.25)
-        "avg_response_time": 'avg(http_request_duration_seconds_sum{job="prometheus.scrape.nimbusguard_consumer"} / http_request_duration_seconds_count{job="prometheus.scrape.nimbusguard_consumer"}) * 1000 or avg(http_request_duration_seconds_sum{instance="consumer:8000"} / http_request_duration_seconds_count{instance="consumer:8000"}) * 1000',
+        # 1. HTTP Traffic patterns - Request duration bucket
+        "http_request_duration_highr_seconds_bucket": 'sum(http_request_duration_highr_seconds_bucket{job="prometheus.scrape.nimbusguard_consumer"}) or sum(http_request_duration_highr_seconds_bucket{instance="consumer:8000"}) or sum(http_request_duration_highr_seconds_bucket)',
         
-        # 2. Pod health status (Score: 110.70)
-        "kube_pod_container_status_ready": f'avg(kube_pod_container_status_ready{{namespace="{TARGET_NAMESPACE}",pod=~"consumer.*"}}) or avg(kube_pod_container_status_ready{{namespace="{TARGET_NAMESPACE}"}})',
+        # 2. Memory resource usage - Process resident memory
+        "process_resident_memory_bytes": 'sum(process_resident_memory_bytes{job="prometheus.scrape.nimbusguard_consumer"}) or sum(process_resident_memory_bytes{instance="consumer:8000"}) or sum(process_resident_memory_bytes)',
         
-        # 3. 10-minute replica trend (Score: 108.45)
-        "kube_deployment_spec_replicas_ma_10": f'avg_over_time(kube_deployment_spec_replicas{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}}[10m]) or kube_deployment_spec_replicas{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}}',
+        # 3. CPU resource usage - Process CPU seconds total
+        "process_cpu_seconds_total": f'sum(rate(process_cpu_seconds_total{{job="prometheus.scrape.nimbusguard_consumer"}}[5m])) * 100 or sum(rate(process_cpu_seconds_total{{instance="consumer:8000"}}[5m])) * 100 or sum(rate(process_cpu_seconds_total[5m])) * 100',
         
-        # 4. Current scaling state (Score: 105.90)
-        "kube_deployment_status_replicas_unavailable": f'kube_deployment_status_replicas_unavailable{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}} or vector(0)',
+        # 4. Health monitoring - Scrape samples scraped
+        "scrape_samples_scraped": 'sum(scrape_samples_scraped{job="prometheus.scrape.nimbusguard_consumer"}) or sum(scrape_samples_scraped{instance="consumer:8000"}) or sum(scrape_samples_scraped)',
         
-        # 5. 10-minute memory trend (Score: 90.25) - computed from memory growth rate
-        "process_resident_memory_bytes": 'process_resident_memory_bytes{job="prometheus.scrape.nimbusguard_consumer"} or process_resident_memory_bytes{instance="consumer:8000"} or process_resident_memory_bytes{instance=~".*:8000"}',
-        
-        # 6. 10-minute CPU deviation (Score: 85.75)
-        "process_cpu_seconds_total": 'process_cpu_seconds_total{job="prometheus.scrape.nimbusguard_consumer"} or process_cpu_seconds_total{instance="consumer:8000"}',
-        
-        # 7. Request latency (Score: 82.30)
-        "http_request_duration_highr_seconds_sum": 'sum(http_request_duration_highr_seconds_sum{job="prometheus.scrape.nimbusguard_consumer"}) or sum(http_request_duration_highr_seconds_sum{instance="consumer:8000"}) or sum(http_request_duration_highr_seconds_sum)',
-        
-        # 8. Resource constraints (Score: 81.50)
-        "kube_pod_container_resource_limits": f'avg(kube_pod_container_resource_limits{{namespace="{TARGET_NAMESPACE}",pod=~"consumer.*",resource="cpu"}}) or avg(kube_pod_container_resource_limits{{namespace="{TARGET_NAMESPACE}",resource="cpu"}})'
+        # 5. Response size patterns - HTTP response size sum
+        "http_response_size_bytes_sum": 'sum(http_response_size_bytes_sum{job="prometheus.scrape.nimbusguard_consumer"}) or sum(http_response_size_bytes_sum{instance="consumer:8000"}) or sum(http_response_size_bytes_sum)'
     }
+    # CLEAN ARCHITECTURE: No computed temporal features (moving averages, deviations, etc.)
+    # All temporal intelligence now comes from LSTM predictions
     
     tasks = {name: prometheus_client.query(query) for name, query in queries.items()}
     
@@ -665,49 +709,174 @@ async def get_live_metrics(state: ScalingState, is_next_state: bool = False) -> 
     metrics = dict(zip(tasks.keys(), results))
     current_replicas = int(metrics.pop('current_replicas', 1))
     
-    # Calculate computed features to match the feature selector
-    metrics = _calculate_computed_features(metrics)
+    # Ensure raw features have defaults (no computations)
+    metrics = _ensure_raw_features(metrics)
+    
+    # Add observation to LSTM predictor and get temporal features
+    lstm_features = {}
+    if lstm_predictor:
+        try:
+            # Add current observation to LSTM buffer
+            await lstm_predictor.add_observation_async(metrics)
+            
+            # Get LSTM-enhanced features
+            lstm_features = await lstm_predictor.get_lstm_features_async()
+            
+            # Add LSTM features to metrics
+            metrics.update(lstm_features)
+            
+            # Log LSTM readiness
+            buffer_info = lstm_predictor.get_buffer_info()
+            lstm_ready = buffer_info['model_ready']
+            buffer_utilization = buffer_info['buffer_stats']['utilization']
+            
+            logger.info(f"LSTM_STATUS: ready={lstm_ready} buffer_util={buffer_utilization:.1%} "
+                       f"trend={lstm_features.get('workload_trend_direction', 0):.2f} "
+                       f"confidence={lstm_features.get('pattern_confidence', 0):.2f}")
+            
+        except Exception as e:
+            logger.warning(f"LSTM_FEATURES: extraction_failed error={e}")
+            # Add default LSTM features as fallback
+            default_lstm_features = {
+                'current_load_pressure': 0.5,
+                'load_stability': 0.8,
+                'next_30sec_pressure': 0.5,
+                'next_60sec_pressure': 0.5,
+                'workload_trend_direction': 0.0,
+                'pattern_confidence': 0.5,
+                'anomaly_score': 0.0,
+                'optimal_replicas_forecast': float(current_replicas)
+            }
+            metrics.update(default_lstm_features)
+    else:
+        logger.debug("LSTM_FEATURES: using_defaults predictor_not_initialized")
+        # Add default LSTM features when LSTM is not available
+        default_lstm_features = {
+            'current_load_pressure': 0.5,
+            'load_stability': 0.8,
+            'next_30sec_pressure': 0.5,
+            'next_60sec_pressure': 0.5,
+            'workload_trend_direction': 0.0,
+            'pattern_confidence': 0.5,
+            'anomaly_score': 0.0,
+            'optimal_replicas_forecast': float(current_replicas)
+        }
+        metrics.update(default_lstm_features)
     
     CURRENT_REPLICAS_GAUGE.set(current_replicas)
     
-    # Enhanced logging with scientifically selected features
-    pod_readiness = metrics.get('kube_pod_container_status_ready', 0)
-    memory_growth = metrics.get('memory_growth_rate_ma_10', 0)
-    cpu_deviation = metrics.get('process_cpu_seconds_total_dev_10', 0)
-    unavailable_replicas = metrics.get('kube_deployment_status_replicas_unavailable', 0)
+    # Enhanced logging with balanced feature architecture
+    http_bucket = metrics.get('http_request_duration_highr_seconds_bucket', 0)
+    memory_bytes = metrics.get('process_resident_memory_bytes', 0)
+    cpu_usage = metrics.get('process_cpu_seconds_total', 0)
+    scrape_samples = metrics.get('scrape_samples_scraped', 0)
+    response_size = metrics.get('http_response_size_bytes_sum', 0)
     
-    logger.info(f"  - Core Metrics: avg_response_time={metrics.get('avg_response_time', 0):.2f}ms, "
-                f"pod_readiness={pod_readiness:.3f}, "
-                f"unavailable_replicas={unavailable_replicas:.3f}, "
-                f"replicas={current_replicas}")
+    logger.info(f"RAW_FEATURES: http_bucket={http_bucket:.1f} "
+                f"memory_mb={memory_bytes/1000000:.1f} cpu={cpu_usage:.2f} "
+                f"scrape_samples={scrape_samples:.0f} response_size={response_size:.0f} "
+                f"current_replicas={current_replicas}")
     
-    logger.info(f"  - Trend Metrics: memory_growth_10m={memory_growth:.2f}, "
-                f"cpu_deviation_10m={cpu_deviation:.2f}, "
-                f"replica_trend_10m={metrics.get('kube_deployment_spec_replicas_ma_10', 0):.2f}")
+    # Log LSTM proactive analysis if available
+    if lstm_features:
+        logger.info(f"LSTM_ANALYSIS: current_pressure={lstm_features.get('current_load_pressure', 0):.2f} "
+                   f"30sec_pressure={lstm_features.get('next_30sec_pressure', 0):.2f} "
+                   f"60sec_pressure={lstm_features.get('next_60sec_pressure', 0):.2f} "
+                   f"stability={lstm_features.get('load_stability', 0):.2f} "
+                   f"optimal_replicas={lstm_features.get('optimal_replicas_forecast', 0):.1f}")
     
-    # Log feature availability for debugging
-    available_features = sum(1 for feat in FEATURE_ORDER if metrics.get(feat, 0) > 0)
-    logger.info(f"  - Feature availability: {available_features}/{len(FEATURE_ORDER)} scientifically selected features have non-zero values")
+    # Log feature availability for debugging (clean architecture: no redundancy)
+    # Check if features exist (not None) rather than > 0, since 0 can be a valid value
+    base_features_available = sum(1 for feat in BASE_FEATURE_ORDER if feat in metrics)
+    lstm_features_available = sum(1 for feat in LSTM_FEATURE_ORDER if feat in metrics)
+    total_features_available = base_features_available + lstm_features_available
     
+    logger.info(f"FEATURE_AVAILABILITY: total={total_features_available}/{len(FEATURE_ORDER)} "
+               f"base={base_features_available}/{len(BASE_FEATURE_ORDER)} lstm={lstm_features_available}/{len(LSTM_FEATURE_ORDER)}")
+    
+    # Debug: Log missing features if any
+    if total_features_available < len(FEATURE_ORDER):
+        missing_base = [feat for feat in BASE_FEATURE_ORDER if feat not in metrics]
+        missing_lstm = [feat for feat in LSTM_FEATURE_ORDER if feat not in metrics]
+        if missing_base:
+            logger.warning(f"MISSING_BASE_FEATURES: {missing_base}")
+        if missing_lstm:
+            logger.warning(f"MISSING_LSTM_FEATURES: {missing_lstm}")
+    
+    logger.info("=" * 60)
+    logger.info(f"NODE_END: {node_name}")
     return {"current_metrics": metrics, "current_replicas": current_replicas}
 
 async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
-    logger.info("==> Node: get_dqn_recommendation")
+    logger.info("NODE_START: get_dqn_recommendation")
+    logger.info("=" * 60)
     if not scaler:
-        logger.error("Scaler not loaded. Skipping DQN prediction.")
+        logger.error("DQN_PREDICTION: scaler_not_loaded")
         return {"error": "SCALER_NOT_LOADED"}
 
     metrics = state['current_metrics'].copy()
     current_replicas = state['current_replicas']
     
-    # Feature vector using scientifically selected features (no current_replicas included)
-    feature_vector = [metrics.get(feat, 0.0) for feat in FEATURE_ORDER]
-    scaled_features = scaler.transform([feature_vector])
+    # FIXED: Only scale the 5 raw base features from Prometheus
+    raw_features = [metrics.get(feat, 0.0) for feat in BASE_FEATURE_ORDER]
+    scaled_raw_features = scaler.transform([raw_features])
     
-    logger.info(f"  - Using scientifically selected features ({len(feature_vector)} dimensions)")
-    logger.info(f"  - Current system state: {current_replicas} replicas, "
-               f"latency={metrics.get('avg_response_time', 0):.1f}ms, "
-               f"memory={metrics.get('process_resident_memory_bytes', 0)/(1024*1024):.1f}MB")
+    # Get LSTM features separately (these are already in appropriate ranges)
+    lstm_features = [metrics.get(feat, 0.0) for feat in LSTM_FEATURE_ORDER]
+    
+    # Combine scaled raw features + unscaled LSTM features = 11 total for DQN
+    final_feature_vector = scaled_raw_features[0].tolist() + lstm_features
+    
+    logger.info(f"FEATURE_COMPOSITION: scaled_raw={len(scaled_raw_features[0])} "
+                f"lstm={len(lstm_features)} total={len(final_feature_vector)}")
+    
+    # Count available feature types (check existence, not value > 0)
+    base_available = sum(1 for feat in BASE_FEATURE_ORDER if feat in metrics)
+    lstm_available = sum(1 for feat in LSTM_FEATURE_ORDER if feat in metrics)
+    
+    logger.info(f"SYSTEM_STATE: replicas={current_replicas} "
+               f"unavailable={metrics.get('kube_deployment_status_replicas_unavailable', 0)} "
+               f"readiness={metrics.get('kube_pod_container_status_ready', 1.0):.3f}")
+    
+    # Log LSTM insights if available
+    proactive_override = None
+    if lstm_available > 0:
+        next_30sec = metrics.get('next_30sec_pressure', 0)
+        next_60sec = metrics.get('next_60sec_pressure', 0)
+        trend_velocity = metrics.get('trend_velocity', 0)
+        optimal_replicas = metrics.get('optimal_replicas_forecast', current_replicas)
+        
+        # PROACTIVE SCALING LOGIC - New LSTM architecture
+        pressure_increase_30s = next_30sec - 0.5  # 0.5 is baseline/neutral pressure
+        pressure_increase_60s = next_60sec - 0.5
+        max_pressure_increase = max(pressure_increase_30s, pressure_increase_60s)
+        
+        # Strong proactive signals that should override DQN conservatism
+        if max_pressure_increase > 0.3 and trend_velocity > 0.1:  # Strong load increase predicted
+            proactive_override = "Scale Up"
+            override_reason = f"LSTM predicts strong load increase: {max_pressure_increase:+.2f} pressure, {trend_velocity:+.2f} velocity"
+        elif max_pressure_increase < -0.3 and trend_velocity < -0.1 and current_replicas > 1:  # Strong load decrease
+            proactive_override = "Scale Down" 
+            override_reason = f"LSTM predicts strong load decrease: {max_pressure_increase:+.2f} pressure, {trend_velocity:+.2f} velocity"
+        elif abs(optimal_replicas - current_replicas) >= 2:  # LSTM strongly disagrees with current replica count
+            if optimal_replicas > current_replicas:
+                proactive_override = "Scale Up"
+                override_reason = f"LSTM optimal replicas ({optimal_replicas:.1f}) significantly higher than current ({current_replicas})"
+            else:
+                proactive_override = "Scale Down"
+                override_reason = f"LSTM optimal replicas ({optimal_replicas:.1f}) significantly lower than current ({current_replicas})"
+        
+        proactive_signal = "SCALE_UP_SOON" if max_pressure_increase > 0.2 else "STABLE" if max_pressure_increase > -0.2 else "SCALE_DOWN_SOON"
+        
+        logger.info(f"LSTM_INSIGHTS: 30sec_pressure={next_30sec:.2f} "
+                   f"60sec_pressure={next_60sec:.2f} "
+                   f"pressure_change={max_pressure_increase:+.2f} "
+                   f"trend_velocity={trend_velocity:+.2f} "
+                   f"optimal_replicas={optimal_replicas:.1f} "
+                   f"proactive_signal={proactive_signal}")
+        
+        if proactive_override:
+            logger.warning(f"PROACTIVE_OVERRIDE: {proactive_override} - {override_reason}")
     
     try:
         if dqn_model is not None:
@@ -715,7 +884,7 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
             global current_epsilon, decision_count
             
             device = next(dqn_model.parameters()).device
-            input_tensor = torch.FloatTensor(scaled_features).to(device)
+            input_tensor = torch.FloatTensor([final_feature_vector]).to(device)
             
             # Set model to evaluation mode to disable BatchNorm training behavior
             dqn_model.eval()
@@ -734,18 +903,26 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
             if random.random() < current_epsilon:
                 action_index = random.randint(0, 2)  # Random action
                 exploration_type = "exploration"
-                logger.info(f"  - 🎲 EXPLORATION: Random action selected (ε={current_epsilon:.3f})")
+                logger.info(f"DQN_EXPLORATION: random_action epsilon={current_epsilon:.3f}")
             else:
                 action_index = np.argmax(q_values)  # Greedy action
                 exploration_type = "exploitation"  
-                logger.info(f"  - 🎯 EXPLOITATION: Best action selected (ε={current_epsilon:.3f})")
+                logger.info(f"DQN_EXPLOITATION: best_action epsilon={current_epsilon:.3f}")
             
             # Decay epsilon
             current_epsilon = max(EPSILON_END, current_epsilon * EPSILON_DECAY)
             decision_count += 1
             
             action_map = {0: "Scale Down", 1: "Keep Same", 2: "Scale Up"}
-            action_name = action_map.get(action_index, "Unknown")
+            dqn_action_name = action_map.get(action_index, "Unknown")
+            
+            # Let DQN make the decision - no overrides
+            action_name = dqn_action_name
+            override_applied = False
+            
+            # Log LSTM insights for training feedback
+            if proactive_override and proactive_override != action_name:
+                logger.info(f"LSTM_SIGNAL: suggests={proactive_override} dqn_chose={action_name} (training_opportunity)")
             
             # Generate comprehensive explanation using explainable AI system
             explanation = decision_reasoning.explain_dqn_decision(
@@ -757,26 +934,40 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
                 current_replicas=current_replicas
             )
             
+            # Add override information to explanation
+            if override_applied:
+                explanation['proactive_override'] = {
+                    'applied': True,
+                    'dqn_recommendation': dqn_action_name,
+                    'lstm_override': action_name,
+                    'reason': override_reason
+                }
+            
             # Log detailed reasoning
-            decision_reasoning.log_decision_reasoning(explanation, metrics)
+            decision_reasoning.log_decision_reasoning(explanation, metrics, q_values.tolist())
             
             # Enhanced logging with confidence and reasoning
             confidence = explanation['confidence_metrics']['decision_confidence']
             risk_level = explanation['risk_assessment']
+            confidence_gap = explanation['confidence_metrics']['confidence_gap']
             
-            logger.info(f"  - 🤖 DQN DECISION: '{action_name}' "
-                       f"(confidence: {confidence}, risk: {risk_level})")
-            logger.info(f"  - 📊 Q-values: {[f'{q:.3f}' for q in q_values]} "
-                       f"(gap: {explanation['confidence_metrics']['confidence_gap']:.3f})")
-            logger.info(f"  - 🧠 Key factors: {len(explanation['reasoning_factors'])} reasoning points identified")
+            if override_applied:
+                logger.info(f"FINAL_DECISION: action={action_name} (DQN={dqn_action_name}, LSTM_OVERRIDE) confidence={confidence} risk={risk_level}")
+            else:
+                logger.info(f"DQN_DECISION: action={action_name} confidence={confidence} risk={risk_level}")
+            logger.info(f"DQN_Q_VALUES: values=[{','.join(f'{q:.3f}' for q in q_values)}] gap={confidence_gap:.3f}")
+            logger.info(f"DQN_REASONING: factors_count={len(explanation['reasoning_factors'])}")
             
             # Log specific reasoning for this decision
             if ENABLE_DETAILED_REASONING:
-                logger.info("  - 💭 Decision reasoning summary:")
-                for factor in explanation['reasoning_factors'][:3]:  # Top 3 factors
-                    logger.info(f"    • {factor}")
+                logger.info("DQN_FACTORS: summary_top3")
+                for i, factor in enumerate(explanation['reasoning_factors'][:3]):  # Top 3 factors
+                    logger.info(f"DQN_FACTOR_{i+1}: {factor}")
             
             experience_update = {"state": metrics, "action": action_name}
+            
+            logger.info("=" * 60)
+            logger.info("NODE_END: get_dqn_recommendation")
             return {
                 "dqn_prediction": {
                     "action_name": action_name, 
@@ -790,30 +981,41 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
                 "experience": experience_update
             }
         else:
-            # Enhanced fallback: Rule-based logic with detailed reasoning
-            logger.info("  - 🔄 Using enhanced fallback rule-based logic (DQN model not available)")
-            avg_response_time = metrics.get('avg_response_time', 100)  # ms
-            memory_usage = metrics.get('process_resident_memory_bytes', 0) / (1024 * 1024 * 1024)  # GB
+            # Enhanced fallback: Rule-based logic with balanced selected features
+            logger.info("DQN_FALLBACK: using_rule_based_logic model_not_available")
+            http_bucket = metrics.get('http_request_duration_highr_seconds_bucket', 0)
+            memory_bytes = metrics.get('process_resident_memory_bytes', 100000000)  # bytes
+            cpu_usage = metrics.get('process_cpu_seconds_total', 0)  # %
+            scrape_samples = metrics.get('scrape_samples_scraped', 300)
+            response_size = metrics.get('http_response_size_bytes_sum', 0)
             
             # Generate analysis for fallback decision
             analysis = decision_reasoning.analyze_metrics(metrics, current_replicas)
             
-            # Enhanced rule-based decision with reasoning
+            # Enhanced rule-based decision with raw feature reasoning
             reasoning_factors = []
             
-            if avg_response_time > 500 or memory_usage > 2.0:  # High latency or memory pressure
+            # Decision logic based on balanced selected features
+            memory_mb = memory_bytes / 1000000  # Convert to MB for readability
+            
+            if http_bucket > 1000 or memory_mb > 500 or scrape_samples < 100:  # System stress
                 action_name = "Scale Up"
-                reasoning_factors.append(f"High latency ({avg_response_time:.1f}ms) or memory pressure ({memory_usage:.2f}GB)")
-                reasoning_factors.append("System showing signs of stress - scaling up to improve performance")
+                reasoning_factors.append(f"System stress detected: {http_bucket:.0f} HTTP buckets, {memory_mb:.1f}MB memory, {scrape_samples:.0f} scrape samples")
+                reasoning_factors.append("Scaling up to improve system performance and health")
                 risk_level = "high"
-            elif avg_response_time < 100 and memory_usage < 0.5 and current_replicas > 1:  # Low load
+            elif cpu_usage > 80 or response_size > 100000:  # High load
+                action_name = "Scale Up"
+                reasoning_factors.append(f"High load detected: {cpu_usage:.1f}% CPU, {response_size:.0f} response size")
+                reasoning_factors.append("Scaling up to handle increased workload")
+                risk_level = "medium"
+            elif cpu_usage < 20 and http_bucket < 100 and current_replicas > 1 and scrape_samples > 200:  # Low load
                 action_name = "Scale Down"
-                reasoning_factors.append(f"Low latency ({avg_response_time:.1f}ms) and memory usage ({memory_usage:.2f}GB)")
+                reasoning_factors.append(f"Low load detected: {cpu_usage:.1f}% CPU, {http_bucket:.0f} HTTP buckets, healthy scrape samples")
                 reasoning_factors.append(f"System has excess capacity with {current_replicas} replicas - can optimize costs")
                 risk_level = "low"
             else:
                 action_name = "Keep Same"
-                reasoning_factors.append(f"Moderate latency ({avg_response_time:.1f}ms) and memory usage ({memory_usage:.2f}GB)")
+                reasoning_factors.append(f"Moderate load: {cpu_usage:.1f}% CPU, {http_bucket:.0f} HTTP buckets, {memory_mb:.1f}MB memory")
                 reasoning_factors.append("System operating within acceptable parameters")
                 risk_level = "low"
             
@@ -832,15 +1034,18 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
                 'system_analysis': analysis
             }
             
-            logger.info(f"  - 📋 FALLBACK DECISION: '{action_name}' (risk: {risk_level})")
-            logger.info(f"  - 💭 Reasoning: {reasoning_factors[0]}")
+            logger.info(f"FALLBACK_DECISION: action={action_name} risk={risk_level}")
+            logger.info(f"FALLBACK_REASONING: {reasoning_factors[0]}")
             
             if ENABLE_DETAILED_REASONING:
-                logger.info("  - 📊 Fallback analysis:")
-                for factor in reasoning_factors:
-                    logger.info(f"    • {factor}")
+                logger.info("FALLBACK_ANALYSIS: detailed_factors")
+                for i, factor in enumerate(reasoning_factors):
+                    logger.info(f"FALLBACK_FACTOR_{i+1}: {factor}")
             
             experience_update = {"state": metrics, "action": action_name}
+            
+            logger.info("=" * 60)
+            logger.info("NODE_END: get_dqn_recommendation")
             return {
                 "dqn_prediction": {
                     "action_name": action_name, 
@@ -855,12 +1060,21 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
             
     except Exception as e:
         logger.error(f"DQN inference failed: {e}", exc_info=True)
+        logger.info("=" * 60)
+        logger.info("NODE_END: get_dqn_recommendation")
         return {"error": f"DQN_INFERENCE_FAILED: {e}"}
 
 async def validate_with_llm(state: ScalingState) -> Dict[str, Any]:
-    logger.info("==> Node: validate_with_llm")
+    logger.info("NODE_START: validate_with_llm")
+    logger.info("=" * 60)
+    
+    # Check if LLM validation is disabled
+    if not ENABLE_LLM_VALIDATION:
+        logger.info("LLM_VALIDATION: disabled_by_config skipping")
+        return {"llm_validation_response": {"approved": True, "reason": "LLM validation disabled by configuration.", "confidence": "medium"}}
+    
     if not validator_agent:
-        logger.warning("  - Validator agent not initialized, skipping.")
+        logger.warning("LLM_VALIDATION: agent_not_initialized skipping")
         return {"llm_validation_response": {"approved": True, "reason": "Agent not available.", "confidence": "low"}}
 
     # Handle missing dqn_prediction gracefully
@@ -870,8 +1084,20 @@ async def validate_with_llm(state: ScalingState) -> Dict[str, Any]:
     dqn_risk = dqn_prediction.get('risk_assessment', 'unknown')
     dqn_explanation = dqn_prediction.get('explanation', {})
 
-    # Create comprehensive validation prompt with structured reasoning requirements
-    prompt = f"""You are an expert Kubernetes autoscaling validator. Analyze the following DQN scaling recommendation and provide structured validation.
+    # Extract LSTM predictions for LLM context
+    metrics = state['current_metrics']
+    next_30sec = metrics.get('next_30sec_pressure', 0)
+    next_60sec = metrics.get('next_60sec_pressure', 0)
+    trend_velocity = metrics.get('trend_velocity', 0)
+    optimal_replicas = metrics.get('optimal_replicas_forecast', state['current_replicas'])
+    
+    # Calculate pressure changes for context
+    baseline_pressure = 0.5  # Neutral pressure level
+    pressure_change_30s = next_30sec - baseline_pressure
+    pressure_change_60s = next_60sec - baseline_pressure
+    
+    # Create comprehensive validation prompt with LSTM intelligence
+    prompt = f"""You are an expert Kubernetes autoscaling validator with access to advanced LSTM predictive intelligence. Analyze the following DQN scaling recommendation.
 
 DQN RECOMMENDATION ANALYSIS:
 - Recommended Action: {action_name}
@@ -881,77 +1107,118 @@ DQN RECOMMENDATION ANALYSIS:
 - Current Replicas: {state['current_replicas']}
 
 CURRENT SYSTEM METRICS:
-- Response Time: {state['current_metrics'].get('avg_response_time', 0):.1f}ms
-- Memory Usage: {state['current_metrics'].get('process_resident_memory_bytes', 0)/(1024*1024):.1f}MB
-- Network Queue: {state['current_metrics'].get('node_network_transmit_queue_length', 0)}
+- Pod Readiness: {metrics.get('kube_pod_container_status_ready', 1.0):.1%}
+- Unavailable Replicas: {metrics.get('kube_deployment_status_replicas_unavailable', 0)}
+- CPU Usage: {metrics.get('process_cpu_seconds_total', 0):.1f}%
+- HTTP Latency Sum: {metrics.get('http_request_duration_highr_seconds_sum', 0):.3f}s
+- Container Restarts: {metrics.get('kube_pod_container_status_restarts_total', 0)}
+
+LSTM PREDICTIVE INTELLIGENCE (CRITICAL FOR PROACTIVE SCALING):
+- Next 30sec Load Pressure: {next_30sec:.2f} (change: {pressure_change_30s:+.2f})
+- Next 60sec Load Pressure: {next_60sec:.2f} (change: {pressure_change_60s:+.2f})
+- Trend Velocity: {trend_velocity:+.2f} (negative=slowing, positive=accelerating)
+- LSTM Optimal Replicas: {optimal_replicas:.1f} (AI recommendation)
+- Pressure Trend: {"INCREASING" if max(pressure_change_30s, pressure_change_60s) > 0.1 else "DECREASING" if max(pressure_change_30s, pressure_change_60s) < -0.1 else "STABLE"}
 
 DQN REASONING FACTORS:
 {chr(10).join(f"- {factor}" for factor in dqn_explanation.get('reasoning_factors', ['No reasoning available']))}
 
 VALIDATION REQUIREMENTS:
-1. Assess if the scaling action is safe and appropriate
-2. Consider potential risks and benefits
-3. Evaluate if the action aligns with best practices
-4. Check for any red flags or concerns
-5. Provide confidence level in your validation
+1. Analyze if the DQN decision makes sense given both current and predicted metrics
+2. Provide expert commentary on the scaling decision quality
+3. Identify any potential risks or missed opportunities
+4. Assess the balance between proactive (LSTM) and reactive (current) considerations
+5. Rate the decision quality and provide constructive feedback
 
-You may use your Kubernetes tools to check cluster state if needed.
+ANALYSIS FRAMEWORK:
+- Does the decision align with LSTM temporal intelligence?
+- Are there any red flags in current system metrics?
+- Is this decision likely to maintain good performance?
+- What are the potential consequences of this action?
+- How confident are you in this scaling decision?
 
-Respond ONLY with a valid JSON object in this exact format:
+IMPORTANT: You may use READ-ONLY Kubernetes tools to inspect cluster state if needed. 
+DO NOT attempt to scale, modify, or perform any write operations. Only inspect current state.
+
+CRITICAL: Respond with ONLY a valid JSON object. No markdown, no explanations, just the JSON.
+
+Example format:
 {{
-    "approved": boolean,
-    "confidence": "high|medium|low",
-    "reasoning": "detailed explanation of your validation decision",
-    "risk_factors": ["list", "of", "identified", "risks"],
-    "benefits": ["list", "of", "expected", "benefits"],
-    "alternative_actions": ["list", "of", "alternative", "suggestions", "if", "any"],
-    "cluster_check_performed": boolean,
-    "validation_score": 0.0-1.0
-}}"""
+    "approved": true,
+    "confidence": "high",
+    "reasoning": "DQN decision aligns well with LSTM predictions and current metrics",
+    "risk_factors": ["minimal risk identified"],
+    "benefits": ["maintains system stability", "cost effective"],
+    "alternative_actions": [],
+    "cluster_check_performed": false,
+    "validation_score": 0.8
+}}
+
+Your JSON response:"""
 
     try:
-        logger.info(f"  - 🤖 Validating DQN recommendation: '{action_name}' (DQN confidence: {dqn_confidence})")
+        logger.info(f"LLM_VALIDATION: validating action={action_name} dqn_confidence={dqn_confidence}")
         
         # Invoke the validator agent
         response = await validator_agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
         last_message = response['messages'][-1].content
         
-        logger.info(f"  - 📝 LLM validation response received ({len(last_message)} chars)")
+        logger.info(f"LLM_VALIDATION: response_received chars={len(last_message)}")
+        
+        # Debug: Log first 200 chars of response to see what we're getting
+        if len(last_message) > 0:
+            logger.debug(f"LLM_RAW_RESPONSE: {last_message[:200]}...")
         
         # Enhanced JSON parsing with fallback
         validation_result = parse_llm_json_response(last_message, action_name)
         
         # Enhanced logging with validation outcome - single comprehensive log
-        approval_status = "✅ APPROVED" if validation_result['approved'] else "❌ REJECTED"
-        logger.info(f"  - {approval_status} by LLM validator (confidence: {validation_result['confidence']})")
+        approval_status = "APPROVED" if validation_result['approved'] else "REJECTED"
+        logger.info(f"LLM_VALIDATION: {approval_status} confidence={validation_result['confidence']}")
         
         # Log validation reasoning only if detailed reasoning is enabled
         if ENABLE_DETAILED_REASONING:
-            logger.info("  - 🧠 LLM VALIDATION REASONING:")
-            logger.info(f"    • Approved: {validation_result['approved']}")
-            logger.info(f"    • Confidence: {validation_result['confidence']}")
-            logger.info(f"    • Validation Score: {validation_result.get('validation_score', 'N/A')}")
-            logger.info(f"    • Reasoning: {validation_result['reasoning'][:200]}...")
+            logger.info("LLM_REASONING: detailed_analysis")
+            logger.info(f"LLM_DETAILS: approved={validation_result['approved']} "
+                       f"confidence={validation_result['confidence']} "
+                       f"score={validation_result.get('validation_score', 'N/A')}")
+            logger.info(f"LLM_REASONING_TEXT: {validation_result['reasoning'][:200]}...")
             
             if validation_result.get('risk_factors'):
-                logger.info(f"    • Risk Factors: {len(validation_result['risk_factors'])} identified")
-                for risk in validation_result['risk_factors'][:3]:  # Top 3 risks
-                    logger.info(f"      - {risk}")
+                logger.info(f"LLM_RISKS: count={len(validation_result['risk_factors'])}")
+                for i, risk in enumerate(validation_result['risk_factors'][:3]):  # Top 3 risks
+                    logger.info(f"LLM_RISK_{i+1}: {risk}")
             
             if validation_result.get('benefits'):
-                logger.info(f"    • Benefits: {len(validation_result['benefits'])} identified")
-                for benefit in validation_result['benefits'][:2]:  # Top 2 benefits
-                    logger.info(f"      - {benefit}")
+                logger.info(f"LLM_BENEFITS: count={len(validation_result['benefits'])}")
+                for i, benefit in enumerate(validation_result['benefits'][:2]):  # Top 2 benefits
+                    logger.info(f"LLM_BENEFIT_{i+1}: {benefit}")
         
         if not validation_result['approved']:
-            logger.warning(f"  - ⚠️ REJECTION REASON: {validation_result['reasoning'][:100]}...")
+            logger.warning(f"LLM_REJECTION: reason={validation_result['reasoning'][:100]}...")
             if validation_result.get('alternative_actions'):
-                logger.info(f"  - 💡 Suggested alternatives: {', '.join(validation_result['alternative_actions'])}")
+                alternatives = ','.join(validation_result['alternative_actions'])
+                logger.info(f"LLM_ALTERNATIVES: {alternatives}")
         
+        logger.info("=" * 60)
+        logger.info("NODE_END: validate_with_llm")
         return {"llm_validation_response": validation_result}
         
     except Exception as e:
-        logger.error(f"LLM validation failed: {e}")
+        logger.error(f"LLM_VALIDATION: failed error={e}")
+        
+        # Check if this is a permission-related error or JSON parsing issue
+        error_str = str(e).lower()
+        is_permission_error = any(keyword in error_str for keyword in 
+                                 ['permission', 'forbidden', 'unauthorized', 'rbac', 'access denied'])
+        is_parsing_error = 'json' in error_str or 'parse' in error_str
+        
+        if is_permission_error:
+            logger.warning("LLM_VALIDATION: permission_error_detected suggesting_disable")
+            logger.warning("LLM_VALIDATION: consider_setting ENABLE_LLM_VALIDATION=false")
+        elif is_parsing_error:
+            logger.warning("LLM_VALIDATION: json_parsing_issues_detected")
+            logger.warning("LLM_VALIDATION: llm_not_following_json_format")
         
         # Enhanced fallback validation
         fallback_result = {
@@ -963,19 +1230,21 @@ Respond ONLY with a valid JSON object in this exact format:
             "alternative_actions": ["Monitor system closely", "Consider manual review"],
             "cluster_check_performed": False,
             "validation_score": 0.3,
-            "fallback_mode": True
+            "fallback_mode": True,
+            "permission_error": is_permission_error
         }
         
-        logger.warning(f"  - 🔄 FALLBACK VALIDATION: Approved with caution due to validation error")
+        logger.warning("LLM_VALIDATION: fallback_approved caution_mode")
+        logger.info("=" * 60)
+        logger.info("NODE_END: validate_with_llm")
         return {"llm_validation_response": fallback_result}
 
 def parse_llm_json_response(response_text: str, action_name: str) -> Dict[str, Any]:
     """Parse LLM JSON response with robust error handling and fallbacks."""
     try:
-        # Try to extract JSON from the response
         import re
         
-        # Look for JSON object in the response
+        # Try to extract JSON from the response
         json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
         if json_match:
             json_str = json_match.group()
@@ -1001,26 +1270,43 @@ def parse_llm_json_response(response_text: str, action_name: str) -> Dict[str, A
                 return parsed
         
         # If JSON parsing fails, try to extract key information
-        logger.warning("  - ⚠️ Could not parse JSON, attempting text analysis...")
+        logger.warning("LLM_PARSING: json_failed attempting_text_analysis")
+        logger.debug(f"LLM_PARSING: failed_text={response_text[:300]}...")
         
-        # Simple text analysis fallback
+        # Enhanced text analysis fallback
         text_lower = response_text.lower()
         
-        # Determine approval
-        if 'approve' in text_lower or 'safe' in text_lower or 'good' in text_lower:
+        # Count positive vs negative indicators
+        positive_indicators = ['approve', 'safe', 'good', 'reasonable', 'appropriate', 'valid', 'correct', 'fine', 'ok', 'yes']
+        negative_indicators = ['reject', 'deny', 'dangerous', 'risky', 'inappropriate', 'invalid', 'wrong', 'bad', 'no', 'unsafe']
+        
+        positive_count = sum(1 for indicator in positive_indicators if indicator in text_lower)
+        negative_count = sum(1 for indicator in negative_indicators if indicator in text_lower)
+        
+        # Determine approval based on indicator balance
+        if positive_count > negative_count:
             approved = True
-        elif 'reject' in text_lower or 'deny' in text_lower or 'dangerous' in text_lower:
+        elif negative_count > positive_count:
             approved = False
         else:
-            approved = True  # Default to approval
+            approved = True  # Default to approval when unclear
         
-        # Determine confidence
-        if 'high confidence' in text_lower or 'very confident' in text_lower:
+        # Determine confidence based on language certainty
+        high_confidence_words = ['confident', 'certain', 'sure', 'clear', 'obvious', 'definitely']
+        low_confidence_words = ['uncertain', 'unsure', 'maybe', 'possibly', 'might', 'unclear', 'concerned']
+        
+        high_conf_count = sum(1 for word in high_confidence_words if word in text_lower)
+        low_conf_count = sum(1 for word in low_confidence_words if word in text_lower)
+        
+        if high_conf_count > low_conf_count and high_conf_count > 0:
             confidence = 'high'
-        elif 'low confidence' in text_lower or 'uncertain' in text_lower:
+        elif low_conf_count > high_conf_count and low_conf_count > 0:
             confidence = 'low'
         else:
             confidence = 'medium'
+        
+        # Log the analysis for debugging
+        logger.info(f"LLM_TEXT_ANALYSIS: pos_indicators={positive_count} neg_indicators={negative_count} approved={approved} confidence={confidence}")
         
         return {
             'approved': approved,
@@ -1051,7 +1337,8 @@ def parse_llm_json_response(response_text: str, action_name: str) -> Dict[str, A
         }
 
 def plan_final_action(state: ScalingState) -> Dict[str, Any]:
-    logger.info("==> Node: plan_final_action")
+    logger.info("NODE_START: plan_final_action")
+    logger.info("=" * 60)
     current_replicas = state['current_replicas']
     
     # Handle missing dqn_prediction gracefully
@@ -1147,34 +1434,36 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
         decision_explanation['audit_trail_id'] = audit_trail['decision_id']
     
     # Enhanced logging with complete decision reasoning
-    logger.info(f"  - 🎯 FINAL DECISION: Scale from {current_replicas} to {final_decision} replicas")
-    logger.info(f"  - 📊 Decision confidence: {overall_confidence} (DQN: {dqn_confidence}, LLM: {llm_confidence})")
-    logger.info(f"  - ✅ LLM approval: {'Yes' if llm_approved else 'No'}")
-    logger.info(f"  - 📈 Prometheus gauge updated to {final_decision}")
+    logger.info(f"FINAL_DECISION: scale_from={current_replicas} scale_to={final_decision}")
+    logger.info(f"FINAL_CONFIDENCE: overall={overall_confidence} dqn={dqn_confidence} llm={llm_confidence}")
+    logger.info(f"FINAL_APPROVAL: llm_approved={llm_approved}")
+    logger.info(f"PROMETHEUS: gauge_updated value={final_decision}")
     
     if ENABLE_DETAILED_REASONING:
-        logger.info("  - 🔍 FINAL DECISION ANALYSIS:")
-        logger.info(f"    • Action Path: {action_name} → {decision_explanation['decision_pipeline']['final_decision']['action_executed']}")
-        logger.info(f"    • Risk Level: {dqn_risk}")
-        logger.info(f"    • Expected Outcomes: {len(decision_explanation['expected_outcomes'])} identified")
-        for outcome in decision_explanation['expected_outcomes']:
-            logger.info(f"      - {outcome}")
+        logger.info("FINAL_DECISION_ANALYSIS: detailed_breakdown")
+        logger.info(f"FINAL_DECISION_ANALYSIS: action_path={action_name}_to_{decision_explanation['decision_pipeline']['final_decision']['action_executed']}")
+        logger.info(f"FINAL_DECISION_ANALYSIS: risk_level={dqn_risk}")
+        logger.info(f"FINAL_DECISION_ANALYSIS: expected_outcomes_count={len(decision_explanation['expected_outcomes'])}")
+        for i, outcome in enumerate(decision_explanation['expected_outcomes']):
+            logger.info(f"FINAL_DECISION_ANALYSIS: outcome_{i+1}={outcome}")
         
         if decision_explanation['risk_mitigation']:
-            logger.info(f"    • Risk Mitigation: {len(decision_explanation['risk_mitigation'])} measures")
-            for mitigation in decision_explanation['risk_mitigation']:
-                logger.info(f"      - {mitigation}")
+            logger.info(f"FINAL_DECISION_ANALYSIS: risk_mitigation_count={len(decision_explanation['risk_mitigation'])}")
+            for i, mitigation in enumerate(decision_explanation['risk_mitigation']):
+                logger.info(f"FINAL_DECISION_ANALYSIS: mitigation_{i+1}={mitigation}")
     
     # Warning for low confidence decisions
     if overall_confidence == 'low':
-        logger.warning(f"  - ⚠️ LOW CONFIDENCE DECISION: Enhanced monitoring recommended")
-        logger.warning(f"  - 🔍 Consider manual review if issues arise")
+        logger.warning("LOW_CONFIDENCE: enhanced_monitoring_recommended")
+        logger.warning("LOW_CONFIDENCE: consider_manual_review")
     
     # Warning for LLM rejection but proceeding anyway
     if not llm_approved:
-        logger.warning(f"  - ⚠️ PROCEEDING DESPITE LLM CONCERNS")
-        logger.warning(f"  - 💭 LLM reasoning: {llm_reasoning[:150]}...")
+        logger.warning("LLM_OVERRIDE: proceeding_despite_concerns")
+        logger.warning(f"LLM_REASONING: {llm_reasoning[:150]}...")
     
+    logger.info("=" * 60)
+    logger.info("NODE_END: plan_final_action")
     return {
         "final_decision": final_decision,
         "decision_explanation": decision_explanation,
@@ -1183,12 +1472,17 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     }
 
 async def wait_for_system_to_stabilize(state: ScalingState) -> None:
-    logger.info(f"==> Node: wait_for_system_to_stabilize (waiting {STABILIZATION_PERIOD_SECONDS}s)")
+    logger.info("NODE_START: wait_for_system_to_stabilize")
+    logger.info("=" * 60)
+    logger.info(f"STABILIZATION: waiting_seconds={STABILIZATION_PERIOD_SECONDS}")
     await asyncio.sleep(STABILIZATION_PERIOD_SECONDS)
+    logger.info("=" * 60)
+    logger.info("NODE_END: wait_for_system_to_stabilize")
     return {}
 
 async def observe_next_state_and_calculate_reward(state: ScalingState) -> Dict[str, Any]:
-    logger.info("==> Node: observe_next_state_and_calculate_reward")
+    logger.info("NODE_START: observe_next_state_and_calculate_reward")
+    logger.info("=" * 60)
     
     # Get next state data
     next_state_data = await get_live_metrics(state, is_next_state=True)
@@ -1207,56 +1501,92 @@ async def observe_next_state_and_calculate_reward(state: ScalingState) -> Dict[s
     
     experience['reward'] = reward
     experience['next_state'] = {**next_state_metrics, 'current_replicas': current_replicas}
+    
+    logger.info("=" * 60)
+    logger.info("NODE_END: observe_next_state_and_calculate_reward")
     return {"experience": experience}
 
 def calculate_stable_reward(current_state, next_state, action, current_replicas):
-    """Calculate normalized, stable reward function."""
+    """Calculate normalized, stable reward function using balanced selected features."""
     
-    # Get metrics with safe defaults (using the new feature name)
-    current_latency = current_state.get('avg_response_time', 100) / 1000  # Convert ms to seconds
-    next_latency = next_state.get('avg_response_time', 100) / 1000       # Convert ms to seconds
+    # Get balanced selected feature metrics with safe defaults
+    current_http_bucket = current_state.get('http_request_duration_highr_seconds_bucket', 0)
+    next_http_bucket = next_state.get('http_request_duration_highr_seconds_bucket', 0)
     
-    # Ensure latency values are reasonable
-    current_latency = max(0.01, current_latency)  # Min 10ms
-    next_latency = max(0.01, next_latency)        # Min 10ms
+    current_memory = current_state.get('process_resident_memory_bytes', 100000000) / 1000000  # MB
+    next_memory = next_state.get('process_resident_memory_bytes', 100000000) / 1000000
     
-    # 1. Latency improvement (normalized)
-    latency_improvement = max(0, (current_latency - next_latency) / current_latency)
-    latency_reward = latency_improvement * 10.0  # Scale to reasonable range
+    current_scrape = current_state.get('scrape_samples_scraped', 300)
+    next_scrape = next_state.get('scrape_samples_scraped', 300)
     
-    # 2. Cost efficiency (non-linear to discourage over-scaling)
+    current_response_size = current_state.get('http_response_size_bytes_sum', 0) / 1000  # KB
+    next_response_size = next_state.get('http_response_size_bytes_sum', 0) / 1000
+    
+    # 1. HTTP traffic improvement (reduce HTTP bucket count)
+    http_improvement = max(0, current_http_bucket - next_http_bucket)
+    http_reward = http_improvement * 3.0  # Reward for reducing HTTP bucket count
+    
+    # 2. Memory efficiency (stable memory usage)
+    memory_change = abs(next_memory - current_memory)
+    memory_reward = max(0, 2.0 - memory_change * 0.01)  # Reward stable memory usage
+    
+    # 3. Health monitoring improvement (increase scrape samples)
+    scrape_improvement = max(0, next_scrape - current_scrape)
+    health_reward = scrape_improvement * 0.01  # Small reward for health improvement
+    
+    # 4. Response size efficiency (reduce response size)
+    response_improvement = max(0, current_response_size - next_response_size)
+    response_reward = response_improvement * 0.001  # Small reward for response efficiency
+    
+    # 5. Cost efficiency (non-linear to discourage over-scaling)
     base_cost = 1.0
-    replica_cost = base_cost * (current_replicas ** 1.2)  # Slight exponential cost
+    replica_cost = base_cost * (current_replicas ** 1.2)
     cost_penalty = -replica_cost * 0.1
     
-    # 3. Stability bonus (discourage frequent changes)
+    # 6. Action stability bonus
     action_stability = 1.0 if action == "Keep Same" else 0.0
-    stability_bonus = action_stability * 2.0
+    stability_bonus = action_stability * 1.0
     
-    # 4. Performance penalty (if latency is too high)
-    performance_penalty = 0.0
-    if next_latency > 0.2:  # 200ms threshold
-        performance_penalty = -5.0 * (next_latency - 0.2)
+    # 7. Health penalty (if system is in bad state)
+    health_penalty = 0.0
+    if next_http_bucket > 1000:  # High HTTP bucket count indicates stress
+        health_penalty = -3.0
+    if next_scrape < 100:  # Low scrape samples indicates health issues
+        health_penalty += -2.0
+    if next_memory > 1000:  # Very high memory usage (>1GB)
+        health_penalty += -2.0
     
-    # 5. Efficiency bonus (if we reduced replicas but maintained good latency)
-    efficiency_bonus = 0.0
-    if action == "Scale Down" and next_latency < 0.15:  # Good latency with fewer replicas
-        efficiency_bonus = 3.0
+    # 8. PROACTIVE SCALING BONUS: Reward decisions that align with LSTM predictions
+    proactive_bonus = 0.0
+    if 'next_30sec_pressure' in next_state and 'next_60sec_pressure' in next_state:
+        next_30sec = next_state.get('next_30sec_pressure', 0.5)
+        next_60sec = next_state.get('next_60sec_pressure', 0.5)
+        predicted_load_increase = max(next_30sec - 0.5, next_60sec - 0.5)
+        
+        # Reward proactive scaling up when LSTM predicts load increase
+        if action == "Scale Up" and predicted_load_increase > 0.2:
+            proactive_bonus = predicted_load_increase * 3.0  # Bonus for proactive scaling
+        # Reward proactive scaling down when LSTM predicts load decrease  
+        elif action == "Scale Down" and predicted_load_increase < -0.2:
+            proactive_bonus = abs(predicted_load_increase) * 2.0
     
     # Combine components
-    total_reward = latency_reward + cost_penalty + stability_bonus + performance_penalty + efficiency_bonus
+    total_reward = (http_reward + memory_reward + health_reward + response_reward + 
+                   cost_penalty + stability_bonus + health_penalty + proactive_bonus)
     
     # Normalize to [-10, 10] range
     total_reward = np.clip(total_reward, -10.0, 10.0)
     
-    logger.info(f"  - Reward components: latency={latency_reward:.2f}, cost={cost_penalty:.2f}, "
-               f"stability={stability_bonus:.2f}, performance={performance_penalty:.2f}, "
-               f"efficiency={efficiency_bonus:.2f}, total={total_reward:.2f}")
+    logger.info(f"REWARD_COMPONENTS: http={http_reward:.2f} memory={memory_reward:.2f} "
+               f"health={health_reward:.2f} response={response_reward:.2f} "
+               f"cost={cost_penalty:.2f} health_penalty={health_penalty:.2f} "
+               f"proactive={proactive_bonus:.2f} total={total_reward:.2f}")
     
     return total_reward
     
 async def log_experience(state: ScalingState) -> Dict[str, Any]:
-    logger.info("==> Node: log_experience")
+    logger.info("NODE_START: log_experience")
+    logger.info("=" * 60)
     exp = state['experience']
     
     # Combined approach: immediate training + Redis backup + research logging
@@ -1264,22 +1594,24 @@ async def log_experience(state: ScalingState) -> Dict[str, Any]:
         # 1. Trigger immediate training (primary)
         if dqn_trainer:
             await dqn_trainer.add_experience_for_training(exp)
-            logger.info("🎯 Experience queued for immediate training")
+            logger.info("EXPERIENCE: queued_for_training")
         
         # 2. Also log to Redis as backup (for monitoring/debugging)
         if redis_client:
             experience_json = json.dumps(exp)
             redis_client.lpush(REPLAY_BUFFER_KEY, experience_json)
             redis_client.ltrim(REPLAY_BUFFER_KEY, 0, 99)  # Keep last 100 for monitoring
-            logger.info("📝 Experience also logged to Redis for monitoring")
+            logger.info("EXPERIENCE: logged_to_redis monitoring_enabled")
         
         # 3. Add to evaluator for analysis
         if evaluator and ENABLE_EVALUATION_OUTPUTS:
             evaluator.add_experience(exp)
         
     except Exception as e:
-        logger.error(f"Error in experience logging/training: {e}")
+        logger.error(f"EXPERIENCE: logging_failed error={e}")
     
+    logger.info("=" * 60)
+    logger.info("NODE_END: log_experience")
     return {}
 
 def create_graph():
@@ -1306,16 +1638,20 @@ def create_graph():
 # --- kopf Operator Setup ---
 @kopf.on.startup()
 async def configure(settings: kopf.OperatorSettings, **kwargs):
-    # kopf's default logging format is slightly different, so we align it
+    # Production logging format - structured and regex-extractable
     logging.getLogger().handlers.clear()
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        level=logging.INFO, 
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
     
-    logger.info("🚀 NimbusGuard DQN Operator starting up...")
+    logger.info("STARTUP: NimbusGuard DQN Operator initializing components")
     
     # Initialize all global clients
-    global prometheus_client, llm, scaler, dqn_model, validator_agent, redis_client, minio_client, metrics_server, dqn_trainer, evaluator
+    global prometheus_client, llm, scaler, dqn_model, validator_agent, redis_client, minio_client, metrics_server, dqn_trainer, evaluator, lstm_predictor
     
-    prometheus_client = PrometheusClient() # Use our custom PrometheusClient
+    prometheus_client = PrometheusClient()
     llm = ChatOpenAI(model=AI_MODEL, temperature=AI_TEMPERATURE)
 
     # Initialize MinIO client
@@ -1329,22 +1665,22 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         )
         if not minio_client.bucket_exists(BUCKET_NAME):
             minio_client.make_bucket(BUCKET_NAME)
-            logger.info(f"Created MinIO bucket: {BUCKET_NAME}")
-        logger.info("Successfully connected to MinIO.")
+            logger.info(f"MINIO: bucket_created name={BUCKET_NAME}")
+        logger.info("MINIO: connection_established")
     except Exception as e:
         logger.error(f"Failed to connect to MinIO: {e}")
         raise kopf.PermanentError(f"MinIO connection failed: {e}")
 
     # Load scaler from MinIO (upload from local file if not exists)
     try:
-        logger.info(f"Loading feature scaler from MinIO: {SCALER_NAME}")
+        logger.info(f"SCALER: loading from_minio={SCALER_NAME}")
         response = minio_client.get_object(BUCKET_NAME, SCALER_NAME)
         buffer = BytesIO(response.read())
         scaler = joblib.load(buffer)
-        logger.info(f"✅ Successfully loaded feature scaler from MinIO (RobustScaler with {len(FEATURE_ORDER)} features)")
+        logger.info(f"SCALER: loaded_successfully type=RobustScaler features={len(FEATURE_ORDER)}")
     except Exception as e:
-        logger.warning(f"Feature scaler not found in MinIO: {e}")
-        logger.info("🔄 Attempting to upload local feature scaler to MinIO...")
+        logger.warning(f"SCALER: not_found_in_minio error={e}")
+        logger.info("SCALER: attempting_local_upload")
         
         try:
             # Upload local feature scaler to MinIO
@@ -1361,26 +1697,26 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
                     len(scaler_data),
                     content_type='application/gzip'
                 )
-                logger.info(f"📤 Successfully uploaded local feature scaler to MinIO: {SCALER_NAME}")
+                logger.info(f"SCALER: uploaded_to_minio name={SCALER_NAME} size={len(scaler_data)}")
                 
                 # Now load it
                 scaler = joblib.load(BytesIO(scaler_data))
-                logger.info(f"✅ Successfully loaded uploaded feature scaler (RobustScaler with {len(FEATURE_ORDER)} features)")
+                logger.info(f"SCALER: local_upload_loaded type=RobustScaler features={len(FEATURE_ORDER)}")
             else:
-                logger.error(f"❌ FATAL: Local feature scaler not found at {local_scaler_path}")
+                logger.error(f"SCALER: local_file_missing path={local_scaler_path}")
                 raise kopf.PermanentError(f"Feature scaler not available locally or in MinIO")
                 
         except Exception as upload_error:
-            logger.error(f"❌ FATAL: Could not upload/load feature scaler: {upload_error}")
+            logger.error(f"SCALER: upload_failed error={upload_error}")
             raise kopf.PermanentError(f"Feature scaler loading failed: {upload_error}")
 
     # Upload training dataset to MinIO if not exists (for research and retraining)
     try:
         # Check if dataset exists in MinIO
         minio_client.stat_object(BUCKET_NAME, "dqn_features.parquet")
-        logger.info("✅ Training dataset already exists in MinIO")
+        logger.info("DATASET: already_exists_in_minio name=dqn_features.parquet")
     except Exception:
-        logger.info("🔄 Uploading training dataset to MinIO...")
+        logger.info("DATASET: uploading_to_minio")
         try:
             local_dataset_path = "/app/dqn_features.parquet"
             if os.path.exists(local_dataset_path):
@@ -1394,25 +1730,26 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
                     len(dataset_data),
                     content_type='application/octet-stream'
                 )
-                logger.info(f"📤 Successfully uploaded training dataset to MinIO: dqn_features.parquet ({len(dataset_data)} bytes)")
+                logger.info(f"DATASET: uploaded_successfully name=dqn_features.parquet size={len(dataset_data)}")
             else:
-                logger.warning(f"⚠️ Local training dataset not found at {local_dataset_path}")
+                logger.warning(f"DATASET: local_file_missing path={local_dataset_path}")
         except Exception as dataset_upload_error:
-            logger.warning(f"⚠️ Could not upload training dataset: {dataset_upload_error}")
+            logger.warning(f"DATASET: upload_failed error={dataset_upload_error}")
             # Not a fatal error - the system can still operate without historical data
 
     # Load DQN model from MinIO
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     try:
-        logger.info(f"Loading DQN model from MinIO: dqn_model.pt")
+        logger.info("DQN_MODEL: loading from_minio=dqn_model.pt")
         response = minio_client.get_object(BUCKET_NAME, "dqn_model.pt")
         buffer = BytesIO(response.read())
         checkpoint = torch.load(buffer, map_location=device)
         
-        # Initialize model with correct dimensions
-        state_dim = len(FEATURE_ORDER)
+        # Initialize model with clean architecture (5 base + 6 LSTM = 11 features)
+        state_dim = len(FEATURE_ORDER)  # Now 11 features total
         action_dim = 3
         dqn_model = EnhancedQNetwork(state_dim, action_dim).to(device)
+        logger.info(f"DQN_MODEL: architecture_initialized input_features={state_dim} output_actions={action_dim}")
         
         if isinstance(checkpoint, dict) and 'policy_net_state_dict' in checkpoint:
             dqn_model.load_state_dict(checkpoint['policy_net_state_dict'])
@@ -1420,7 +1757,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
             dqn_model.load_state_dict(checkpoint)
             
         dqn_model.eval()  # Set to evaluation mode
-        logger.info(f"Successfully loaded DQN model from MinIO (device: {device})")
+        logger.info(f"DQN_MODEL: loaded_successfully device={device}")
         
         # Initialize combined trainer for real-time learning
         dqn_trainer = CombinedDQNTrainer(dqn_model, device, FEATURE_ORDER)
@@ -1428,57 +1765,57 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         # Ensure model is saved to MinIO (in case it was loaded but trainer is new)
         try:
             await dqn_trainer._save_model()
-            logger.info("💾 DQN model state saved to MinIO")
+            logger.info("DQN_MODEL: saved_to_minio")
         except Exception as save_error:
-            logger.error(f"Failed to save loaded model to MinIO: {save_error}")
+            logger.error(f"DQN_MODEL: save_failed error={save_error}")
         
         # Start background training loop
         asyncio.create_task(dqn_trainer.continuous_training_loop())
-        logger.info("🚀 Combined DQN training loop started")
+        logger.info("DQN_TRAINER: background_loop_started")
         
     except Exception as e:
-        logger.warning(f"Could not load DQN model from MinIO: {e}")
-        logger.info("DQN adapter will use fallback scaling logic")
+        logger.warning(f"DQN_MODEL: load_failed error={e}")
+        logger.info("DQN_MODEL: using_fallback_logic")
         
         # Even without a pre-trained model, we can start with a fresh model
         try:
-            state_dim = len(FEATURE_ORDER)
+            state_dim = len(FEATURE_ORDER)  # Clean architecture: 11 features (5 base + 6 LSTM)
             action_dim = 3
             dqn_model = EnhancedQNetwork(state_dim, action_dim).to(device)
-            logger.info("🎯 Starting with fresh DQN model")
+            logger.info(f"DQN_MODEL: fresh_model_created input_features={state_dim} output_actions={action_dim}")
             
             # Initialize trainer with fresh model
-            logger.info("🔧 About to initialize CombinedDQNTrainer...")
+            logger.info("DQN_TRAINER: initializing")
             dqn_trainer = CombinedDQNTrainer(dqn_model, device, FEATURE_ORDER)
-            logger.info("🔧 CombinedDQNTrainer initialized successfully")
+            logger.info("DQN_TRAINER: initialized_successfully")
             
             # Save fresh model to MinIO immediately (synchronous to catch errors)
-            logger.info("🔧 About to save fresh model to MinIO...")
+            logger.info("DQN_MODEL: saving_fresh_model")
             try:
                 await dqn_trainer._save_model()
-                logger.info("💾 Fresh DQN model saved to MinIO")
+                logger.info("DQN_MODEL: fresh_model_saved")
             except Exception as save_error:
-                logger.error(f"Failed to save fresh model to MinIO: {save_error}")
+                logger.error(f"DQN_MODEL: save_failed error={save_error}")
                 # Continue anyway - the system can still function without saving
             
             asyncio.create_task(dqn_trainer.continuous_training_loop())
-            logger.info("🚀 Combined DQN training loop started with fresh model")
+            logger.info("DQN_TRAINER: fresh_model_loop_started")
             
         except Exception as fresh_model_error:
-            logger.error(f"Failed to create fresh DQN model: {fresh_model_error}")
+            logger.error(f"DQN_MODEL: fresh_creation_failed error={fresh_model_error}")
             dqn_trainer = None
 
     try:
         redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-        logger.info("Successfully connected to Redis for experience logging.")
+        logger.info("REDIS: connection_established")
     except Exception as e:
-        logger.error(f"Failed to connect to Redis during startup: {e}")
+        logger.error(f"REDIS: connection_failed error={e}")
         # Not raising a permanent error, as the operator might still function for decision-making
         
     # Initialize MCP validation with LLM supervisor
     if MCP_SERVER_URL:
         try:
-            logger.info(f"🔗 Connecting to MCP server at {MCP_SERVER_URL}")
+            logger.info(f"MCP: connecting url={MCP_SERVER_URL}")
             mcp_client = MultiServerMCPClient({
                 "kubernetes": {
                     "url": f"{MCP_SERVER_URL}/sse/",
@@ -1487,27 +1824,42 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
             })
             tools = await mcp_client.get_tools()
             validator_agent = create_react_agent(llm, tools=tools)
-            logger.info(f"🤖 LLM validator agent initialized with {len(tools)} MCP tools")
-            logger.info(f"🛡️ Available tools: {[tool.name for tool in tools]}")
+            logger.info(f"MCP: validator_initialized tools_count={len(tools)}")
+            logger.info(f"MCP: available_tools=[{','.join(tool.name for tool in tools)}]")
         except Exception as e:
-            logger.error(f"Failed to initialize MCP client: {e}")
-            logger.info("🤖 Falling back to LLM-only validation")
+            logger.error(f"MCP: initialization_failed error={e}")
+            logger.info("MCP: fallback_to_llm_only")
             validator_agent = create_react_agent(llm, tools=[])
     else:
-        logger.info("🤖 MCP_SERVER_URL not set. Using LLM-only validation")
+        logger.info("MCP: url_not_set using_llm_only")
         validator_agent = create_react_agent(llm, tools=[])
     
     # Initialize evaluator
     if ENABLE_EVALUATION_OUTPUTS:
         try:
             evaluator = DQNEvaluator(minio_client, bucket_name="evaluation-outputs")
-            logger.info("🔬 Evaluator initialized")
+            logger.info("EVALUATOR: initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize evaluator: {e}")
+            logger.error(f"EVALUATOR: initialization_failed error={e}")
             evaluator = None
     else:
-        logger.info("🔬 Evaluation outputs disabled")
+        logger.info("EVALUATOR: disabled")
         evaluator = None
+
+    # Initialize LSTM workload predictor for temporal features
+    try:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        lstm_predictor = create_lstm_predictor(
+            feature_names=BASE_FEATURE_ORDER,  # Use base features for LSTM input
+            device=str(device)
+        )
+        logger.info(f"LSTM: initialized device={device}")
+        logger.info(f"LSTM: input_features={len(BASE_FEATURE_ORDER)} output_features={len(LSTM_FEATURE_ORDER)}")
+        logger.info("LSTM: proactive_mode sequence_length=2min predictions=30sec+60sec_ahead")
+    except Exception as e:
+        logger.error(f"LSTM: initialization_failed error={e}")
+        logger.info("LSTM: operating_without_temporal_features")
+        lstm_predictor = None
 
     # Initialize gauges to a default value
     CURRENT_REPLICAS_GAUGE.set(1)
@@ -1515,11 +1867,11 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     
     # Run initial DQN decision to get a baseline
     try:
-        logger.info("🎯 Running initial DQN decision during startup...")
+        logger.info("DECISION: running_initial_baseline")
         await run_intelligent_scaling_decision()
-        logger.info("✅ Initial DQN decision completed")
+        logger.info("DECISION: initial_completed")
     except Exception as e:
-        logger.warning(f"Initial DQN decision failed (will retry with timer): {e}")
+        logger.warning(f"DECISION: initial_failed error={e} will_retry_with_timer")
     
     # Add HTTP/2 error log suppression
     aiohttp_server_logger = logging.getLogger("aiohttp.server")
@@ -1564,31 +1916,31 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     await metrics_server.setup()
     site = web.TCPSite(metrics_server, '0.0.0.0', 8080)
     await site.start()
-    logger.info("🌐 KEDA Metrics API server with HTTP/2 error suppression started on port 8080")
+    logger.info("METRICS_SERVER: started port=8080 keda_api_enabled")
         
-    logger.info(f"✅ Startup complete. Watching for ScaledObject events.")
+    logger.info("STARTUP: complete watching_scaledobject_events")
 
 @kopf.on.cleanup()
 async def cleanup(**kwargs):
-    logger.info("Operator shutting down.")
+    logger.info("SHUTDOWN: operator_stopping")
     if redis_client:
         try:
             redis_client.close()
         except Exception as e:
-            logger.error(f"Error closing Redis client: {e}")
+            logger.error(f"SHUTDOWN: redis_close_failed error={e}")
     
     if metrics_server:
         try:
             await metrics_server.cleanup()
-            logger.info("Metrics server stopped.")
+            logger.info("SHUTDOWN: metrics_server_stopped")
         except Exception as e:
-            logger.error(f"Error stopping metrics server: {e}")
+            logger.error(f"SHUTDOWN: metrics_server_error error={e}")
 
 # --- Timer-based DQN Decision Making ---
 @kopf.timer('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'}, interval=5)
 async def periodic_dqn_decision(spec, status, meta, **kwargs):
     """Periodically run DQN scaling decisions for DQN-enabled ScaledObjects (every 5 seconds for real-time response)"""
-    logger.info(f"🕐 Timer triggered for ScaledObject '{meta['name']}': Running periodic DQN decision")
+    logger.info(f"TIMER: triggered scaledobject={meta['name']}")
     
     # Only process our specific DQN ScaledObject
     if meta['name'] != 'consumer-scaler-dqn':
@@ -1599,24 +1951,25 @@ async def periodic_dqn_decision(spec, status, meta, **kwargs):
     is_active = any(condition.get('type') == 'Active' and condition.get('status') == 'True' 
                    for condition in status.get('conditions', []))
     
-    logger.info(f"📊 ScaledObject state: {current_replicas} replicas, Active: {is_active}")
+    logger.info(f"KEDA_STATUS: replicas={current_replicas} active={is_active}")
     
     try:
         # Run DQN decision making process
         await run_intelligent_scaling_decision()
-        logger.info("✅ Periodic DQN decision completed successfully")
+        logger.info("TIMER: decision_completed")
     except Exception as e:
-        logger.error(f"❌ Error in periodic DQN decision: {e}", exc_info=True)
+        logger.error(f"TIMER: decision_failed error={e}", exc_info=True)
 
 async def run_intelligent_scaling_decision():
     """Execute the intelligent scaling decision using DQN"""
-    logger.info("🧠 Starting intelligent scaling decision process...")
+    logger.info("DECISION: starting_intelligent_scaling")
     graph = create_graph()
     try:
         final_state = await graph.ainvoke({}, {"recursion_limit": 15})
-        logger.info(f"✅ Intelligent scaling decision complete. Final decision: {final_state.get('final_decision', 'N/A')} replicas")
+        final_replicas = final_state.get('final_decision', 'N/A')
+        logger.info(f"DECISION: completed final_replicas={final_replicas}")
     except Exception as e:
-        logger.error(f"❌ Critical error in intelligent scaling process: {e}", exc_info=True)
+        logger.error(f"DECISION: critical_error error={e}", exc_info=True)
 
 class PrometheusClient:
     """ A simple async-wrapper for the requests library for Prometheus. """
@@ -1657,35 +2010,66 @@ class DecisionReasoning:
             'performance_indicators': {}
         }
         
-        # Analyze key performance indicators
-        avg_response_time = metrics.get('avg_response_time', 0)
-        memory_usage = metrics.get('process_resident_memory_bytes', 0) / (1024 * 1024)  # MB
+        # Analyze key performance indicators using balanced selected features
+        http_bucket = metrics.get('http_request_duration_highr_seconds_bucket', 0)
+        memory_bytes = metrics.get('process_resident_memory_bytes', 100000000)
+        cpu_usage = metrics.get('process_cpu_seconds_total', 0)
+        scrape_samples = metrics.get('scrape_samples_scraped', 300)
+        response_size = metrics.get('http_response_size_bytes_sum', 0)
         
-        # Response time analysis
-        if avg_response_time > 500:
-            analysis['insights']['latency'] = "HIGH LATENCY DETECTED"
-            analysis['risk_factors'].append(f"Response time {avg_response_time:.1f}ms exceeds 500ms threshold")
-            analysis['performance_indicators']['latency_severity'] = 'critical'
-        elif avg_response_time > 200:
-            analysis['insights']['latency'] = "ELEVATED LATENCY"
-            analysis['risk_factors'].append(f"Response time {avg_response_time:.1f}ms approaching 500ms threshold")
-            analysis['performance_indicators']['latency_severity'] = 'warning'
+        memory_mb = memory_bytes / 1000000  # Convert to MB
+        
+        # HTTP traffic analysis
+        if http_bucket > 1000:
+            analysis['insights']['http_traffic'] = "HIGH HTTP TRAFFIC"
+            analysis['risk_factors'].append(f"HTTP bucket count {http_bucket:.0f} exceeds 1000")
+            analysis['performance_indicators']['http_severity'] = 'critical'
+        elif http_bucket > 500:
+            analysis['insights']['http_traffic'] = "ELEVATED HTTP TRAFFIC"
+            analysis['risk_factors'].append(f"HTTP bucket count {http_bucket:.0f} approaching 1000")
+            analysis['performance_indicators']['http_severity'] = 'warning'
         else:
-            analysis['insights']['latency'] = "LATENCY NORMAL"
-            analysis['performance_indicators']['latency_severity'] = 'normal'
+            analysis['insights']['http_traffic'] = "HTTP TRAFFIC NORMAL"
+            analysis['performance_indicators']['http_severity'] = 'normal'
         
         # Memory analysis
-        if memory_usage > 2000:  # 2GB
+        if memory_mb > 1000:
             analysis['insights']['memory'] = "HIGH MEMORY USAGE"
-            analysis['risk_factors'].append(f"Memory usage {memory_usage:.1f}MB exceeds 2GB threshold")
+            analysis['risk_factors'].append(f"Memory usage {memory_mb:.1f}MB exceeds 1GB")
             analysis['performance_indicators']['memory_severity'] = 'critical'
-        elif memory_usage > 1000:  # 1GB
+        elif memory_mb > 500:
             analysis['insights']['memory'] = "ELEVATED MEMORY USAGE"
-            analysis['risk_factors'].append(f"Memory usage {memory_usage:.1f}MB approaching 2GB threshold")
+            analysis['risk_factors'].append(f"Memory usage {memory_mb:.1f}MB approaching 1GB")
             analysis['performance_indicators']['memory_severity'] = 'warning'
         else:
             analysis['insights']['memory'] = "MEMORY USAGE NORMAL"
             analysis['performance_indicators']['memory_severity'] = 'normal'
+        
+        # Health monitoring analysis
+        if scrape_samples < 100:
+            analysis['insights']['health'] = "POOR HEALTH MONITORING"
+            analysis['risk_factors'].append(f"Scrape samples {scrape_samples:.0f} below 100")
+            analysis['performance_indicators']['health_severity'] = 'critical'
+        elif scrape_samples < 200:
+            analysis['insights']['health'] = "DEGRADED HEALTH MONITORING"
+            analysis['risk_factors'].append(f"Scrape samples {scrape_samples:.0f} below 200")
+            analysis['performance_indicators']['health_severity'] = 'warning'
+        else:
+            analysis['insights']['health'] = "HEALTH MONITORING NORMAL"
+            analysis['performance_indicators']['health_severity'] = 'normal'
+        
+        # CPU analysis (unchanged)
+        if cpu_usage > 90:
+            analysis['insights']['cpu'] = "HIGH CPU USAGE"
+            analysis['risk_factors'].append(f"CPU usage {cpu_usage:.1f}% exceeds 90%")
+            analysis['performance_indicators']['cpu_severity'] = 'critical'
+        elif cpu_usage > 70:
+            analysis['insights']['cpu'] = "ELEVATED CPU USAGE"
+            analysis['risk_factors'].append(f"CPU usage {cpu_usage:.1f}% approaching 90%")
+            analysis['performance_indicators']['cpu_severity'] = 'warning'
+        else:
+            analysis['insights']['cpu'] = "CPU USAGE NORMAL"
+            analysis['performance_indicators']['cpu_severity'] = 'normal'
         
         return analysis
     
@@ -1745,47 +2129,59 @@ class DecisionReasoning:
         elif len(analysis['risk_factors']) > 0:
             explanation['risk_assessment'] = 'medium'
         
-        # Add specific action reasoning
-        if action_name == "Scale Up":
-            explanation['reasoning_factors'].append("🔺 SCALE UP reasoning: System showing signs of stress or approaching capacity limits")
-        elif action_name == "Scale Down":
-            explanation['reasoning_factors'].append("🔻 SCALE DOWN reasoning: System has excess capacity and can operate efficiently with fewer resources")
+        # Add reasoning based on action
+        if action_name == 'Scale Up':
+            explanation['reasoning_factors'].append("SCALE UP reasoning: System may be under-provisioned, scaling up to meet demand")
+        elif action_name == 'Scale Down':
+            explanation['reasoning_factors'].append("SCALE DOWN reasoning: System has excess capacity and can operate efficiently with fewer resources")
         else:
-            explanation['reasoning_factors'].append("⚖️ KEEP SAME reasoning: System is operating within acceptable parameters")
+            explanation['reasoning_factors'].append("KEEP SAME reasoning: System is operating within acceptable parameters")
         
+        explanation['reasoning_factors'] = sorted(explanation['reasoning_factors'])
         return explanation
     
-    def log_decision_reasoning(self, explanation: Dict[str, Any], metrics: Dict[str, float]) -> None:
-        """Log comprehensive decision reasoning."""
-        if not ENABLE_DETAILED_REASONING:
-            return
-            
-        self.reasoning_logger.info("🧠 AI DECISION REASONING ANALYSIS")
-        self.reasoning_logger.info("=" * 80)
-        self.reasoning_logger.info(f"⏰ Timestamp: {explanation['timestamp']}")
-        self.reasoning_logger.info(f"🎯 Recommended Action: {explanation['recommended_action']}")
-        self.reasoning_logger.info(f"🔍 Exploration Strategy: {explanation['exploration_strategy']}")
-        self.reasoning_logger.info(f"⚠️ Risk Assessment: {explanation['risk_assessment'].upper()}")
-        self.reasoning_logger.info(f"📊 Decision Confidence: {explanation['confidence_metrics']['decision_confidence'].upper()} (gap: {explanation['confidence_metrics']['confidence_gap']:.3f})")
-        self.reasoning_logger.info(f"🎲 Exploration Rate: {explanation['confidence_metrics']['epsilon']:.3f}")
+    def log_decision_reasoning(self, explanation: Dict[str, Any], metrics: Dict[str, float], q_values: List[float] = None) -> None:
+        """Log detailed decision reasoning in a structured, regex-friendly format."""
         
-        if 'q_values' in explanation['model_analysis']:
-            self.reasoning_logger.info("🧮 Q-Value Analysis:")
-            for action, data in explanation['model_analysis']['q_values'].items():
-                self.reasoning_logger.info(f"   {action}: {data['q_value']:.3f} (confidence: {data['confidence']})")
+        self.reasoning_logger.info("AI_REASONING: analysis_start")
+        self.reasoning_logger.info(f"AI_REASONING: timestamp={datetime.now().isoformat()}")
+        self.reasoning_logger.info(f"AI_REASONING: recommended_action={explanation['recommended_action']}")
+        self.reasoning_logger.info(f"AI_REASONING: exploration_strategy={explanation['exploration_strategy']}")
+        self.reasoning_logger.info(f"AI_REASONING: risk_assessment={explanation['risk_assessment'].upper()}")
+        self.reasoning_logger.info(f"AI_REASONING: decision_confidence={explanation['confidence_metrics']['decision_confidence'].upper()} confidence_gap={explanation['confidence_metrics']['confidence_gap']:.3f}")
+        self.reasoning_logger.info(f"AI_REASONING: exploration_rate={explanation['confidence_metrics']['epsilon']:.3f}")
+
+        # Q-Value analysis (if available)
+        if q_values and len(q_values) >= 3:
+            q_confidences = [self.get_q_value_confidence(q) for q in q_values]
+            self.reasoning_logger.info(f"AI_REASONING: q_value_scale_down={q_values[0]:.3f} confidence={q_confidences[0]}")
+            self.reasoning_logger.info(f"AI_REASONING: q_value_keep_same={q_values[1]:.3f} confidence={q_confidences[1]}")
+            self.reasoning_logger.info(f"AI_REASONING: q_value_scale_up={q_values[2]:.3f} confidence={q_confidences[2]}")
+        else:
+            self.reasoning_logger.info("AI_REASONING: q_values=unavailable fallback_mode=true")
+
+        # Key reasoning factors
+        for i, factor in enumerate(explanation['reasoning_factors']):
+            clean_factor = factor.lstrip('•').strip()
+            self.reasoning_logger.info(f"AI_REASONING: factor_{i+1}={clean_factor}")
+
+        # Key metrics at time of decision (balanced selected features)
+        self.reasoning_logger.info(f"AI_REASONING: raw_feature name=http_bucket value={metrics.get('http_request_duration_highr_seconds_bucket', 'N/A')}")
+        self.reasoning_logger.info(f"AI_REASONING: raw_feature name=memory_mb value={metrics.get('process_resident_memory_bytes', 0)/1000000:.1f}")
+        self.reasoning_logger.info(f"AI_REASONING: raw_feature name=cpu_usage_percent value={metrics.get('process_cpu_seconds_total', 0):.1f}")
+        self.reasoning_logger.info(f"AI_REASONING: raw_feature name=scrape_samples value={metrics.get('scrape_samples_scraped', 'N/A')}")
+        self.reasoning_logger.info(f"AI_REASONING: raw_feature name=response_size value={metrics.get('http_response_size_bytes_sum', 'N/A')}")
         
-        self.reasoning_logger.info("💭 Key Reasoning Factors:")
-        for factor in explanation['reasoning_factors']:
-            self.reasoning_logger.info(f"   • {factor}")
-        
-        self.reasoning_logger.info("📈 Key Metrics:")
-        self.reasoning_logger.info(f"   • Response Time: {metrics.get('avg_response_time', 0):.1f}ms")
-        self.reasoning_logger.info(f"   • Memory Usage: {metrics.get('process_resident_memory_bytes', 0)/(1024*1024):.1f}MB")
-        self.reasoning_logger.info(f"   • Network Queue: {metrics.get('node_network_transmit_queue_length', 0)}")
-        self.reasoning_logger.info("=" * 80)
-    
+        self.reasoning_logger.info("AI_REASONING: analysis_end")
+
+    def get_q_value_confidence(self, q_value: float) -> str:
+        """Get confidence level based on Q-value magnitude."""
+        if abs(q_value) > 5: return "high"
+        if abs(q_value) > 2: return "medium"
+        return "low"
+
     def create_audit_trail(self, explanation: Dict[str, Any], final_decision: int, llm_validation: Dict[str, Any]) -> Dict[str, Any]:
-        """Create comprehensive audit trail for compliance."""
+        """Create a structured audit trail for the decision."""
         import uuid
         
         audit_trail = {

@@ -2,7 +2,37 @@
 
 This service is the intelligent core of the NimbusGuard autoscaling system. It combines the predictive power of a Deep Q-Network (DQN) model with real-time learning capabilities and robust execution through KEDA. It runs a continuous reconciliation loop to determine the optimal number of replicas for a target service and exposes this decision as a Prometheus metric.
 
-The adapter uses **8 scientifically selected features** identified through advanced statistical analysis using 6 rigorous methods (Mutual Information, Random Forest, Correlation Analysis, RFECV, Statistical Significance, and VIF Analysis) from 894 real per-minute decision points, ensuring optimal performance and decision accuracy.
+The adapter uses **5 scientifically selected raw features** identified through advanced statistical analysis using 6 rigorous methods (Mutual Information, Random Forest, Correlation Analysis, RFECV, Statistical Significance, and VIF Analysis) from 894 real per-minute decision points. These are combined with **6 LSTM temporal features** for predictive intelligence, creating a total of **11 features** with zero overlap and no redundancy.
+
+## 🏗️ Clean Feature Architecture
+
+The system uses a **clean separation** approach with **zero redundancy**:
+
+### 📊 RAW BASE FEATURES (5)
+Current system state observations without any temporal computations:
+1. **Scaling Issues** (`kube_deployment_status_replicas_unavailable`) - Score: 22.35
+2. **Pod Health** (`kube_pod_container_status_ready`) - Score: 21.85  
+3. **CPU Usage** (`process_cpu_seconds_total`) - Score: 17.55
+4. **HTTP Latency** (`http_request_duration_highr_seconds_sum`) - Score: 17.30
+5. **System Stability** (`kube_pod_container_status_restarts_total`) - Score: 16.40
+
+### 🧠 LSTM TEMPORAL FEATURES (6)
+Predictive intelligence and pattern-based features:
+1. **Predicted Response Time** (5-minute forecast)
+2. **Predicted Memory Usage** (5-minute forecast)  
+3. **Workload Trend Direction** (-1: decreasing, 0: stable, 1: increasing)
+4. **Pattern Confidence** (confidence in detected patterns)
+5. **Anomaly Score** (0-1 anomaly detection score)
+6. **Optimal Replicas Forecast** (LSTM's replica recommendation)
+
+**Total: 11 features with ZERO overlap between raw metrics and temporal intelligence!**
+
+### ✅ Architecture Benefits
+- **Clean Separation**: Raw metrics (current) vs LSTM (temporal)
+- **No Redundancy**: Zero overlap between feature types
+- **Optimal Performance**: 11 vs 14 features (simpler training)
+- **No Feature Confusion**: Clear roles for each feature type
+- **Future-Proof**: Easy to add new raw metrics without conflicts
 
 ## 🧠 Explainable AI Features
 

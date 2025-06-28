@@ -1,38 +1,38 @@
 {
-  "feature_engineering_summary": {
-    "total_samples": 894,
-    "total_features": 8,
+  "consumer_focused_summary": {
+    "target_application": "consumer (port 8000)",
+    "total_samples": 893,
+    "total_features": 5,
     "time_range": {
       "start": "N/A",
-      "end": "N/A",
-      "duration_hours": "N/A"
+      "end": "N/A"
     },
     "action_distribution": {
-      "0": 476,
-      "2": 379,
-      "1": 39
+      "1": 572,
+      "2": 214,
+      "0": 107
     },
-    "feature_categories": {
-      "response_time": 1,
-      "pod_status": 1,
-      "deployment_metrics": 2,
-      "health_ratios": 0,
-      "resource_limits": 1,
-      "deviation_features": 1
+    "consumer_categories": {
+      "load_indicators": 2,
+      "resource_utilization": 2,
+      "kubernetes_health": 0,
+      "consumer_health": 0
     }
   },
-  "data_quality_metrics": {
-    "missing_values": 0,
-    "duplicate_rows": 66,
-    "feature_variance_stats": {
-      "mean_variance": 459078530895656.56,
-      "std_variance": 1377235592108353.5,
-      "note": "Calculated on raw features - use normalized variance for feature importance"
-    }
+  "scale_down_analysis": {
+    "opportunities_count": 107,
+    "opportunities_percentage": 11.98208286674132,
+    "cost_savings_potential": "Moderate",
+    "primary_indicators": [
+      "HTTP request rate",
+      "Consumer CPU usage",
+      "Pod health status"
+    ]
   },
-  "scaling_insights": {
-    "scale_up_percentage": 42.39373601789709,
-    "scale_down_percentage": 53.24384787472036,
-    "keep_same_percentage": 4.3624161073825505
+  "consumer_insights": {
+    "http_traffic_analysis": false,
+    "resource_monitoring": true,
+    "health_integration": false,
+    "approach": "Consumer-focused feature selection with weighted ensemble methods"
   }
 }

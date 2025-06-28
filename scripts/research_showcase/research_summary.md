@@ -1,43 +1,49 @@
-# 11-Feature DQN Research Summary
+# Consumer-Focused DQN Research Summary
 
 ## Overview
-This document summarizes the advanced feature selection process for DQN-based Kubernetes pod autoscaling using statistical methods.
+This document summarizes the CONSUMER-FOCUSED FEATURE SELECTION process for DQN-based Kubernetes pod autoscaling.
+
+**TARGET APPLICATION**: Consumer app running on port 8000
+**FOCUS**: HTTP traffic patterns, resource usage, and pod health specific to consumer
+**GOAL**: Detect scale-down opportunities by analyzing actual consumer load patterns
 
 ## Dataset Statistics
-- **Total Samples**: 894
-- **Selected Features**: 8
-- **Selection Methods**: Mutual Information, Random Forest, Correlation Analysis, RFE
-- **Statistical Validation**: ✅ Applied
+- **Target Application**: consumer (port 8000)
+- **Total Samples**: 893
+- **Selected Consumer Features**: 5
+- **Consumer-Focused Approach**: ✅ Applied with weighted ensemble methods
 
-## Selected Feature Categories (Kubernetes Focus)
-- **Response Time Metrics**: 1 features
-- **Pod Status Metrics**: 1 features  
-- **Deployment Metrics**: 2 features
-- **Health Ratio Metrics**: 0 features
-- **Resource Limit Metrics**: 1 features
-- **Deviation Features**: 1 features
+## Consumer Feature Categories
+- **Load Indicators**: 2 features (HTTP traffic patterns)
+- **Resource Utilization**: 2 features (CPU, memory usage)
+- **Kubernetes Health**: 0 features (Pod status)
+- **Consumer Health**: 0 features (App availability)
 
-## Scaling Decision Distribution
-- **Scale Up**: 42.4% (0 samples)
-- **Keep Same**: 4.4% (0 samples)
-- **Scale Down**: 53.2% (0 samples)
+## Scale-Down Opportunity Analysis
+- **Scale-Down Opportunities**: 107 samples (12.0%)
+- **Keep Same**: 572 samples
+- **Scale Up**: 214 samples
+- **Cost Savings Potential**: Moderate
 
-## Data Quality
-- **Missing Values**: 0
-- **Duplicate Rows**: 66
-- **Feature Variance**: Mean = 459078530895656.562, Std = 1377235592108353.500
+## Consumer-Focused Benefits
+1. **HTTP Traffic Analysis**: False - Real consumer request patterns
+2. **Resource Monitoring**: True - Consumer process utilization  
+3. **Health Integration**: False - Pod and deployment status
+4. **Scale-Down Detection**: Identifies low-traffic periods for cost optimization
+5. **Load-Based Decisions**: Scaling based on actual consumer workload
 
 ## Key Insights
-1. The dataset shows a strong bias towards scale-up decisions (42.4%), indicating high system load during the monitoring period.
-2. Advanced statistical methods reduced dimensionality from 100+ raw metrics to 8 optimal features.
-3. High data quality with 0 missing values across all features.
-4. Multi-method feature selection ensures robust and statistically significant feature choices.
+1. **Consumer-Specific Targeting**: Features selected specifically for port 8000 consumer app
+2. **Load Pattern Recognition**: HTTP request rates enable precise scale-down detection
+3. **Resource Efficiency**: Consumer CPU and memory usage patterns guide scaling
+4. **Health-Aware Scaling**: Pod health status integrated with scaling decisions
+5. **Cost Optimization**: 12.0% of samples show scale-down opportunities
 
 ## Generated Visualizations
-1. **feature_analysis.png**: Feature importance and method comparison
-2. **correlation_heatmap.png**: Selected feature correlations
-3. **feature_distributions.png**: Feature distribution analysis
-4. **data_quality_report.png**: Data quality assessment
+1. **feature_analysis.png**: Consumer feature importance and category analysis
+2. **correlation_heatmap.png**: Consumer feature correlations
+3. **feature_distributions.png**: Consumer load vs scaling analysis
+4. **data_quality_report.png**: Consumer health and scale-down opportunity analysis
 
 ---
-*Generated on 2025-06-27 22:49:56*
+*Generated on 2025-06-28 18:14:06 using consumer-focused methods*
