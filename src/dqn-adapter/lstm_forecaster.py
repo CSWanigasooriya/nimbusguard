@@ -13,9 +13,29 @@ logger = logging.getLogger("LSTM_Forecaster")
 class LSTMForecaster(nn.Module):
     """LSTM model for predicting workload patterns and system behavior."""
     
-    def __init__(self, input_dim: int = 5, hidden_dim: int = 64, num_layers: int = 2, 
-                 forecast_horizon: int = 5, dropout: float = 0.2):
+    def __init__(self, input_dim: int = 5, hidden_dim: int = None, num_layers: int = None, 
+                 forecast_horizon: int = 5, dropout: float = None):
         super(LSTMForecaster, self).__init__()
+        
+        # Import configurable parameters from environment variables
+        if hidden_dim is None:
+            try:
+                import os
+                hidden_dim = int(os.getenv("LSTM_HIDDEN_DIM", 64))
+            except:
+                hidden_dim = 64  # Default fallback
+        if num_layers is None:
+            try:
+                import os
+                num_layers = int(os.getenv("LSTM_NUM_LAYERS", 2))
+            except:
+                num_layers = 2  # Default fallback
+        if dropout is None:
+            try:
+                import os
+                dropout = float(os.getenv("LSTM_DROPOUT", 0.2))
+            except:
+                dropout = 0.2  # Default fallback
         
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -83,13 +103,22 @@ class LSTMForecaster(nn.Module):
 class TimeSeriesBuffer:
     """Buffer for storing time series data and generating LSTM features."""
     
-    def __init__(self, sequence_length: int = 24, feature_names: List[str] = None):
+    def __init__(self, sequence_length: int = None, feature_names: List[str] = None):
         """
         Initialize time series buffer.
         Args:
-            sequence_length: Number of time steps to store (default 24 = 2 minutes at 5-second intervals)
+            sequence_length: Number of time steps to store (configurable, default 24 = 2 minutes at 5-second intervals)
             feature_names: List of feature names to track
         """
+        # Use configurable sequence length
+        if sequence_length is None:
+            try:
+                # Try to import from main module if available
+                import os
+                sequence_length = int(os.getenv("LSTM_SEQUENCE_LENGTH", 24))
+            except:
+                sequence_length = 24  # Default fallback
+        
         self.sequence_length = sequence_length
         self.feature_names = feature_names or [
             'http_request_duration_highr_seconds_bucket',   # HTTP Traffic patterns
@@ -259,12 +288,13 @@ class LSTMWorkloadPredictor:
         self.feature_names = feature_names
         self.sequence_length = sequence_length
         
-        # Initialize components
+        # Initialize components with configurable parameters
         self.buffer = TimeSeriesBuffer(sequence_length, feature_names)
         self.model = LSTMForecaster(
             input_dim=len(feature_names),
-            hidden_dim=64,
-            num_layers=2,
+            hidden_dim=None,  # Will use configurable value
+            num_layers=None,  # Will use configurable value
+            dropout=None,     # Will use configurable value
             forecast_horizon=1  # Reactive analysis of current state
         ).to(self.device)
         
@@ -427,9 +457,9 @@ class LSTMWorkloadPredictor:
 
 # Factory function for easy integration
 def create_lstm_predictor(feature_names: List[str], device: str = 'cpu') -> LSTMWorkloadPredictor:
-    """Create and return an LSTM predictor instance."""
+    """Create and return an LSTM predictor instance with configurable parameters."""
     return LSTMWorkloadPredictor(
         feature_names=feature_names,
         device=device,
-        sequence_length=24,  # 2 minutes at 5-second intervals - reactive not predictive
+        sequence_length=None,  # Will use configurable LSTM_SEQUENCE_LENGTH
     ) 

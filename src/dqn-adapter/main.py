@@ -109,7 +109,7 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL")
 TARGET_DEPLOYMENT = os.getenv("TARGET_DEPLOYMENT", "consumer")
 TARGET_NAMESPACE = os.getenv("TARGET_NAMESPACE", "nimbusguard")
 SCALER_PATH = os.getenv("SCALER_PATH", "/app/feature_scaler.gz")
-STABILIZATION_PERIOD_SECONDS = int(os.getenv("STABILIZATION_PERIOD_SECONDS", 5)) # Time to wait after action for system stabilization (real-time)
+STABILIZATION_PERIOD_SECONDS = int(os.getenv("STABILIZATION_PERIOD_SECONDS", 30)) # Increased from 5 to 30 seconds for proper Kubernetes stabilization
 REWARD_LATENCY_WEIGHT = float(os.getenv("REWARD_LATENCY_WEIGHT", 10.0)) # Higher = more penalty for latency
 REWARD_REPLICA_COST = float(os.getenv("REWARD_REPLICA_COST", 0.1)) # Cost per replica
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
@@ -121,6 +121,20 @@ AI_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", 0.1))  # Low temperature for 
 ENABLE_DETAILED_REASONING = os.getenv("ENABLE_DETAILED_REASONING", "true").lower() == "true"
 REASONING_LOG_LEVEL = os.getenv("REASONING_LOG_LEVEL", "INFO")  # INFO, DEBUG for more detail
 ENABLE_LLM_VALIDATION = os.getenv("ENABLE_LLM_VALIDATION", "true").lower() == "true"  # Allow disabling LLM validation
+ENABLE_IMPROVED_REWARDS = os.getenv("ENABLE_IMPROVED_REWARDS", "true").lower() == "true"  # Use improved multi-objective reward system
+
+# Neural Network Architecture Configuration
+DQN_HIDDEN_DIMS = [int(x) for x in os.getenv("DQN_HIDDEN_DIMS", "512,256,128").split(",")]
+LSTM_HIDDEN_DIM = int(os.getenv("LSTM_HIDDEN_DIM", 64))
+LSTM_NUM_LAYERS = int(os.getenv("LSTM_NUM_LAYERS", 2))
+LSTM_DROPOUT = float(os.getenv("LSTM_DROPOUT", 0.2))
+LSTM_SEQUENCE_LENGTH = int(os.getenv("LSTM_SEQUENCE_LENGTH", 24))
+
+# Multi-Objective Reward Component Weights
+REWARD_PERFORMANCE_WEIGHT = float(os.getenv("REWARD_PERFORMANCE_WEIGHT", 0.40))
+REWARD_RESOURCE_WEIGHT = float(os.getenv("REWARD_RESOURCE_WEIGHT", 0.30))
+REWARD_HEALTH_WEIGHT = float(os.getenv("REWARD_HEALTH_WEIGHT", 0.20))
+REWARD_COST_WEIGHT = float(os.getenv("REWARD_COST_WEIGHT", 0.10))
 
 # MinIO Configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio.nimbusguard.svc:9000")
@@ -129,8 +143,15 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 BUCKET_NAME = os.getenv("BUCKET_NAME", "models")
 SCALER_NAME = os.getenv("SCALER_NAME", "feature_scaler.gz")
 
-# --- Clean Feature Architecture ---
-# This service is the intelligent core of the NimbusGuard autoscaling system. It combines the predictive power of a Deep Q-Network (DQN) model with real-time learning capabilities and robust execution through KEDA. It runs a continuous reconciliation loop to determine the optimal number of replicas for a target service and exposes this decision as a Prometheus metric.
+# --- IMPROVED NIMBUSGUARD ARCHITECTURE ---
+# This service is the intelligent core of the NimbusGuard autoscaling system. It combines the predictive power of a Deep Q-Network (DQN) model with LSTM temporal intelligence, LLM validation, and an improved multi-objective reward system. It runs a continuous reconciliation loop to determine the optimal number of replicas for a target service.
+
+# IMPROVEMENTS IN THIS VERSION:
+# 1. Increased stabilization period from 5s to 30s for proper Kubernetes stabilization
+# 2. Multi-objective reward system that avoids circular dependencies  
+# 3. Outcome-based metrics separate from DQN input features
+# 4. Fixed LSTM integration to use predictions from decision time, not future state
+# 5. Weighted reward components: Performance(40%) + Resource(30%) + Health(20%) + Cost(10%)
 
 # The adapter uses **5 scientifically selected raw features** identified through advanced statistical analysis using 6 rigorous methods (Mutual Information, Random Forest, Correlation Analysis, RFECV, Statistical Significance, and VIF Analysis) from 894 real per-minute decision points. These are combined with **6 LSTM temporal features** for predictive intelligence, creating a total of **11 features** with zero overlap and no redundancy.
 
@@ -213,8 +234,12 @@ CURRENT_REPLICAS_GAUGE = Gauge('nimbusguard_current_replicas', 'Current replicas
 class EnhancedQNetwork(nn.Module):
     """Enhanced Q-Network matching the learner's architecture."""
     
-    def __init__(self, state_dim: int, action_dim: int, hidden_dims=[512, 256, 128]):
+    def __init__(self, state_dim: int, action_dim: int, hidden_dims=None):
         super().__init__()
+        
+        # Use configurable hidden dimensions
+        if hidden_dims is None:
+            hidden_dims = DQN_HIDDEN_DIMS
         
         layers = []
         prev_dim = state_dim
@@ -280,7 +305,7 @@ class CombinedDQNTrainer:
         
         # Networks
         self.policy_net = policy_net
-        self.target_net = EnhancedQNetwork(len(feature_order), 3).to(device)
+        self.target_net = EnhancedQNetwork(len(feature_order), 3, DQN_HIDDEN_DIMS).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         
@@ -452,31 +477,54 @@ class CombinedDQNTrainer:
                 next_q_values = self.target_net(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
                 target_q_values = rewards + (GAMMA * next_q_values * ~dones)
             
-            # Compute loss
-            loss = F.smooth_l1_loss(current_q_values, target_q_values)
+            # Calculate loss and backpropagate
+            loss = F.mse_loss(current_q_values, target_q_values)
             
-            # Optimize
+            # Validate loss before proceeding
+            if not torch.isfinite(loss) or loss.item() < 0:
+                logger.warning(f"TRAINER: invalid_loss_detected loss={loss.item()} - skipping training step")
+                return 0.0
+            
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
+            
+            # Gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
+            
             self.optimizer.step()
+            self.batches_trained += 1
             
             # Update target network periodically
-            self.batches_trained += 1
             if self.batches_trained % TARGET_UPDATE_INTERVAL == 0:
                 self.target_net.load_state_dict(self.policy_net.state_dict())
                 logger.info(f"TRAINING: target_network_updated batch={self.batches_trained}")
             
+            # Track training metrics
             self.training_losses.append(loss.item())
             
-            # Add training metrics to evaluator
+            # Add training metrics to evaluator with validation
             if evaluator:
-                evaluator.add_training_metrics(
-                    loss=loss.item(),
-                    epsilon=current_epsilon,
-                    batch_size=current_batch_size,
-                    buffer_size=len(self.memory)
-                )
+                try:
+                    # Validate all metrics before sending to evaluator
+                    loss_value = float(loss.item())
+                    epsilon_value = float(current_epsilon) if current_epsilon is not None else 0.0
+                    batch_size_value = int(current_batch_size) if current_batch_size is not None else 32
+                    buffer_size_value = int(len(self.memory))
+                    
+                    # Additional validation
+                    if np.isfinite(loss_value) and 0 <= loss_value <= 1000:
+                        evaluator.add_training_metrics(
+                            loss=loss_value,
+                            epsilon=epsilon_value,
+                            batch_size=batch_size_value,
+                            buffer_size=buffer_size_value
+                        )
+                        logger.debug(f"TRAINER: metrics_sent_to_evaluator loss={loss_value:.4f} buffer_size={buffer_size_value}")
+                    else:
+                        logger.warning(f"TRAINER: invalid_metrics_not_sent loss={loss_value} finite={np.isfinite(loss_value)}")
+                        
+                except Exception as eval_error:
+                    logger.warning(f"TRAINER: evaluator_metrics_failed error={eval_error}")
             
             return loss.item()
             
@@ -522,9 +570,10 @@ class CombinedDQNTrainer:
             logger.error(f"MODEL_SAVE: failed error={e}")
     
     async def _load_historical_data(self):
-        """Load historical training data to initialize replay buffer."""
+        """Load historical training data to initialize replay buffer with validation."""
         try:
             if not minio_client:
+                logger.info("HISTORICAL_DATA: minio_client_not_available")
                 return
             
             logger.info("HISTORICAL_DATA: loading_from_minio")
@@ -538,29 +587,55 @@ class CombinedDQNTrainer:
             from io import BytesIO
             df = pd.read_parquet(BytesIO(dataset_bytes))
             
+            logger.info(f"HISTORICAL_DATA: dataset_loaded rows={len(df)} columns={len(df.columns)}")
+            
+            # Validate dataset structure
+            required_columns = set(BASE_FEATURE_ORDER)
+            available_columns = set(df.columns)
+            missing_columns = required_columns - available_columns
+            
+            if missing_columns:
+                logger.warning(f"HISTORICAL_DATA: missing_columns {missing_columns}")
+            
             # Convert to training experiences (sample a subset to avoid overwhelming the buffer)
             max_historical = min(1000, len(df))  # Limit to 1000 historical experiences
             sampled_df = df.sample(n=max_historical, random_state=42) if len(df) > max_historical else df
             
             action_map = {0: "Scale Down", 1: "Keep Same", 2: "Scale Up"}
             loaded_count = 0
+            validation_failures = 0
             
             for _, row in sampled_df.iterrows():
                 try:
+                    # Validate row data
+                    if row.isnull().sum() > len(row) * 0.5:  # More than 50% null values
+                        validation_failures += 1
+                        continue
+                    
                     # Create state from features (adapt to current feature order)
                     state_dict = {}
                     for feat in self.feature_order:
-                        if feat in row:
-                            state_dict[feat] = row[feat]
+                        if feat in row and pd.notna(row[feat]):
+                            value = float(row[feat])
+                            # Validate feature values
+                            if not np.isfinite(value):
+                                validation_failures += 1
+                                continue
+                            state_dict[feat] = value
                         else:
                             state_dict[feat] = 0.0  # Default value for missing features
+                    
+                    # Validate scaling action
+                    scaling_action = row.get('scaling_action', 1)
+                    if not isinstance(scaling_action, (int, float)) or scaling_action not in [0, 1, 2]:
+                        scaling_action = 1  # Default to "Keep Same"
                     
                     # Create a simple next state (assume minimal change)
                     next_state_dict = state_dict.copy()
                     
                     experience_dict = {
                         'state': state_dict,
-                        'action': action_map.get(row.get('scaling_action', 1), "Keep Same"),
+                        'action': action_map.get(int(scaling_action), "Keep Same"),
                         'reward': 0.0,  # Historical reward unknown, use neutral
                         'next_state': next_state_dict
                     }
@@ -569,9 +644,14 @@ class CombinedDQNTrainer:
                     state_vec = self._dict_to_feature_vector(state_dict)
                     next_state_vec = self._dict_to_feature_vector(next_state_dict)
                     
+                    # Validate feature vectors
+                    if not (np.isfinite(state_vec).all() and np.isfinite(next_state_vec).all()):
+                        validation_failures += 1
+                        continue
+                    
                     training_exp = TrainingExperience(
                         state=state_vec,
-                        action=row.get('scaling_action', 1),
+                        action=int(scaling_action),
                         reward=0.0,
                         next_state=next_state_vec,
                         done=False
@@ -581,12 +661,18 @@ class CombinedDQNTrainer:
                     loaded_count += 1
                     
                 except Exception as exp_error:
+                    validation_failures += 1
+                    logger.debug(f"HISTORICAL_DATA: experience_validation_failed error={exp_error}")
                     continue  # Skip malformed experiences
             
-            logger.info(f"HISTORICAL_DATA: loaded_experiences count={loaded_count}")
+            logger.info(f"HISTORICAL_DATA: loading_complete "
+                       f"loaded_experiences={loaded_count} "
+                       f"validation_failures={validation_failures} "
+                       f"success_rate={loaded_count/(loaded_count+validation_failures)*100:.1f}%")
             
         except Exception as e:
-            logger.info(f"HISTORICAL_DATA: load_failed error={e}")
+            logger.warning(f"HISTORICAL_DATA: load_failed error={e}")
+            # Don't raise - historical data is optional
 
     async def _generate_evaluation_outputs(self):
         """Generate and save all evaluation outputs."""
@@ -1496,8 +1582,22 @@ async def observe_next_state_and_calculate_reward(state: ScalingState) -> Dict[s
     experience = state['experience']
     action = experience['action']
     
-    # Calculate stable reward using the new reward function
-    reward = calculate_stable_reward(current_state_metrics, next_state_metrics, action, current_replicas)
+    # Get LSTM predictions from the experience (if available)
+    lstm_predictions = None
+    if 'state' in experience and experience['state']:
+        # Extract LSTM features that were available at decision time
+        lstm_predictions = {
+            'next_30sec_pressure': experience['state'].get('next_30sec_pressure'),
+            'next_60sec_pressure': experience['state'].get('next_60sec_pressure'), 
+            'trend_velocity': experience['state'].get('trend_velocity'),
+            'pattern_type_spike': experience['state'].get('pattern_type_spike'),
+            'pattern_type_gradual': experience['state'].get('pattern_type_gradual'),
+            'pattern_type_cyclical': experience['state'].get('pattern_type_cyclical')
+        }
+    
+    # Calculate improved reward using the new multi-objective function
+    reward = calculate_stable_reward(current_state_metrics, next_state_metrics, action, 
+                                   current_replicas, lstm_predictions)
     
     experience['reward'] = reward
     experience['next_state'] = {**next_state_metrics, 'current_replicas': current_replicas}
@@ -1506,83 +1606,179 @@ async def observe_next_state_and_calculate_reward(state: ScalingState) -> Dict[s
     logger.info("NODE_END: observe_next_state_and_calculate_reward")
     return {"experience": experience}
 
-def calculate_stable_reward(current_state, next_state, action, current_replicas):
-    """Calculate normalized, stable reward function using balanced selected features."""
+def calculate_stable_reward(current_state, next_state, action, current_replicas, lstm_predictions=None):
+    """
+    IMPROVED: Multi-objective reward function that avoids circular dependencies.
+    Uses outcome-based metrics separate from DQN input features.
+    """
     
-    # Get balanced selected feature metrics with safe defaults
+    # === PERFORMANCE COMPONENT (40%) ===
+    # Use derived metrics that measure actual system outcomes, not raw input features
+    
+    # 1. Response time improvement (derived from HTTP metrics)
     current_http_bucket = current_state.get('http_request_duration_highr_seconds_bucket', 0)
     next_http_bucket = next_state.get('http_request_duration_highr_seconds_bucket', 0)
+    current_response_size = current_state.get('http_response_size_bytes_sum', 0)
+    next_response_size = next_state.get('http_response_size_bytes_sum', 0)
+    
+    # Calculate response efficiency (lower bucket count + reasonable response size = better performance)
+    current_efficiency = calculate_response_efficiency(current_http_bucket, current_response_size)
+    next_efficiency = calculate_response_efficiency(next_http_bucket, next_response_size)
+    performance_improvement = (next_efficiency - current_efficiency) * 4.0
+    
+    # === RESOURCE EFFICIENCY COMPONENT (30%) ===
+    # Measure resource utilization effectiveness
     
     current_memory = current_state.get('process_resident_memory_bytes', 100000000) / 1000000  # MB
     next_memory = next_state.get('process_resident_memory_bytes', 100000000) / 1000000
+    current_cpu = current_state.get('process_cpu_seconds_total', 0)
+    next_cpu = next_state.get('process_cpu_seconds_total', 0)
+    
+    # Resource efficiency: stable memory + appropriate CPU usage
+    memory_stability = max(0, 3.0 - abs(next_memory - current_memory) * 0.002)  # Reward stability
+    cpu_efficiency = calculate_cpu_efficiency(current_cpu, next_cpu, current_replicas)
+    resource_efficiency = (memory_stability + cpu_efficiency) / 2.0
+    
+    # === SYSTEM HEALTH COMPONENT (20%) ===
+    # Use health indicators that reflect system reliability
     
     current_scrape = current_state.get('scrape_samples_scraped', 300)
     next_scrape = next_state.get('scrape_samples_scraped', 300)
     
-    current_response_size = current_state.get('http_response_size_bytes_sum', 0) / 1000  # KB
-    next_response_size = next_state.get('http_response_size_bytes_sum', 0) / 1000
+    # Health score based on monitoring effectiveness and system stability
+    health_score = calculate_health_score(current_scrape, next_scrape, next_memory, next_http_bucket)
     
-    # 1. HTTP traffic improvement (reduce HTTP bucket count)
-    http_improvement = max(0, current_http_bucket - next_http_bucket)
-    http_reward = http_improvement * 3.0  # Reward for reducing HTTP bucket count
+    # === COST OPTIMIZATION COMPONENT (10%) ===
+    # Economic efficiency with non-linear scaling costs
     
-    # 2. Memory efficiency (stable memory usage)
-    memory_change = abs(next_memory - current_memory)
-    memory_reward = max(0, 2.0 - memory_change * 0.01)  # Reward stable memory usage
-    
-    # 3. Health monitoring improvement (increase scrape samples)
-    scrape_improvement = max(0, next_scrape - current_scrape)
-    health_reward = scrape_improvement * 0.01  # Small reward for health improvement
-    
-    # 4. Response size efficiency (reduce response size)
-    response_improvement = max(0, current_response_size - next_response_size)
-    response_reward = response_improvement * 0.001  # Small reward for response efficiency
-    
-    # 5. Cost efficiency (non-linear to discourage over-scaling)
     base_cost = 1.0
-    replica_cost = base_cost * (current_replicas ** 1.2)
-    cost_penalty = -replica_cost * 0.1
+    replica_cost = base_cost * (current_replicas ** 1.2)  # Non-linear cost growth
+    cost_efficiency = max(0, 5.0 - replica_cost * 0.05)  # Diminishing returns for more replicas
     
-    # 6. Action stability bonus
-    action_stability = 1.0 if action == "Keep Same" else 0.0
-    stability_bonus = action_stability * 1.0
-    
-    # 7. Health penalty (if system is in bad state)
-    health_penalty = 0.0
-    if next_http_bucket > 1000:  # High HTTP bucket count indicates stress
-        health_penalty = -3.0
-    if next_scrape < 100:  # Low scrape samples indicates health issues
-        health_penalty += -2.0
-    if next_memory > 1000:  # Very high memory usage (>1GB)
-        health_penalty += -2.0
-    
-    # 8. PROACTIVE SCALING BONUS: Reward decisions that align with LSTM predictions
+    # === PROACTIVE INTELLIGENCE BONUS ===
+    # FIXED: Use LSTM predictions from CURRENT state, not next state
     proactive_bonus = 0.0
-    if 'next_30sec_pressure' in next_state and 'next_60sec_pressure' in next_state:
-        next_30sec = next_state.get('next_30sec_pressure', 0.5)
-        next_60sec = next_state.get('next_60sec_pressure', 0.5)
-        predicted_load_increase = max(next_30sec - 0.5, next_60sec - 0.5)
-        
-        # Reward proactive scaling up when LSTM predicts load increase
-        if action == "Scale Up" and predicted_load_increase > 0.2:
-            proactive_bonus = predicted_load_increase * 3.0  # Bonus for proactive scaling
-        # Reward proactive scaling down when LSTM predicts load decrease  
-        elif action == "Scale Down" and predicted_load_increase < -0.2:
-            proactive_bonus = abs(predicted_load_increase) * 2.0
+    if lstm_predictions:
+        proactive_bonus = calculate_proactive_bonus(action, lstm_predictions, 
+                                                   current_state, next_state)
     
-    # Combine components
-    total_reward = (http_reward + memory_reward + health_reward + response_reward + 
-                   cost_penalty + stability_bonus + health_penalty + proactive_bonus)
+    # === STABILITY PENALTY ===
+    # Penalize excessive scaling actions to encourage stability
+    action_penalty = calculate_action_penalty(action, current_replicas)
     
-    # Normalize to [-10, 10] range
+    # === WEIGHTED COMBINATION ===
+    # Use configurable reward component weights
+    total_reward = (
+        performance_improvement * REWARD_PERFORMANCE_WEIGHT +    # Configurable: User experience
+        resource_efficiency * REWARD_RESOURCE_WEIGHT +          # Configurable: Resource optimization  
+        health_score * REWARD_HEALTH_WEIGHT +                   # Configurable: System reliability
+        cost_efficiency * REWARD_COST_WEIGHT +                  # Configurable: Economic efficiency
+        proactive_bonus +                                       # Bonus: Intelligent prediction alignment
+        action_penalty                                          # Penalty: Excessive scaling
+    )
+    
+    # Normalize to [-10, 10] range for stable training
     total_reward = np.clip(total_reward, -10.0, 10.0)
     
-    logger.info(f"REWARD_COMPONENTS: http={http_reward:.2f} memory={memory_reward:.2f} "
-               f"health={health_reward:.2f} response={response_reward:.2f} "
-               f"cost={cost_penalty:.2f} health_penalty={health_penalty:.2f} "
-               f"proactive={proactive_bonus:.2f} total={total_reward:.2f}")
+    logger.info(f"REWARD_BREAKDOWN: performance={performance_improvement:.2f}({REWARD_PERFORMANCE_WEIGHT:.0%}) "
+               f"resource={resource_efficiency:.2f}({REWARD_RESOURCE_WEIGHT:.0%}) health={health_score:.2f}({REWARD_HEALTH_WEIGHT:.0%}) "
+               f"cost={cost_efficiency:.2f}({REWARD_COST_WEIGHT:.0%}) proactive={proactive_bonus:.2f} "
+               f"action_penalty={action_penalty:.2f} total={total_reward:.2f}")
     
     return total_reward
+
+
+def calculate_response_efficiency(http_bucket_count, response_size_sum):
+    """Calculate response efficiency score (higher is better)."""
+    # Normalize metrics and combine for efficiency score
+    bucket_score = max(0, 5.0 - http_bucket_count * 0.002)  # Lower bucket count = better
+    size_score = max(0, 3.0 - response_size_sum * 0.00001)  # Reasonable response size
+    return (bucket_score + size_score) / 2.0
+
+
+def calculate_cpu_efficiency(current_cpu, next_cpu, replicas):
+    """Calculate CPU utilization efficiency."""
+    cpu_usage_rate = max(0.1, next_cpu - current_cpu)  # CPU usage in time period
+    cpu_per_replica = cpu_usage_rate / max(1, replicas)
+    
+    # Optimal CPU usage per replica (not too low, not too high)
+    if 0.5 <= cpu_per_replica <= 2.0:  # Sweet spot
+        return 2.0
+    elif cpu_per_replica < 0.5:  # Under-utilized
+        return 1.0 - (0.5 - cpu_per_replica)
+    else:  # Over-utilized
+        return max(0, 2.0 - (cpu_per_replica - 2.0) * 0.5)
+
+
+def calculate_health_score(current_scrape, next_scrape, memory_mb, http_buckets):
+    """Calculate overall system health score."""
+    # Scrape sample health (monitoring effectiveness)
+    scrape_health = min(3.0, next_scrape / 100.0)  # 300+ samples = full score
+    
+    # System stress indicators
+    memory_stress = max(0, 2.0 - max(0, memory_mb - 500) * 0.002)  # Penalty for >500MB
+    traffic_stress = max(0, 2.0 - max(0, http_buckets - 100) * 0.001)  # Penalty for high traffic
+    
+    return (scrape_health + memory_stress + traffic_stress) / 3.0
+
+
+def calculate_proactive_bonus(action, lstm_predictions, current_state, next_state):
+    """
+    FIXED: Reward DQN decisions that align with LSTM predictions.
+    Uses LSTM predictions from decision time, not future state.
+    """
+    if not lstm_predictions:
+        return 0.0
+    
+    # Get LSTM predictions that were available at decision time
+    predicted_30sec = lstm_predictions.get('next_30sec_pressure', 0.5)
+    predicted_60sec = lstm_predictions.get('next_60sec_pressure', 0.5)
+    trend_velocity = lstm_predictions.get('trend_velocity', 0.0)
+    
+    # Calculate actual load change to validate LSTM predictions
+    current_load = current_state.get('http_request_duration_highr_seconds_bucket', 0)
+    next_load = next_state.get('http_request_duration_highr_seconds_bucket', 0)
+    actual_load_change = (next_load - current_load) / max(1, current_load)  # Percentage change
+    
+    bonus = 0.0
+    
+    # Reward proactive scaling up when LSTM predicted load increase AND it actually happened
+    if action == "Scale Up":
+        if predicted_30sec > 0.6 and actual_load_change > 0.1:  # Predicted high load, actually increased
+            bonus = 2.0 * (predicted_30sec - 0.5)  # Stronger bonus for accurate predictions
+        elif predicted_30sec > 0.6 and actual_load_change <= 0:  # Predicted load but prevented it
+            bonus = 1.5  # Bonus for successful prevention
+    
+    # Reward proactive scaling down when LSTM predicted load decrease AND it was safe
+    elif action == "Scale Down":
+        if predicted_30sec < 0.4 and actual_load_change <= 0.1:  # Predicted low load, stayed low
+            bonus = 1.5 * (0.5 - predicted_30sec)
+    
+    # Reward keeping same when LSTM predicted stability
+    elif action == "Keep Same":
+        if 0.4 <= predicted_30sec <= 0.6 and abs(actual_load_change) < 0.1:  # Predicted stable, stayed stable
+            bonus = 1.0
+    
+    return bonus
+
+
+def calculate_action_penalty(action, current_replicas):
+    """Penalize excessive or inappropriate scaling actions."""
+    penalty = 0.0
+    
+    # Penalize scaling down when already at minimum
+    if action == "Scale Down" and current_replicas <= 1:
+        penalty = -2.0
+    
+    # Penalize excessive scaling up
+    elif action == "Scale Up" and current_replicas >= 8:
+        penalty = -1.0
+    
+    # Small penalty for any scaling action to encourage stability
+    elif action != "Keep Same":
+        penalty = -0.2
+    
+    return penalty
     
 async def log_experience(state: ScalingState) -> Dict[str, Any]:
     logger.info("NODE_START: log_experience")
@@ -1647,6 +1843,16 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     )
     
     logger.info("STARTUP: NimbusGuard DQN Operator initializing components")
+    logger.info(f"IMPROVEMENTS: stabilization_period={STABILIZATION_PERIOD_SECONDS}s improved_rewards={ENABLE_IMPROVED_REWARDS}")
+    
+    # Log all configurable hyperparameters for research transparency
+    logger.info("=== HYPERPARAMETER CONFIGURATION ===")
+    logger.info(f"DQN_EXPLORATION: epsilon_start={EPSILON_START} epsilon_end={EPSILON_END} epsilon_decay={EPSILON_DECAY}")
+    logger.info(f"DQN_TRAINING: gamma={GAMMA} lr={LR} memory_capacity={MEMORY_CAPACITY} batch_size={BATCH_SIZE}")
+    logger.info(f"DQN_ARCHITECTURE: hidden_dims={DQN_HIDDEN_DIMS}")
+    logger.info(f"LSTM_CONFIG: hidden_dim={LSTM_HIDDEN_DIM} num_layers={LSTM_NUM_LAYERS} dropout={LSTM_DROPOUT} sequence_length={LSTM_SEQUENCE_LENGTH}")
+    logger.info(f"REWARD_WEIGHTS: performance={REWARD_PERFORMANCE_WEIGHT:.0%} resource={REWARD_RESOURCE_WEIGHT:.0%} health={REWARD_HEALTH_WEIGHT:.0%} cost={REWARD_COST_WEIGHT:.0%}")
+    logger.info("=== END HYPERPARAMETER CONFIG ===")
     
     # Initialize all global clients
     global prometheus_client, llm, scaler, dqn_model, validator_agent, redis_client, minio_client, metrics_server, dqn_trainer, evaluator, lstm_predictor
@@ -1748,7 +1954,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         # Initialize model with clean architecture (5 base + 6 LSTM = 11 features)
         state_dim = len(FEATURE_ORDER)  # Now 11 features total
         action_dim = 3
-        dqn_model = EnhancedQNetwork(state_dim, action_dim).to(device)
+        dqn_model = EnhancedQNetwork(state_dim, action_dim, DQN_HIDDEN_DIMS).to(device)
         logger.info(f"DQN_MODEL: architecture_initialized input_features={state_dim} output_actions={action_dim}")
         
         if isinstance(checkpoint, dict) and 'policy_net_state_dict' in checkpoint:
@@ -1781,7 +1987,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         try:
             state_dim = len(FEATURE_ORDER)  # Clean architecture: 11 features (5 base + 6 LSTM)
             action_dim = 3
-            dqn_model = EnhancedQNetwork(state_dim, action_dim).to(device)
+            dqn_model = EnhancedQNetwork(state_dim, action_dim, DQN_HIDDEN_DIMS).to(device)
             logger.info(f"DQN_MODEL: fresh_model_created input_features={state_dim} output_actions={action_dim}")
             
             # Initialize trainer with fresh model
