@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,0.002712384,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:19:06,0.005473536,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:20:06,0.006294144,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:21:06,0.010634752,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:22:06,0.0125057279999999,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:23:06,0.014171264,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:24:06,0.0173197439999999,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:25:06,0.020657344,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:26:06,0.0229342079999999,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:27:06,0.02424096,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:28:06,0.0272432,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:29:06,0.029383872,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:30:06,0.031562624,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:31:06,0.03193888,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:32:06,0.032429056,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:33:06,0.033340672,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:34:06,0.0350256,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:35:06,0.035737408,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:36:06,0.0373630079999999,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:37:06,0.0382364799999999,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:38:06,0.0387167999999999,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:39:06,0.041504768,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:40:06,0.044048256,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:41:06,0.044934336,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:42:06,0.046247808,go_sched_latencies_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:43:06,0.047819968,go_sched_latencies_seconds_sum,localhost:9090,prometheus

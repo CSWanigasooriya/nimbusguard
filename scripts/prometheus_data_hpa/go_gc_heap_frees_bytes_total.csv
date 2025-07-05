@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,53523320,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:19:06,110212744,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:20:06,156983824,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:21:06,209502000,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:22:06,270091224,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:23:06,320434208,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:24:06,367181504,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:25:06,429018360,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:26:06,477749000,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:27:06,531314088,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:28:06,600587680,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:29:06,642599008,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:30:06,698029760,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:31:06,755829792,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:32:06,812799280,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:33:06,883737408,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:34:06,941268504,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:35:06,1013356360,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:36:06,1067314824,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:37:06,1129506208,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:38:06,1197551560,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:39:06,1258506264,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:40:06,1319896400,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:41:06,1381873384,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:42:06,1441737672,go_gc_heap_frees_bytes_total,localhost:9090,prometheus
+2025-07-05 07:43:06,1494321488,go_gc_heap_frees_bytes_total,localhost:9090,prometheus

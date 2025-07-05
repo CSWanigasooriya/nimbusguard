@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,81736296,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:19:06,142611872,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:20:06,196308416,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:21:06,248910960,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:22:06,302598456,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:23:06,355962552,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:24:06,409468448,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:25:06,464426112,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:26:06,516767072,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:27:06,571573264,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:28:06,628198864,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:29:06,683934096,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:30:06,740295312,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:31:06,798822376,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:32:06,857029256,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:33:06,918229448,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:34:06,981096800,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:35:06,1044554656,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:36:06,1106854744,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:37:06,1168019232,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:38:06,1231502424,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:39:06,1291995992,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:40:06,1354264288,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:41:06,1416281264,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:42:06,1478843944,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus
+2025-07-05 07:43:06,1547081408,go_gc_heap_allocs_by_size_bytes_sum,localhost:9090,prometheus

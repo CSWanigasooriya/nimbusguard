@@ -1,0 +1,27 @@
+timestamp,value,metric_name,component_id,component_path,instance,job
+2025-07-05 07:18:06,11893,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:19:06,11950,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:20:06,11955,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:21:06,11957,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:22:06,11959,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:23:06,11959,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:24:06,11964,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:25:06,11965,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:26:06,11981,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:27:06,12265,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:28:06,12452,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:29:06,12653,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:30:06,13167,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:31:06,13511,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:32:06,14146,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:33:06,14398,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:34:06,15245,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:35:06,15531,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:36:06,15765,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:37:06,15953,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:38:06,16161,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:39:06,16379,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:40:06,16592,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:41:06,16785,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:42:06,16993,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics
+2025-07-05 07:43:06,18688,prometheus_remote_write_wal_storage_created_series_total,prometheus.remote_write.default,/,alloy:8080,alloy-metrics

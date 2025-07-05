@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,42512,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:19:06,39552,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:20:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:21:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:22:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:23:06,34960,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:24:06,39488,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:25:06,39792,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:26:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:27:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:28:06,38736,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:29:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:30:06,39504,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:31:06,39504,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:32:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:33:06,40640,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:34:06,52464,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:35:06,37424,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:36:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:37:06,39760,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:38:06,39552,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:39:06,39632,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:40:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:41:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:42:06,40368,go_gc_scan_stack_bytes,localhost:9090,prometheus
+2025-07-05 07:43:06,39376,go_gc_scan_stack_bytes,localhost:9090,prometheus

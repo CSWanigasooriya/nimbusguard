@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,461332,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:19:06,800519,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:20:06,1135175,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:21:06,1468169,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:22:06,1807032,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:23:06,2141920,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:24:06,2473567,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:25:06,2813037,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:26:06,3146775,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:27:06,3490853,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:28:06,3845930,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:29:06,4193844,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:30:06,4553825,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:31:06,4924342,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:32:06,5305703,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:33:06,5688785,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:34:06,6089590,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:35:06,6490101,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:36:06,6886546,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:37:06,7284263,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:38:06,7684001,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:39:06,8083075,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:40:06,8480882,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:41:06,8878778,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:42:06,9274035,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus
+2025-07-05 07:43:06,9700621,go_gc_heap_allocs_by_size_bytes_count,localhost:9090,prometheus

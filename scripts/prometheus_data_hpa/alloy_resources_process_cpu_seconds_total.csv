@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,1.1,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:19:06,2.0,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:20:06,2.77,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:21:06,3.6,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:22:06,4.38,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:23:06,5.1899999999999995,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:24:06,6.029999999999999,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:25:06,6.9,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:26:06,7.67,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:27:06,8.29,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:28:06,8.71,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:29:06,9.21,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:30:06,9.65,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:31:06,10.07,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:32:06,10.56,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:33:06,11.01,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:34:06,11.59,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:35:06,12.19,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:36:06,12.75,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:37:06,13.25,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:38:06,13.84,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:39:06,14.39,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:40:06,14.84,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:41:06,15.36,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:42:06,15.81,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics
+2025-07-05 07:43:06,16.35,alloy_resources_process_cpu_seconds_total,alloy:8080,alloy-metrics

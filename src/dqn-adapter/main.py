@@ -331,9 +331,12 @@ class CombinedDQNTrainer:
             return np.zeros(len(self.feature_order))
         
         try:
-            # Scale the 5 raw base features from Prometheus
+            # Scale the 5 raw base features from Prometheus with proper feature names
             raw_features = [state_dict.get(feat, 0.0) for feat in BASE_FEATURE_ORDER]
-            scaled_raw_features = scaler.transform([raw_features])
+            
+            # Create DataFrame with proper feature names to avoid sklearn warning
+            raw_features_df = pd.DataFrame([raw_features], columns=BASE_FEATURE_ORDER)
+            scaled_raw_features = scaler.transform(raw_features_df)
             
             # Get LSTM features with enhanced importance for temporal predictions
             lstm_features = []
@@ -903,9 +906,12 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
     metrics = state['current_metrics'].copy()
     current_replicas = state['current_replicas']
     
-    # FIXED: Only scale the 5 raw base features from Prometheus
+    # FIXED: Only scale the 5 raw base features from Prometheus with proper feature names
     raw_features = [metrics.get(feat, 0.0) for feat in BASE_FEATURE_ORDER]
-    scaled_raw_features = scaler.transform([raw_features])
+    
+    # Create DataFrame with proper feature names to avoid sklearn warning
+    raw_features_df = pd.DataFrame([raw_features], columns=BASE_FEATURE_ORDER)
+    scaled_raw_features = scaler.transform(raw_features_df)
     
     # Get LSTM features separately (these are already in appropriate ranges)
     lstm_features = [metrics.get(feat, 0.0) for feat in LSTM_FEATURE_ORDER]
