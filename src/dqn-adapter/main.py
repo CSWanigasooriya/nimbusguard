@@ -65,7 +65,7 @@ def scaler_health(**kwargs):
 async def metrics_handler(request):
     """Provide Prometheus metrics for KEDA"""
     metrics_data = generate_latest()
-    return web.Response(text=metrics_data.decode('utf-8'), content_type='text/plain; version=0.0.4', charset='utf-8')
+    return web.Response(text=metrics_data.decode('utf-8'), content_type='text/plain; version=0.0.4')
 
 async def metrics_api_handler(request):
     """KEDA Metrics API endpoint - returns current DQN desired replicas (updated by timer)"""
@@ -1094,7 +1094,20 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
             # Update Prometheus metrics
             DQN_DECISIONS_COUNTER.inc()
             DQN_EPSILON_GAUGE.set(current_epsilon)
-            DQN_DECISION_CONFIDENCE_GAUGE.set(confidence)
+            
+            # Convert confidence string to numeric value for Prometheus
+            confidence_numeric = 0.5  # Default medium confidence
+            if isinstance(confidence, str):
+                if confidence.lower() == 'high':
+                    confidence_numeric = 1.0
+                elif confidence.lower() == 'medium':
+                    confidence_numeric = 0.5
+                elif confidence.lower() == 'low':
+                    confidence_numeric = 0.0
+            else:
+                confidence_numeric = float(confidence)
+            
+            DQN_DECISION_CONFIDENCE_GAUGE.set(confidence_numeric)
             DQN_Q_VALUE_SCALE_UP_GAUGE.set(q_values[2])  # Scale up is action 2
             DQN_Q_VALUE_SCALE_DOWN_GAUGE.set(q_values[0])  # Scale down is action 0
             DQN_Q_VALUE_KEEP_SAME_GAUGE.set(q_values[1])  # Keep same is action 1
@@ -1657,9 +1670,13 @@ async def observe_next_state_and_calculate_reward(state: ScalingState) -> Dict[s
     # Get current state for comparison
     current_state_metrics = state.get("current_metrics", {})
     
-    # Extract action for context
-    experience = state['experience']
-    action = experience['action']
+    # Extract action for context - handle missing experience gracefully
+    experience = state.get('experience')
+    if not experience:
+        logger.error("REWARD_CALCULATION: experience_missing from_state, cannot_calculate_reward")
+        return {"error": "Experience data not available for reward calculation"}
+    
+    action = experience.get('action', 'Keep Same')
     
     # Get LSTM predictions from the experience (if available)
     lstm_predictions = None
@@ -1936,6 +1953,9 @@ def create_graph():
 # --- kopf Operator Setup ---
 @kopf.on.startup()
 async def configure(settings: kopf.OperatorSettings, **kwargs):
+    # Configure Kopf to use a different port to avoid conflict with our metrics server
+    settings.networking.health_listening_port = 8081  # Use port 8081 for Kopf health checks
+    
     # Production logging format - structured and regex-extractable
     logging.getLogger().handlers.clear()
     logging.basicConfig(
