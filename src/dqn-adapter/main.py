@@ -2388,18 +2388,18 @@ class DecisionReasoning:
         
         memory_mb = memory_bytes / 1000000  # Convert to MB
         
-        # HTTP traffic analysis
+        # Latency analysis (HTTP request duration buckets = response time performance)
         if http_bucket > 1000:
-            analysis['insights']['http_traffic'] = "HIGH HTTP TRAFFIC"
-            analysis['risk_factors'].append(f"HTTP bucket count {http_bucket:.0f} exceeds 1000")
-            analysis['performance_indicators']['http_severity'] = 'critical'
+            analysis['insights']['latency'] = "HIGH LATENCY"
+            analysis['risk_factors'].append(f"HTTP latency bucket count {http_bucket:.0f} exceeds 1000 - slow responses")
+            analysis['performance_indicators']['latency_severity'] = 'critical'
         elif http_bucket > 500:
-            analysis['insights']['http_traffic'] = "ELEVATED HTTP TRAFFIC"
-            analysis['risk_factors'].append(f"HTTP bucket count {http_bucket:.0f} approaching 1000")
-            analysis['performance_indicators']['http_severity'] = 'warning'
+            analysis['insights']['latency'] = "ELEVATED LATENCY"
+            analysis['risk_factors'].append(f"HTTP latency bucket count {http_bucket:.0f} approaching 1000 - degraded performance")
+            analysis['performance_indicators']['latency_severity'] = 'warning'
         else:
-            analysis['insights']['http_traffic'] = "HTTP TRAFFIC NORMAL"
-            analysis['performance_indicators']['http_severity'] = 'normal'
+            analysis['insights']['latency'] = "LATENCY NORMAL"
+            analysis['performance_indicators']['latency_severity'] = 'normal'
         
         # Memory analysis
         if memory_mb > 1000:
