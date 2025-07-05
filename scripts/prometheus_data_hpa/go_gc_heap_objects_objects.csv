@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,212385,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:19:06,241702,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:20:06,286428,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:21:06,284443,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:22:06,241743,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:23:06,263700,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:24:06,307644,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:25:06,263151,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:26:06,286927,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:27:06,291279,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:28:06,209223,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:29:06,301366,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:30:06,308483,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:31:06,315046,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:32:06,324255,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:33:06,267820,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:34:06,298772,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:35:06,238148,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:36:06,297321,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:37:06,290652,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:38:06,258874,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:39:06,259352,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:40:06,262732,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:41:06,264366,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:42:06,291839,go_gc_heap_objects_objects,localhost:9090,prometheus
+2025-07-05 07:43:06,386426,go_gc_heap_objects_objects,localhost:9090,prometheus

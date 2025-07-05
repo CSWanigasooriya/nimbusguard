@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job,listener_name
+2025-07-05 07:18:06,6,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:19:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:20:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:21:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:22:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:23:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:24:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:25:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:26:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:27:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:28:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:29:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:30:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:31:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:32:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:33:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:34:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:35:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:36:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:37:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:38:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:39:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:40:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:41:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:42:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http
+2025-07-05 07:43:06,12,net_conntrack_listener_conn_closed_total,localhost:9090,prometheus,http

@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,0.002331264,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:19:06,0.002531584,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:20:06,0.002724096,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:21:06,0.0029848319999999,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:22:06,0.003185152,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:23:06,0.003364608,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:24:06,0.00347584,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:25:06,0.003819136,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:26:06,0.00400512,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:27:06,0.004272384,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:28:06,0.004466176,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:29:06,0.005555968,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:30:06,0.0058232319999999,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:31:06,0.006090496,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:32:06,0.00704384,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:33:06,0.008154496,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:34:06,0.008333952,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:35:06,0.008677248,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:36:06,0.008856704,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:37:06,0.009042688,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:38:06,0.010139008,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:39:06,0.011241856,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:40:06,0.011496064,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:41:06,0.01252416,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:42:06,0.0126353919999999,go_gc_pauses_seconds_sum,localhost:9090,prometheus
+2025-07-05 07:43:06,0.013732352,go_gc_pauses_seconds_sum,localhost:9090,prometheus

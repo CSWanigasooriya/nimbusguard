@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,10,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:19:06,14,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:20:06,17,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:21:06,20,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:22:06,24,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:23:06,27,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:24:06,30,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:25:06,34,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:26:06,37,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:27:06,40,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:28:06,44,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:29:06,47,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:30:06,50,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:31:06,53,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:32:06,56,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:33:06,60,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:34:06,63,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:35:06,67,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:36:06,70,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:37:06,73,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:38:06,76,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:39:06,79,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:40:06,82,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:41:06,85,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:42:06,88,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus
+2025-07-05 07:43:06,91,go_gc_cycles_total_gc_cycles_total,localhost:9090,prometheus

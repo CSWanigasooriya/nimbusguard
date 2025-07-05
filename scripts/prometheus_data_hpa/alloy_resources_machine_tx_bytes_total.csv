@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,807345,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:19:06,1556661,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:20:06,2302082,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:21:06,3046498,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:22:06,3793214,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:23:06,4540300,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:24:06,5286731,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:25:06,6033141,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:26:06,6778079,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:27:06,7571075,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:28:06,8386208,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:29:06,9211026,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:30:06,10082249,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:31:06,11003205,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:32:06,12008479,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:33:06,13009739,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:34:06,14107033,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:35:06,15233042,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:36:06,16322294,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:37:06,17427745,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:38:06,18541115,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:39:06,19660582,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:40:06,20770373,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:41:06,21890340,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:42:06,22979396,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics
+2025-07-05 07:43:06,24185974,alloy_resources_machine_tx_bytes_total,alloy:8080,alloy-metrics

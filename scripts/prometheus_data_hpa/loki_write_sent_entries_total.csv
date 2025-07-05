@@ -1,0 +1,27 @@
+timestamp,value,metric_name,component_id,component_path,host,instance,job
+2025-07-05 07:18:06,7516,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:19:06,7790,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:20:06,8036,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:21:06,8286,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:22:06,8529,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:23:06,8788,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:24:06,9042,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:25:06,9292,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:26:06,9536,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:27:06,9872,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:28:06,10330,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:29:06,10776,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:30:06,11413,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:31:06,11994,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:32:06,12902,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:33:06,13714,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:34:06,14740,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:35:06,15692,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:36:06,16629,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:37:06,17551,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:38:06,18529,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:39:06,19671,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:40:06,20750,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:41:06,21856,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:42:06,22844,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics
+2025-07-05 07:43:06,24421,loki_write_sent_entries_total,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics

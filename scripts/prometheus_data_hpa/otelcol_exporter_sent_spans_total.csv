@@ -1,0 +1,27 @@
+timestamp,value,metric_name,component_id,component_path,exporter,instance,job,otel_scope_name
+2025-07-05 07:18:06,42,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:19:06,108,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:20:06,171,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:21:06,237,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:22:06,303,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:23:06,369,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:24:06,435,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:25:06,501,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:26:06,567,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:27:06,708,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:28:06,956,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:29:06,1116,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:30:06,1293,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:31:06,1703,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:32:06,2145,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:33:06,2603,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:34:06,3187,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:35:06,3817,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:36:06,4346,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:37:06,5001,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:38:06,5675,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:39:06,6197,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:40:06,6838,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:41:06,7444,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:42:06,7985,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper
+2025-07-05 07:43:06,8571,otelcol_exporter_sent_spans_total,otelcol.exporter.otlp.tempo,/,otlp/otelcol.exporter.otlp.tempo,alloy:8080,alloy-metrics,go.opentelemetry.io/collector/exporter/exporterhelper

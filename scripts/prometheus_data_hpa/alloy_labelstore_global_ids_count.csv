@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,11893,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:19:06,11950,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:20:06,11955,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:21:06,11957,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:22:06,11959,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:23:06,11959,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:24:06,11964,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:25:06,11965,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:26:06,11981,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:27:06,12265,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:28:06,12452,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:29:06,12653,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:30:06,13167,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:31:06,13511,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:32:06,14146,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:33:06,14398,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:34:06,15245,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:35:06,15531,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:36:06,15765,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:37:06,15953,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:38:06,16106,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:39:06,16324,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:40:06,16537,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:41:06,16730,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:42:06,16938,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics
+2025-07-05 07:43:06,18633,alloy_labelstore_global_ids_count,alloy:8080,alloy-metrics

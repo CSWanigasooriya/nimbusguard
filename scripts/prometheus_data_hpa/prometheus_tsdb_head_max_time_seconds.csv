@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,1751699875,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:19:06,1751699935,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:20:06,1751699995,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:21:06,1751700055,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:22:06,1751700115,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:23:06,1751700175,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:24:06,1751700235,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:25:06,1751700295,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:26:06,1751700355,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:27:06,1751700415,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:28:06,1751700475,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:29:06,1751700535,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:30:06,1751700595,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:31:06,1751700655,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:32:06,1751700715,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:33:06,1751700775,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:34:06,1751700835,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:35:06,1751700895,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:36:06,1751700955,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:37:06,1751701015,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:38:06,1751701075,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:39:06,1751701135,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:40:06,1751701195,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:41:06,1751701255,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:42:06,1751701315,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus
+2025-07-05 07:43:06,1751701375,prometheus_tsdb_head_max_time_seconds,localhost:9090,prometheus

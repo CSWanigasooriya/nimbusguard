@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,266977280,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:19:06,281763840,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:20:06,294891520,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:21:06,308699136,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:22:06,308961280,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:23:06,309616640,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:24:06,309616640,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:25:06,311889920,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:26:06,311889920,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:27:06,312414208,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:28:06,312676352,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:29:06,325885952,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:30:06,326209536,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:31:06,326995968,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:32:06,329842688,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:33:06,329973760,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:34:06,330366976,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:35:06,330498048,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:36:06,330629120,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:37:06,332800000,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:38:06,332800000,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:39:06,337276928,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:40:06,339476480,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:41:06,339869696,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:42:06,339869696,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics
+2025-07-05 07:43:06,340058112,alloy_resources_process_resident_memory_bytes,alloy:8080,alloy-metrics

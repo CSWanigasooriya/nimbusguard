@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,16221552,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:19:06,17125320,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:20:06,21777200,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:21:06,21916480,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:22:06,16688216,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:23:06,20574672,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:24:06,23911752,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:25:06,19098448,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:26:06,21127728,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:27:06,22551912,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:28:06,15517624,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:29:06,23585328,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:30:06,23428840,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:31:06,23486192,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:32:06,24218792,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:33:06,19387304,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:34:06,22419440,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:35:06,16921424,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:36:06,21297440,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:37:06,19239368,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:38:06,17270528,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:39:06,17676544,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:40:06,17336696,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:41:06,17337112,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:42:06,20199376,go_gc_scan_total_bytes,localhost:9090,prometheus
+2025-07-05 07:43:06,27953864,go_gc_scan_total_bytes,localhost:9090,prometheus

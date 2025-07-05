@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,14,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:19:06,37,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:20:06,59,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:21:06,81,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:22:06,103,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:23:06,125,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:24:06,147,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:25:06,169,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:26:06,191,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:27:06,214,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:28:06,237,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:29:06,262,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:30:06,288,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:31:06,313,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:32:06,338,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:33:06,364,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:34:06,390,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:35:06,416,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:36:06,442,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:37:06,468,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:38:06,494,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:39:06,520,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:40:06,546,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:41:06,572,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:42:06,598,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus
+2025-07-05 07:43:06,624,prometheus_tsdb_isolation_high_watermark,localhost:9090,prometheus

@@ -1,0 +1,27 @@
+timestamp,value,metric_name,component_id,component_path,host,instance,job,status_code
+2025-07-05 07:18:06,0.1099517939999999,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:19:06,0.2140168369999999,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:20:06,0.298137714,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:21:06,0.38571738,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:22:06,0.460017048,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:23:06,0.535702172,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:24:06,0.621949295,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:25:06,0.7048911719999996,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:26:06,0.7874925439999997,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:27:06,0.8491053359999997,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:28:06,0.8888046659999999,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:29:06,0.9322737479999994,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:30:06,1.0476387459999996,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:31:06,1.0866779919999998,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:32:06,1.1253619869999991,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:33:06,1.1621926159999991,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:34:06,1.2063363239999991,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:35:06,1.2493697849999996,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:36:06,1.2990747030000005,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:37:06,1.336577753,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:38:06,1.3814628749999998,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:39:06,1.4223210860000002,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:40:06,1.4569650460000008,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:41:06,1.4971777150000003,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:42:06,1.5289882520000002,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:43:06,1.5678810009999995,loki_write_request_duration_seconds_sum,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204

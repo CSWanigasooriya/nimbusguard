@@ -1,0 +1,27 @@
+timestamp,value,metric_name,component_id,component_path,instance,job,remote_name,url
+2025-07-05 07:18:06,15,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:19:06,30,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:20:06,44,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:21:06,58,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:22:06,72,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:23:06,86,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:24:06,100,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:25:06,114,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:26:06,128,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:27:06,143,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:28:06,158,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:29:06,175,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:30:06,193,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:31:06,210,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:32:06,227,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:33:06,245,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:34:06,263,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:35:06,281,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:36:06,299,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:37:06,317,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:38:06,335,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:39:06,353,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:40:06,371,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:41:06,389,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:42:06,407,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write
+2025-07-05 07:43:06,425,prometheus_remote_storage_sent_batch_duration_seconds_count,prometheus.remote_write.default,/,alloy:8080,alloy-metrics,8e3979,http://prometheus:9090/api/v1/write

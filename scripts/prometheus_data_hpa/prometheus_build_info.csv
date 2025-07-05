@@ -1,0 +1,27 @@
+timestamp,value,metric_name,branch,goarch,goos,goversion,instance,job,revision,tags,version
+2025-07-05 07:18:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:19:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:20:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:21:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:22:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:23:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:24:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:25:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:26:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:27:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:28:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:29:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:30:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:31:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:32:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:33:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:34:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:35:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:36:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:37:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:38:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:39:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:40:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:41:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:42:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1
+2025-07-05 07:43:06,1,prometheus_build_info,HEAD,arm64,linux,go1.23.2,localhost:9090,prometheus,6d7569113f1ca814f1e149f74176656540043b8d,"netgo,builtinassets,stringlabels",2.55.1

@@ -1,0 +1,27 @@
+timestamp,value,metric_name,component_id,component_path,host,instance,job,status_code
+2025-07-05 07:18:06,31,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:19:06,64,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:20:06,98,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:21:06,132,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:22:06,166,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:23:06,201,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:24:06,235,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:25:06,269,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:26:06,303,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:27:06,343,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:28:06,382,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:29:06,423,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:30:06,463,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:31:06,510,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:32:06,557,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:33:06,604,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:34:06,655,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:35:06,705,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:36:06,755,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:37:06,805,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:38:06,855,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:39:06,906,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:40:06,957,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:41:06,1008,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:42:06,1056,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204
+2025-07-05 07:43:06,1106,loki_write_request_duration_seconds_count,loki.write.default,/,loki:3100,alloy:8080,alloy-metrics,204

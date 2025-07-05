@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,15573168,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:19:06,16479896,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:20:06,21131952,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:21:06,21271232,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:22:06,16042968,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:23:06,19933840,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:24:06,23266392,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:25:06,18452784,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:26:06,20482480,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:27:06,21906664,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:28:06,14873016,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:29:06,22940080,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:30:06,22783464,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:31:06,22840816,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:32:06,23573544,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:33:06,18740792,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:34:06,21761104,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:35:06,16278128,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:36:06,20652192,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:37:06,18593736,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:38:06,16625104,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:39:06,17031040,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:40:06,16691448,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:41:06,16691864,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:42:06,19553136,go_gc_scan_heap_bytes,localhost:9090,prometheus
+2025-07-05 07:43:06,27308616,go_gc_scan_heap_bytes,localhost:9090,prometheus

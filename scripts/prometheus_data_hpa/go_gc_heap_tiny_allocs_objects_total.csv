@@ -1,0 +1,27 @@
+timestamp,value,metric_name,instance,job
+2025-07-05 07:18:06,46939,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:19:06,124998,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:20:06,203719,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:21:06,281647,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:22:06,360122,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:23:06,438476,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:24:06,516327,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:25:06,595218,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:26:06,673434,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:27:06,753466,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:28:06,835490,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:29:06,916602,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:30:06,999582,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:31:06,1085505,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:32:06,1173773,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:33:06,1263140,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:34:06,1356148,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:35:06,1450392,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:36:06,1544133,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:37:06,1637885,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:38:06,1732375,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:39:06,1826579,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:40:06,1920531,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:41:06,2014555,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:42:06,2107918,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
+2025-07-05 07:43:06,2206066,go_gc_heap_tiny_allocs_objects_total,localhost:9090,prometheus
