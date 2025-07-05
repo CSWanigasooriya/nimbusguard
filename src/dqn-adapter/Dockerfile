@@ -22,4 +22,4 @@ COPY dqn_features.parquet /app/dqn_features.parquet
 EXPOSE 8080
 
 # Command to run the application using Kopf with liveness probe
-CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8001/healthz", "/app/main.py"] 
+CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8080/healthz", "/app/main.py"] 

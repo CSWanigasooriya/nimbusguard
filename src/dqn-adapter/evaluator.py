@@ -125,16 +125,101 @@ class DQNEvaluator:
             self.training_metrics = []
             self.model_checkpoints = []
             
+            # RESEARCH ENHANCEMENT: Add research-focused data tracking
+            self.episode_metrics = []           # Episode-level statistics
+            self.q_value_history = []           # Q-value evolution tracking
+            self.hyperparameter_runs = {}       # Multiple configuration results
+            self.policy_snapshots = []          # Policy state at intervals
+            self.current_episode_id = 0         # Episode boundary tracking
+            self.current_episode_rewards = []   # Rewards within current episode
+            
             logger.info(f"EVALUATOR: initialized_successfully timestamp={self.timestamp}")
+            logger.info("EVALUATOR: research_enhancement_enabled episode_tracking=True q_value_tracking=True")
             
         except Exception as init_error:
             logger.error(f"EVALUATOR: initialization_failed error={init_error}")
             raise
     
     def add_experience(self, experience: Dict[str, Any]):
-        """Add experience data for analysis."""
+        """Add experience data for analysis with research enhancements."""
         experience['timestamp'] = time.time()
+        experience['episode_id'] = self.current_episode_id
+        
+        # Track episode rewards for episode-level analysis
+        if 'reward' in experience:
+            self.current_episode_rewards.append(experience['reward'])
+        
         self.experiences.append(experience)
+    
+    def add_q_values(self, q_values: List[float], action_taken: int, state_features: Dict[str, float]):
+        """Add Q-value data for research analysis."""
+        try:
+            q_value_entry = {
+                'timestamp': time.time(),
+                'episode_id': self.current_episode_id,
+                'q_values': q_values.copy() if isinstance(q_values, list) else list(q_values),
+                'action_taken': action_taken,
+                'max_q_value': float(max(q_values)) if q_values else 0.0,
+                'min_q_value': float(min(q_values)) if q_values else 0.0,
+                'avg_q_value': float(np.mean(q_values)) if q_values else 0.0,
+                'q_value_variance': float(np.var(q_values)) if len(q_values) > 1 else 0.0,
+                'state_features': state_features.copy()
+            }
+            self.q_value_history.append(q_value_entry)
+            
+            if len(self.q_value_history) % 10 == 0:
+                logger.info(f"EVALUATOR: q_values_tracked count={len(self.q_value_history)} "
+                           f"avg_q={q_value_entry['avg_q_value']:.3f}")
+        except Exception as e:
+            logger.error(f"EVALUATOR: add_q_values_failed error={e}")
+    
+    def end_episode(self, episode_success: bool = True, episode_info: Dict[str, Any] = None):
+        """Mark end of episode and calculate episode-level metrics."""
+        try:
+            if not self.current_episode_rewards:
+                logger.warning(f"EVALUATOR: episode_end_no_rewards episode_id={self.current_episode_id}")
+                self.current_episode_id += 1
+                return
+            
+            # Calculate episode statistics
+            episode_stats = {
+                'episode_id': self.current_episode_id,
+                'timestamp': time.time(),
+                'episode_length': len(self.current_episode_rewards),
+                'total_reward': sum(self.current_episode_rewards),
+                'avg_reward': np.mean(self.current_episode_rewards),
+                'max_reward': max(self.current_episode_rewards),
+                'min_reward': min(self.current_episode_rewards),
+                'reward_variance': np.var(self.current_episode_rewards),
+                'episode_success': episode_success,
+                'episode_info': episode_info or {}
+            }
+            
+            self.episode_metrics.append(episode_stats)
+            
+            logger.info(f"EVALUATOR: episode_completed episode_id={self.current_episode_id} "
+                       f"length={episode_stats['episode_length']} "
+                       f"total_reward={episode_stats['total_reward']:.3f}")
+            
+            # Reset for next episode
+            self.current_episode_id += 1
+            self.current_episode_rewards = []
+            
+        except Exception as e:
+            logger.error(f"EVALUATOR: end_episode_failed error={e}")
+    
+    def add_hyperparameter_run(self, run_id: str, hyperparams: Dict[str, Any], 
+                              performance_metrics: Dict[str, float]):
+        """Add hyperparameter experiment results for sensitivity analysis."""
+        try:
+            self.hyperparameter_runs[run_id] = {
+                'hyperparams': hyperparams.copy(),
+                'performance': performance_metrics.copy(),
+                'timestamp': time.time()
+            }
+            logger.info(f"EVALUATOR: hyperparameter_run_added run_id={run_id}")
+        except Exception as e:
+            logger.error(f"EVALUATOR: add_hyperparameter_run_failed error={e}")
     
     def add_training_metrics(self, loss: float, epsilon: float, batch_size: int, buffer_size: int):
         """Add training metrics for analysis with comprehensive validation."""
@@ -334,6 +419,150 @@ class DQNEvaluator:
             logger.error(f"EVALUATOR: learning_curve_generation_failed error={e}")
             return None
     
+    def generate_q_value_analysis(self) -> str:
+        """Generate comprehensive Q-value convergence analysis for research."""
+        logger.info("EVALUATOR: generating_q_value_analysis")
+        
+        try:
+            if not self.q_value_history:
+                logger.warning("EVALUATOR: no_q_value_data_available")
+                return None
+            
+            if not self.matplotlib_available:
+                logger.warning("EVALUATOR: matplotlib_not_available skipping_q_value_analysis")
+                return None
+            
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            
+            # Extract Q-value data
+            timestamps = [q['timestamp'] for q in self.q_value_history]
+            start_time = min(timestamps)
+            relative_times = [(t - start_time) / 60 for t in timestamps]
+            
+            avg_q_values = [q['avg_q_value'] for q in self.q_value_history]
+            max_q_values = [q['max_q_value'] for q in self.q_value_history]
+            min_q_values = [q['min_q_value'] for q in self.q_value_history]
+            q_variances = [q['q_value_variance'] for q in self.q_value_history]
+            
+            # 1. Q-Value Evolution Over Time
+            axes[0, 0].plot(relative_times, avg_q_values, 'b-', linewidth=2, label='Average Q-Value', alpha=0.8)
+            axes[0, 0].fill_between(relative_times, min_q_values, max_q_values, alpha=0.3, color='blue')
+            axes[0, 0].set_xlabel('Time (minutes)', fontsize=12)
+            axes[0, 0].set_ylabel('Q-Value', fontsize=12)
+            axes[0, 0].set_title('Q-Value Evolution & Convergence', fontsize=14, fontweight='bold')
+            axes[0, 0].grid(True, alpha=0.3)
+            axes[0, 0].legend()
+            
+            # Add convergence trend line
+            if len(avg_q_values) > 10:
+                z = np.polyfit(relative_times, avg_q_values, 1)
+                p = np.poly1d(z)
+                axes[0, 0].plot(relative_times, p(relative_times), "r--", alpha=0.8, 
+                               label=f'Trend: {z[0]:.4f}x + {z[1]:.4f}')
+                axes[0, 0].legend()
+            
+            # 2. Q-Value Variance (Stability Indicator)
+            axes[0, 1].plot(relative_times, q_variances, 'purple', linewidth=2, alpha=0.8)
+            axes[0, 1].set_xlabel('Time (minutes)', fontsize=12)
+            axes[0, 1].set_ylabel('Q-Value Variance', fontsize=12)
+            axes[0, 1].set_title('Q-Value Stability (Lower = More Stable)', fontsize=14, fontweight='bold')
+            axes[0, 1].grid(True, alpha=0.3)
+            
+            # Add moving average
+            if len(q_variances) > 5:
+                window = min(10, len(q_variances) // 3)
+                smoothed_variance = pd.Series(q_variances).rolling(window=window).mean()
+                axes[0, 1].plot(relative_times, smoothed_variance, 'red', linewidth=2, 
+                               label=f'Moving Avg (window={window})')
+                axes[0, 1].legend()
+            
+            # 3. Per-Action Q-Value Distribution
+            if len(self.q_value_history) > 10:
+                action_q_values = {0: [], 1: [], 2: []}  # Scale Down, Keep Same, Scale Up
+                
+                for q_entry in self.q_value_history:
+                    if len(q_entry['q_values']) >= 3:
+                        for action_idx, q_val in enumerate(q_entry['q_values']):
+                            if action_idx < 3:
+                                action_q_values[action_idx].append(q_val)
+                
+                action_labels = ['Scale Down', 'Keep Same', 'Scale Up']
+                colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
+                
+                box_data = [action_q_values[i] for i in range(3) if action_q_values[i]]
+                if box_data:
+                    bp = axes[1, 0].boxplot(box_data, labels=action_labels[:len(box_data)], 
+                                           patch_artist=True)
+                    for patch, color in zip(bp['boxes'], colors[:len(box_data)]):
+                        patch.set_facecolor(color)
+                        patch.set_alpha(0.7)
+                    
+                    axes[1, 0].set_xlabel('Action', fontsize=12)
+                    axes[1, 0].set_ylabel('Q-Value', fontsize=12)
+                    axes[1, 0].set_title('Q-Value Distribution by Action', fontsize=14, fontweight='bold')
+                    axes[1, 0].grid(True, alpha=0.3)
+                else:
+                    axes[1, 0].text(0.5, 0.5, 'Insufficient Q-value data\nfor action analysis', 
+                                   ha='center', va='center', transform=axes[1, 0].transAxes)
+            
+            # 4. Q-Value Convergence Metrics
+            if len(avg_q_values) > 20:
+                # Calculate convergence metrics
+                recent_window = avg_q_values[-10:]  # Last 10 values
+                earlier_window = avg_q_values[-20:-10]  # Previous 10 values
+                
+                recent_mean = np.mean(recent_window)
+                earlier_mean = np.mean(earlier_window)
+                recent_std = np.std(recent_window)
+                convergence_rate = abs(recent_mean - earlier_mean)
+                
+                # Plot convergence analysis
+                window_size = min(10, len(avg_q_values) // 5)
+                moving_avg = pd.Series(avg_q_values).rolling(window=window_size).mean()
+                moving_std = pd.Series(avg_q_values).rolling(window=window_size).std()
+                
+                axes[1, 1].plot(relative_times, moving_avg, 'darkblue', linewidth=2, label='Moving Average')
+                axes[1, 1].fill_between(relative_times, 
+                                       moving_avg - moving_std, 
+                                       moving_avg + moving_std, 
+                                       alpha=0.3, color='lightblue', label='±1 Std Dev')
+                
+                axes[1, 1].set_xlabel('Time (minutes)', fontsize=12)
+                axes[1, 1].set_ylabel('Q-Value', fontsize=12)
+                axes[1, 1].set_title(f'Q-Value Convergence Analysis\nRecent Stability: ±{recent_std:.3f}', 
+                                    fontsize=14, fontweight='bold')
+                axes[1, 1].grid(True, alpha=0.3)
+                axes[1, 1].legend()
+                
+                # Add convergence status text
+                if recent_std < 0.1:
+                    convergence_status = "CONVERGED"
+                    status_color = "green"
+                elif recent_std < 0.5:
+                    convergence_status = "STABILIZING"
+                    status_color = "orange"
+                else:
+                    convergence_status = "UNSTABLE"
+                    status_color = "red"
+                
+                axes[1, 1].text(0.02, 0.98, f'Status: {convergence_status}', 
+                               transform=axes[1, 1].transAxes, fontweight='bold',
+                               color=status_color, fontsize=12,
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            else:
+                axes[1, 1].text(0.5, 0.5, 'Insufficient data\nfor convergence analysis\n(need >20 samples)', 
+                               ha='center', va='center', transform=axes[1, 1].transAxes)
+            
+            plt.tight_layout()
+            
+            # Save to MinIO
+            filename = f"q_value_analysis_{self.timestamp}.png"
+            return self._save_plot_to_minio(fig, filename)
+            
+        except Exception as e:
+            logger.error(f"EVALUATOR: q_value_analysis_failed error={e}")
+            return None
+    
     def generate_action_distribution_analysis(self) -> str:
         """Analyze action distribution and decision patterns."""
         logger.info("EVALUATOR: generating_action_distribution_analysis")
@@ -449,6 +678,312 @@ class DQNEvaluator:
             
         except Exception as e:
             logger.error(f"EVALUATOR: action_distribution_analysis_failed error={e}")
+            return None
+    
+    def generate_episode_analysis(self) -> str:
+        """Generate episode-based reward and performance analysis for research."""
+        logger.info("EVALUATOR: generating_episode_analysis")
+        
+        try:
+            if not self.episode_metrics:
+                logger.warning("EVALUATOR: no_episode_data_available")
+                return None
+            
+            if not self.matplotlib_available:
+                logger.warning("EVALUATOR: matplotlib_not_available skipping_episode_analysis")
+                return None
+            
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            
+            # Extract episode data
+            episode_ids = [ep['episode_id'] for ep in self.episode_metrics]
+            total_rewards = [ep['total_reward'] for ep in self.episode_metrics]
+            avg_rewards = [ep['avg_reward'] for ep in self.episode_metrics]
+            episode_lengths = [ep['episode_length'] for ep in self.episode_metrics]
+            timestamps = [ep['timestamp'] for ep in self.episode_metrics]
+            
+            # Convert to relative time
+            start_time = min(timestamps)
+            relative_times = [(t - start_time) / 3600 for t in timestamps]  # Hours
+            
+            # 1. Episode Reward Evolution
+            axes[0, 0].plot(episode_ids, total_rewards, 'b-', linewidth=2, marker='o', markersize=4, alpha=0.8)
+            axes[0, 0].set_xlabel('Episode Number', fontsize=12)
+            axes[0, 0].set_ylabel('Total Episode Reward', fontsize=12)
+            axes[0, 0].set_title('Episode Reward Evolution', fontsize=14, fontweight='bold')
+            axes[0, 0].grid(True, alpha=0.3)
+            
+            # Add moving average trend
+            if len(total_rewards) > 5:
+                window = min(10, len(total_rewards) // 3)
+                smoothed_rewards = pd.Series(total_rewards).rolling(window=window).mean()
+                axes[0, 0].plot(episode_ids, smoothed_rewards, 'red', linewidth=2, 
+                               label=f'Moving Avg (window={window})')
+                axes[0, 0].legend()
+            
+            # 2. Episode Length Analysis
+            axes[0, 1].plot(episode_ids, episode_lengths, 'green', linewidth=2, marker='s', markersize=4, alpha=0.8)
+            axes[0, 1].set_xlabel('Episode Number', fontsize=12)
+            axes[0, 1].set_ylabel('Episode Length (Steps)', fontsize=12)
+            axes[0, 1].set_title('Episode Length Evolution', fontsize=14, fontweight='bold')
+            axes[0, 1].grid(True, alpha=0.3)
+            
+            # Add statistics
+            avg_length = np.mean(episode_lengths)
+            axes[0, 1].axhline(y=avg_length, color='red', linestyle='--', 
+                              label=f'Average: {avg_length:.1f} steps')
+            axes[0, 1].legend()
+            
+            # 3. Performance Distribution
+            reward_bins = 20
+            axes[1, 0].hist(total_rewards, bins=reward_bins, alpha=0.7, edgecolor='black', color='skyblue')
+            axes[1, 0].axvline(np.mean(total_rewards), color='red', linestyle='--', linewidth=2,
+                              label=f'Mean: {np.mean(total_rewards):.2f}')
+            axes[1, 0].axvline(np.median(total_rewards), color='orange', linestyle='--', linewidth=2,
+                              label=f'Median: {np.median(total_rewards):.2f}')
+            axes[1, 0].set_xlabel('Total Episode Reward', fontsize=12)
+            axes[1, 0].set_ylabel('Frequency', fontsize=12)
+            axes[1, 0].set_title('Episode Reward Distribution', fontsize=14, fontweight='bold')
+            axes[1, 0].legend()
+            axes[1, 0].grid(True, alpha=0.3)
+            
+            # 4. Learning Progress Analysis
+            if len(total_rewards) > 10:
+                # Calculate learning metrics
+                first_quarter = total_rewards[:len(total_rewards)//4]
+                last_quarter = total_rewards[-len(total_rewards)//4:]
+                
+                improvement = np.mean(last_quarter) - np.mean(first_quarter)
+                improvement_pct = (improvement / abs(np.mean(first_quarter))) * 100 if np.mean(first_quarter) != 0 else 0
+                
+                # Create learning progress visualization
+                quarter_size = len(total_rewards) // 4
+                quarters = ['Q1', 'Q2', 'Q3', 'Q4']
+                quarter_means = []
+                quarter_stds = []
+                
+                for i in range(4):
+                    start_idx = i * quarter_size
+                    end_idx = (i + 1) * quarter_size if i < 3 else len(total_rewards)
+                    quarter_data = total_rewards[start_idx:end_idx]
+                    quarter_means.append(np.mean(quarter_data))
+                    quarter_stds.append(np.std(quarter_data))
+                
+                x_pos = np.arange(len(quarters))
+                axes[1, 1].bar(x_pos, quarter_means, yerr=quarter_stds, alpha=0.7, 
+                              color=['lightcoral', 'lightblue', 'lightgreen', 'gold'],
+                              edgecolor='black', capsize=5)
+                axes[1, 1].set_xlabel('Training Quarter', fontsize=12)
+                axes[1, 1].set_ylabel('Average Episode Reward', fontsize=12)
+                axes[1, 1].set_title(f'Learning Progress by Quarter\nImprovement: {improvement:+.2f} ({improvement_pct:+.1f}%)', 
+                                    fontsize=14, fontweight='bold')
+                axes[1, 1].set_xticks(x_pos)
+                axes[1, 1].set_xticklabels(quarters)
+                axes[1, 1].grid(True, alpha=0.3)
+                
+                # Add trend arrow
+                if improvement > 0:
+                    axes[1, 1].annotate('📈 Improving', xy=(0.7, 0.9), xycoords='axes fraction',
+                                       fontsize=12, fontweight='bold', color='green')
+                elif improvement < 0:
+                    axes[1, 1].annotate('📉 Declining', xy=(0.7, 0.9), xycoords='axes fraction',
+                                       fontsize=12, fontweight='bold', color='red')
+                else:
+                    axes[1, 1].annotate('📊 Stable', xy=(0.7, 0.9), xycoords='axes fraction',
+                                       fontsize=12, fontweight='bold', color='blue')
+                
+                # Add statistics table
+                stats_text = f"""Episode Statistics:
+Total Episodes: {len(self.episode_metrics)}
+Avg Reward: {np.mean(total_rewards):.2f} ± {np.std(total_rewards):.2f}
+Best Episode: {max(total_rewards):.2f}
+Worst Episode: {min(total_rewards):.2f}
+Success Rate: {sum(1 for ep in self.episode_metrics if ep.get('episode_success', True))/len(self.episode_metrics)*100:.1f}%"""
+                
+                axes[1, 1].text(0.02, 0.02, stats_text, transform=axes[1, 1].transAxes,
+                               verticalalignment='bottom', fontsize=9,
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            else:
+                axes[1, 1].text(0.5, 0.5, 'Insufficient episode data\nfor learning analysis\n(need >10 episodes)', 
+                               ha='center', va='center', transform=axes[1, 1].transAxes, fontsize=12)
+            
+            plt.tight_layout()
+            
+            # Save to MinIO
+            filename = f"episode_analysis_{self.timestamp}.png"
+            return self._save_plot_to_minio(fig, filename)
+            
+        except Exception as e:
+            logger.error(f"EVALUATOR: episode_analysis_failed error={e}")
+            return None
+    
+    def generate_hyperparameter_sensitivity_analysis(self) -> str:
+        """Generate hyperparameter sensitivity analysis for research."""
+        logger.info("EVALUATOR: generating_hyperparameter_sensitivity_analysis")
+        
+        try:
+            if not self.hyperparameter_runs:
+                logger.warning("EVALUATOR: no_hyperparameter_data_available")
+                return None
+            
+            if not self.matplotlib_available:
+                logger.warning("EVALUATOR: matplotlib_not_available skipping_hyperparameter_analysis")
+                return None
+            
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            
+            # Extract hyperparameter data
+            runs = list(self.hyperparameter_runs.values())
+            run_ids = list(self.hyperparameter_runs.keys())
+            
+            # 1. Learning Rate Impact Analysis
+            lr_data = {}
+            gamma_data = {}
+            batch_size_data = {}
+            
+            for run_id, run_data in self.hyperparameter_runs.items():
+                hyperparams = run_data['hyperparams']
+                performance = run_data['performance']
+                
+                # Group by learning rate
+                lr = hyperparams.get('learning_rate', 0.001)
+                if lr not in lr_data:
+                    lr_data[lr] = []
+                lr_data[lr].append(performance.get('avg_reward', 0))
+                
+                # Group by gamma (discount factor)
+                gamma = hyperparams.get('gamma', 0.95)
+                if gamma not in gamma_data:
+                    gamma_data[gamma] = []
+                gamma_data[gamma].append(performance.get('avg_reward', 0))
+                
+                # Group by batch size
+                batch_size = hyperparams.get('batch_size', 32)
+                if batch_size not in batch_size_data:
+                    batch_size_data[batch_size] = []
+                batch_size_data[batch_size].append(performance.get('avg_reward', 0))
+            
+            # Plot Learning Rate Impact
+            if len(lr_data) > 1:
+                lr_values = sorted(lr_data.keys())
+                lr_means = [np.mean(lr_data[lr]) for lr in lr_values]
+                lr_stds = [np.std(lr_data[lr]) if len(lr_data[lr]) > 1 else 0 for lr in lr_values]
+                
+                axes[0, 0].bar(range(len(lr_values)), lr_means, yerr=lr_stds, 
+                              alpha=0.7, color='lightblue', edgecolor='black', capsize=5)
+                axes[0, 0].set_xlabel('Learning Rate', fontsize=12)
+                axes[0, 0].set_ylabel('Average Reward', fontsize=12)
+                axes[0, 0].set_title('Learning Rate Impact', fontsize=14, fontweight='bold')
+                axes[0, 0].set_xticks(range(len(lr_values)))
+                axes[0, 0].set_xticklabels([f'{lr:.4f}' for lr in lr_values])
+                axes[0, 0].grid(True, alpha=0.3)
+                
+                # Highlight best learning rate
+                best_lr_idx = np.argmax(lr_means)
+                axes[0, 0].bar(best_lr_idx, lr_means[best_lr_idx], 
+                              color='gold', edgecolor='black', alpha=0.9)
+                axes[0, 0].text(best_lr_idx, lr_means[best_lr_idx] + lr_stds[best_lr_idx], 
+                               '★ Best', ha='center', va='bottom', fontweight='bold', color='red')
+            else:
+                axes[0, 0].text(0.5, 0.5, 'Insufficient learning rate\nvariations for analysis', 
+                               ha='center', va='center', transform=axes[0, 0].transAxes)
+            
+            # Plot Gamma (Discount Factor) Impact
+            if len(gamma_data) > 1:
+                gamma_values = sorted(gamma_data.keys())
+                gamma_means = [np.mean(gamma_data[gamma]) for gamma in gamma_values]
+                gamma_stds = [np.std(gamma_data[gamma]) if len(gamma_data[gamma]) > 1 else 0 for gamma in gamma_values]
+                
+                axes[0, 1].bar(range(len(gamma_values)), gamma_means, yerr=gamma_stds, 
+                              alpha=0.7, color='lightgreen', edgecolor='black', capsize=5)
+                axes[0, 1].set_xlabel('Discount Factor (γ)', fontsize=12)
+                axes[0, 1].set_ylabel('Average Reward', fontsize=12)
+                axes[0, 1].set_title('Discount Factor Impact', fontsize=14, fontweight='bold')
+                axes[0, 1].set_xticks(range(len(gamma_values)))
+                axes[0, 1].set_xticklabels([f'{gamma:.2f}' for gamma in gamma_values])
+                axes[0, 1].grid(True, alpha=0.3)
+                
+                # Highlight best gamma
+                best_gamma_idx = np.argmax(gamma_means)
+                axes[0, 1].bar(best_gamma_idx, gamma_means[best_gamma_idx], 
+                              color='gold', edgecolor='black', alpha=0.9)
+                axes[0, 1].text(best_gamma_idx, gamma_means[best_gamma_idx] + gamma_stds[best_gamma_idx], 
+                               '★ Best', ha='center', va='bottom', fontweight='bold', color='red')
+            else:
+                axes[0, 1].text(0.5, 0.5, 'Insufficient gamma\nvariations for analysis', 
+                               ha='center', va='center', transform=axes[0, 1].transAxes)
+            
+            # Plot Batch Size Impact
+            if len(batch_size_data) > 1:
+                batch_values = sorted(batch_size_data.keys())
+                batch_means = [np.mean(batch_size_data[batch]) for batch in batch_values]
+                batch_stds = [np.std(batch_size_data[batch]) if len(batch_size_data[batch]) > 1 else 0 for batch in batch_values]
+                
+                axes[1, 0].bar(range(len(batch_values)), batch_means, yerr=batch_stds, 
+                              alpha=0.7, color='lightcoral', edgecolor='black', capsize=5)
+                axes[1, 0].set_xlabel('Batch Size', fontsize=12)
+                axes[1, 0].set_ylabel('Average Reward', fontsize=12)
+                axes[1, 0].set_title('Batch Size Impact', fontsize=14, fontweight='bold')
+                axes[1, 0].set_xticks(range(len(batch_values)))
+                axes[1, 0].set_xticklabels([str(batch) for batch in batch_values])
+                axes[1, 0].grid(True, alpha=0.3)
+                
+                # Highlight best batch size
+                best_batch_idx = np.argmax(batch_means)
+                axes[1, 0].bar(best_batch_idx, batch_means[best_batch_idx], 
+                              color='gold', edgecolor='black', alpha=0.9)
+                axes[1, 0].text(best_batch_idx, batch_means[best_batch_idx] + batch_stds[best_batch_idx], 
+                               '★ Best', ha='center', va='bottom', fontweight='bold', color='red')
+            else:
+                axes[1, 0].text(0.5, 0.5, 'Insufficient batch size\nvariations for analysis', 
+                               ha='center', va='center', transform=axes[1, 0].transAxes)
+            
+            # Overall Hyperparameter Performance Comparison
+            if len(runs) > 1:
+                run_rewards = [run['performance'].get('avg_reward', 0) for run in runs]
+                run_labels = [f"Run {i+1}" for i in range(len(run_rewards))]
+                
+                colors = plt.cm.Set3(np.linspace(0, 1, len(run_rewards)))
+                bars = axes[1, 1].bar(range(len(run_rewards)), run_rewards, 
+                                     color=colors, alpha=0.7, edgecolor='black')
+                
+                axes[1, 1].set_xlabel('Hyperparameter Configuration', fontsize=12)
+                axes[1, 1].set_ylabel('Average Reward', fontsize=12)
+                axes[1, 1].set_title('Overall Configuration Performance', fontsize=14, fontweight='bold')
+                axes[1, 1].set_xticks(range(len(run_labels)))
+                axes[1, 1].set_xticklabels(run_labels, rotation=45)
+                axes[1, 1].grid(True, alpha=0.3)
+                
+                # Highlight best configuration
+                best_run_idx = np.argmax(run_rewards)
+                bars[best_run_idx].set_color('gold')
+                bars[best_run_idx].set_edgecolor('red')
+                bars[best_run_idx].set_linewidth(2)
+                
+                # Add configuration details as text
+                best_run = runs[best_run_idx]
+                best_config = best_run['hyperparams']
+                config_text = f"""Best Configuration:
+LR: {best_config.get('learning_rate', 'N/A')}
+γ: {best_config.get('gamma', 'N/A')}
+Batch: {best_config.get('batch_size', 'N/A')}
+Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
+                
+                axes[1, 1].text(0.02, 0.98, config_text, transform=axes[1, 1].transAxes,
+                               verticalalignment='top', fontsize=10, fontweight='bold',
+                               bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+            else:
+                axes[1, 1].text(0.5, 0.5, 'Insufficient configurations\nfor comparison analysis', 
+                               ha='center', va='center', transform=axes[1, 1].transAxes)
+            
+            plt.tight_layout()
+            
+            # Save to MinIO
+            filename = f"hyperparameter_sensitivity_{self.timestamp}.png"
+            return self._save_plot_to_minio(fig, filename)
+            
+        except Exception as e:
+            logger.error(f"EVALUATOR: hyperparameter_sensitivity_failed error={e}")
             return None
     
     def generate_feature_architecture_analysis(self) -> str:
@@ -970,6 +1505,63 @@ class DQNEvaluator:
             except Exception as cleanup_error:
                 logger.warning(f"EVALUATOR: cleanup_failed error={cleanup_error}")
     
+    def generate_comprehensive_research_dashboard(self) -> List[str]:
+        """Generate all research-focused analyses for publication-quality results."""
+        logger.info("EVALUATOR: generating_comprehensive_research_dashboard")
+        
+        research_outputs = []
+        
+        try:
+            if not self.matplotlib_available:
+                logger.warning("EVALUATOR: matplotlib_not_available skipping_research_dashboard")
+                return research_outputs
+            
+            # Research-focused analysis generators
+            research_generators = [
+                ("q_value_convergence", self.generate_q_value_analysis),
+                ("episode_performance", self.generate_episode_analysis),
+                ("hyperparameter_optimization", self.generate_hyperparameter_sensitivity_analysis),
+                ("learning_dynamics", self.generate_learning_curve_analysis),
+                ("system_architecture", self.generate_feature_architecture_analysis)
+            ]
+            
+            logger.info(f"EVALUATOR: research_data_status episodes={len(self.episode_metrics)} "
+                       f"q_values={len(self.q_value_history)} "
+                       f"hyperparameter_runs={len(self.hyperparameter_runs)}")
+            
+            # Generate each research analysis
+            for analysis_name, generator_func in research_generators:
+                try:
+                    logger.info(f"EVALUATOR: generating_research_analysis type={analysis_name}")
+                    result = generator_func()
+                    
+                    if result:
+                        research_outputs.append(result)
+                        logger.info(f"EVALUATOR: research_analysis_success type={analysis_name} file={result}")
+                    else:
+                        logger.warning(f"EVALUATOR: research_analysis_skipped type={analysis_name} reason=no_data_or_error")
+                        
+                except Exception as e:
+                    logger.error(f"EVALUATOR: research_analysis_failed type={analysis_name} error={e}")
+            
+            # Generate summary of research findings
+            if research_outputs:
+                try:
+                    summary_file = self.generate_summary_report()
+                    if summary_file:
+                        research_outputs.append(summary_file)
+                        logger.info("EVALUATOR: research_summary_generated")
+                except Exception as e:
+                    logger.error(f"EVALUATOR: research_summary_failed error={e}")
+            
+            logger.info(f"EVALUATOR: research_dashboard_complete generated={len(research_outputs)} files")
+            
+            return research_outputs
+            
+        except Exception as e:
+            logger.error(f"EVALUATOR: research_dashboard_failed error={e}")
+            return research_outputs
+    
     def generate_all_outputs(self, model_state: Dict[str, Any]) -> List[str]:
         """Generate all evaluation outputs and return list of saved files."""
         logger.info("EVALUATOR: generating_comprehensive_evaluation")
@@ -996,12 +1588,20 @@ class DQNEvaluator:
                     failed_outputs.append("summary_report")
                 return saved_files
             
-            # Define all output generators with their names
+            # Define all output generators with their names - ENHANCED FOR RESEARCH
             output_generators = [
+                # Core Analysis
                 ("learning_curves", self.generate_learning_curve_analysis),
                 ("action_analysis", self.generate_action_distribution_analysis), 
                 ("feature_architecture", self.generate_feature_architecture_analysis),
                 ("performance_dashboard", lambda: self.generate_performance_dashboard(model_state)),
+                
+                # RESEARCH ENHANCEMENTS: Advanced DQN Analysis
+                ("q_value_analysis", self.generate_q_value_analysis),
+                ("episode_analysis", self.generate_episode_analysis),
+                ("hyperparameter_sensitivity", self.generate_hyperparameter_sensitivity_analysis),
+                
+                # Final Summary
                 ("summary_report", self.generate_summary_report)
             ]
             
