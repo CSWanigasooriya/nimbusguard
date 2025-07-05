@@ -392,7 +392,7 @@ ports: ## Port forward all relevant services in the background
 	@echo "🚀 Starting all port forwarding in the background..."
 	@nohup kubectl port-forward -n nimbusguard svc/prometheus 9090:9090 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/grafana 3000:3000 > .ports.log 2>&1 &
-	@nohup kubectl port-forward -n nimbusguard svc/dqn-adapter 8001:8000 > .ports.log 2>&1 &
+	@nohup kubectl port-forward -n nimbusguard svc/dqn-adapter 8080:8080 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/redis 6379:6379 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/minio 9000:9000 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/minio 9001:9001 > .ports.log 2>&1 &
@@ -402,7 +402,11 @@ ports: ## Port forward all relevant services in the background
 	@echo "-----------------------------------------"
 	@echo "📈 Prometheus:         http://localhost:9090"
 	@echo "📋 Grafana:            http://localhost:3000  (admin/admin)"
-	@echo "🧠 DQN Adapter:        http://localhost:8001"
+	@echo "🧠 DQN Adapter:        http://localhost:8080"
+	@echo "    ├── /healthz      Health check"
+	@echo "    ├── /metrics      Prometheus metrics"
+	@echo "    ├── /api/v1/dqn-metrics  KEDA metrics API"
+	@echo "    └── /evaluate     Manual evaluation trigger"
 	@echo "💾 Redis (CLI):        redis-cli -p 6379"
 	@echo "🗄️ MinIO API:          http://localhost:9000"
 	@echo "🖥️ MinIO Console:      http://localhost:9001  (minioadmin/minioadmin)"

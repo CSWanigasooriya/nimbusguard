@@ -65,7 +65,7 @@ def scaler_health(**kwargs):
 async def metrics_handler(request):
     """Provide Prometheus metrics for KEDA"""
     metrics_data = generate_latest()
-    return web.Response(text=metrics_data.decode('utf-8'), content_type='text/plain; version=0.0.4; charset=utf-8')
+    return web.Response(text=metrics_data.decode('utf-8'), content_type='text/plain; version=0.0.4', charset='utf-8')
 
 async def metrics_api_handler(request):
     """KEDA Metrics API endpoint - returns current DQN desired replicas (updated by timer)"""
@@ -229,6 +229,41 @@ SAVE_INTERVAL_SECONDS = int(os.getenv("SAVE_INTERVAL_SECONDS", 300))
 # These are defined globally and will be exposed by kopf's built-in metrics server.
 DESIRED_REPLICAS_GAUGE = Gauge('nimbusguard_dqn_desired_replicas', 'Desired replicas calculated by the DQN adapter')
 CURRENT_REPLICAS_GAUGE = Gauge('nimbusguard_current_replicas', 'Current replicas of the target deployment as seen by the adapter')
+
+# DQN Training Metrics
+DQN_TRAINING_LOSS_GAUGE = Gauge('dqn_training_loss', 'Current DQN training loss')
+DQN_EPSILON_GAUGE = Gauge('dqn_epsilon_value', 'Current exploration epsilon value')
+DQN_BUFFER_SIZE_GAUGE = Gauge('dqn_replay_buffer_size', 'Current replay buffer size')
+DQN_TRAINING_STEPS_GAUGE = Gauge('dqn_training_steps_total', 'Total training steps completed')
+
+# DQN Decision Metrics
+DQN_DECISION_CONFIDENCE_GAUGE = Gauge('dqn_decision_confidence_avg', 'Average decision confidence')
+DQN_Q_VALUE_SCALE_UP_GAUGE = Gauge('dqn_q_value_scale_up', 'Q-value for scale up action')
+DQN_Q_VALUE_SCALE_DOWN_GAUGE = Gauge('dqn_q_value_scale_down', 'Q-value for scale down action')
+DQN_Q_VALUE_KEEP_SAME_GAUGE = Gauge('dqn_q_value_keep_same', 'Q-value for keep same action')
+
+# DQN Action Counters
+from prometheus_client import Counter
+DQN_ACTION_SCALE_UP_COUNTER = Counter('dqn_action_scale_up_total', 'Total scale up actions taken')
+DQN_ACTION_SCALE_DOWN_COUNTER = Counter('dqn_action_scale_down_total', 'Total scale down actions taken')
+DQN_ACTION_KEEP_SAME_COUNTER = Counter('dqn_action_keep_same_total', 'Total keep same actions taken')
+DQN_EXPLORATION_COUNTER = Counter('dqn_exploration_actions_total', 'Total exploration actions taken')
+DQN_EXPLOITATION_COUNTER = Counter('dqn_exploitation_actions_total', 'Total exploitation actions taken')
+DQN_EXPERIENCES_COUNTER = Counter('dqn_experiences_added_total', 'Total experiences added to replay buffer')
+DQN_DECISIONS_COUNTER = Counter('dqn_decisions_total', 'Total decisions made by DQN')
+
+# LSTM Feature Metrics
+DQN_LSTM_NEXT_30SEC_GAUGE = Gauge('dqn_lstm_next_30sec_pressure', 'LSTM forecast for next 30 seconds')
+DQN_LSTM_NEXT_60SEC_GAUGE = Gauge('dqn_lstm_next_60sec_pressure', 'LSTM forecast for next 60 seconds')
+DQN_LSTM_TREND_VELOCITY_GAUGE = Gauge('dqn_lstm_trend_velocity', 'LSTM trend velocity')
+DQN_LSTM_PATTERN_CONFIDENCE_GAUGE = Gauge('dqn_lstm_pattern_confidence', 'LSTM pattern confidence')
+
+# Reward Component Metrics
+DQN_REWARD_TOTAL_GAUGE = Gauge('dqn_reward_total', 'Total reward received')
+DQN_REWARD_PERFORMANCE_GAUGE = Gauge('dqn_reward_performance_component', 'Performance component of reward')
+DQN_REWARD_RESOURCE_GAUGE = Gauge('dqn_reward_resource_component', 'Resource component of reward')
+DQN_REWARD_HEALTH_GAUGE = Gauge('dqn_reward_health_component', 'Health component of reward')
+DQN_REWARD_COST_GAUGE = Gauge('dqn_reward_cost_component', 'Cost component of reward')
 
 # --- DQN Model Definition ---
 class EnhancedQNetwork(nn.Module):
@@ -523,6 +558,12 @@ class CombinedDQNTrainer:
                             buffer_size=buffer_size_value
                         )
                         logger.debug(f"TRAINER: metrics_sent_to_evaluator loss={loss_value:.4f} buffer_size={buffer_size_value}")
+                        
+                        # Update Prometheus training metrics
+                        DQN_TRAINING_LOSS_GAUGE.set(loss_value)
+                        DQN_BUFFER_SIZE_GAUGE.set(buffer_size_value)
+                        DQN_TRAINING_STEPS_GAUGE.inc()
+                        
                     else:
                         logger.warning(f"TRAINER: invalid_metrics_not_sent loss={loss_value} finite={np.isfinite(loss_value)}")
                         
@@ -1049,6 +1090,38 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
                 logger.info(f"DQN_DECISION: action={action_name} confidence={confidence} risk={risk_level}")
             logger.info(f"DQN_Q_VALUES: values=[{','.join(f'{q:.3f}' for q in q_values)}] gap={confidence_gap:.3f}")
             logger.info(f"DQN_REASONING: factors_count={len(explanation['reasoning_factors'])}")
+            
+            # Update Prometheus metrics
+            DQN_DECISIONS_COUNTER.inc()
+            DQN_EPSILON_GAUGE.set(current_epsilon)
+            DQN_DECISION_CONFIDENCE_GAUGE.set(confidence)
+            DQN_Q_VALUE_SCALE_UP_GAUGE.set(q_values[2])  # Scale up is action 2
+            DQN_Q_VALUE_SCALE_DOWN_GAUGE.set(q_values[0])  # Scale down is action 0
+            DQN_Q_VALUE_KEEP_SAME_GAUGE.set(q_values[1])  # Keep same is action 1
+            
+            # Update action counters
+            if action_name == "Scale Up":
+                DQN_ACTION_SCALE_UP_COUNTER.inc()
+            elif action_name == "Scale Down":
+                DQN_ACTION_SCALE_DOWN_COUNTER.inc()
+            else:  # Keep Same
+                DQN_ACTION_KEEP_SAME_COUNTER.inc()
+            
+            # Update exploration/exploitation counters
+            if exploration_type == "exploration":
+                DQN_EXPLORATION_COUNTER.inc()
+            else:
+                DQN_EXPLOITATION_COUNTER.inc()
+            
+            # Update LSTM feature metrics if available
+            if 'next_30sec_pressure' in metrics:
+                DQN_LSTM_NEXT_30SEC_GAUGE.set(metrics['next_30sec_pressure'])
+            if 'next_60sec_pressure' in metrics:
+                DQN_LSTM_NEXT_60SEC_GAUGE.set(metrics['next_60sec_pressure'])
+            if 'trend_velocity' in metrics:
+                DQN_LSTM_TREND_VELOCITY_GAUGE.set(metrics['trend_velocity'])
+            if 'pattern_confidence' in metrics:
+                DQN_LSTM_PATTERN_CONFIDENCE_GAUGE.set(metrics['pattern_confidence'])
             
             # Log specific reasoning for this decision
             if ENABLE_DETAILED_REASONING:
@@ -1608,6 +1681,26 @@ async def observe_next_state_and_calculate_reward(state: ScalingState) -> Dict[s
     experience['reward'] = reward
     experience['next_state'] = {**next_state_metrics, 'current_replicas': current_replicas}
     
+    # Update reward metrics (assuming reward components are available)
+    DQN_REWARD_TOTAL_GAUGE.set(reward)
+    if isinstance(reward, dict):
+        # If reward is broken down into components
+        DQN_REWARD_PERFORMANCE_GAUGE.set(reward.get('performance', 0))
+        DQN_REWARD_RESOURCE_GAUGE.set(reward.get('resource', 0))
+        DQN_REWARD_HEALTH_GAUGE.set(reward.get('health', 0))
+        DQN_REWARD_COST_GAUGE.set(reward.get('cost', 0))
+    else:
+        # If reward is a single value, estimate components based on weights
+        performance_component = reward * REWARD_PERFORMANCE_WEIGHT
+        resource_component = reward * REWARD_RESOURCE_WEIGHT
+        health_component = reward * REWARD_HEALTH_WEIGHT
+        cost_component = reward * REWARD_COST_WEIGHT
+        
+        DQN_REWARD_PERFORMANCE_GAUGE.set(performance_component)
+        DQN_REWARD_RESOURCE_GAUGE.set(resource_component)
+        DQN_REWARD_HEALTH_GAUGE.set(health_component)
+        DQN_REWARD_COST_GAUGE.set(cost_component)
+    
     logger.info("=" * 60)
     logger.info("NODE_END: observe_next_state_and_calculate_reward")
     return {"experience": experience}
@@ -1808,6 +1901,9 @@ async def log_experience(state: ScalingState) -> Dict[str, Any]:
         # 3. Add to evaluator for analysis
         if evaluator and ENABLE_EVALUATION_OUTPUTS:
             evaluator.add_experience(exp)
+        
+        # 4. Update Prometheus experience counter
+        DQN_EXPERIENCES_COUNTER.inc()
         
     except Exception as e:
         logger.error(f"EXPERIENCE: logging_failed error={e}")
@@ -2077,6 +2173,25 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     CURRENT_REPLICAS_GAUGE.set(1)
     DESIRED_REPLICAS_GAUGE.set(1)
     
+    # Initialize DQN metrics
+    DQN_TRAINING_LOSS_GAUGE.set(0.0)
+    DQN_EPSILON_GAUGE.set(EPSILON_START)
+    DQN_BUFFER_SIZE_GAUGE.set(0)
+    DQN_TRAINING_STEPS_GAUGE.set(0)
+    DQN_DECISION_CONFIDENCE_GAUGE.set(0.0)
+    DQN_Q_VALUE_SCALE_UP_GAUGE.set(0.0)
+    DQN_Q_VALUE_SCALE_DOWN_GAUGE.set(0.0)
+    DQN_Q_VALUE_KEEP_SAME_GAUGE.set(0.0)
+    DQN_LSTM_NEXT_30SEC_GAUGE.set(0.0)
+    DQN_LSTM_NEXT_60SEC_GAUGE.set(0.0)
+    DQN_LSTM_TREND_VELOCITY_GAUGE.set(0.0)
+    DQN_LSTM_PATTERN_CONFIDENCE_GAUGE.set(0.0)
+    DQN_REWARD_TOTAL_GAUGE.set(0.0)
+    DQN_REWARD_PERFORMANCE_GAUGE.set(0.0)
+    DQN_REWARD_RESOURCE_GAUGE.set(0.0)
+    DQN_REWARD_HEALTH_GAUGE.set(0.0)
+    DQN_REWARD_COST_GAUGE.set(0.0)
+    
     # Run initial DQN decision to get a baseline
     try:
         logger.info("DECISION: running_initial_baseline")
@@ -2097,6 +2212,27 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     # Add a root handler
     async def root_handler(request):
         return web.json_response({"message": "NimbusGuard DQN Adapter Metrics Server", "status": "running"})
+    
+    # Add health check endpoint
+    async def health_handler(request):
+        health_status = {
+            "status": "healthy",
+            "service": "dqn-adapter",
+            "components": {
+                "dqn_trainer": dqn_trainer is not None,
+                "evaluator": evaluator is not None,
+                "redis": redis_client is not None,
+                "prometheus": prometheus_client is not None,
+                "lstm_predictor": lstm_predictor is not None
+            },
+            "metrics": {
+                "decisions_total": int(DQN_DECISIONS_COUNTER._value._value),
+                "training_steps": int(DQN_TRAINING_STEPS_GAUGE._value._value),
+                "buffer_size": int(DQN_BUFFER_SIZE_GAUGE._value._value),
+                "current_epsilon": float(DQN_EPSILON_GAUGE._value._value)
+            }
+        }
+        return web.json_response(health_status)
     
     async def evaluation_trigger_handler(request):
         """Manual trigger for evaluation."""
@@ -2122,6 +2258,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
             return web.json_response({"error": str(e)}, status=500)
     
     app.router.add_get('/', root_handler)
+    app.router.add_get('/healthz', health_handler)
     app.router.add_post('/evaluate', evaluation_trigger_handler)
     
     metrics_server = web.AppRunner(app)
