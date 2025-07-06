@@ -132,6 +132,10 @@ class LoadGenerator:
         logger.info(f"📝 Description: {load_test.description}")
         logger.info(f"⚙️  Config: {load_test.concurrent_requests} concurrent, {load_test.total_requests} total requests")
         
+        # Check if this is the special comparison pattern that needs multi-phase execution
+        if 'comparison' in load_test.name.lower():
+            return await self.run_comparison_pattern_test(load_test)
+        
         start_time = time.time()
         semaphore = asyncio.Semaphore(load_test.concurrent_requests)
         tasks = []
@@ -192,6 +196,137 @@ class LoadGenerator:
         except Exception as e:
             logger.warning(f"⚠️  Could not get service status: {e}")
         return None
+    
+    async def run_comparison_pattern_test(self, load_test: LoadTest) -> Dict[str, Any]:
+        """Run the deterministic multi-phase comparison pattern"""
+        logger.info(f"🎯 Starting DETERMINISTIC multi-phase comparison pattern")
+        logger.info(f"📋 Pattern: Baseline(5min) → High Load(10min) → Medium Load(10min) → Cool Down(5min)")
+        
+        # Deterministic phase definitions (30 minutes total)
+        phases = [
+            {
+                'name': 'Baseline Load',
+                'duration_minutes': 5,
+                'requests_per_minute': 2,
+                'concurrent_requests': 3,
+                'cpu_intensity': 3,
+                'memory_size': 50,
+                'request_duration': 15
+            },
+            {
+                'name': 'High Load Phase',
+                'duration_minutes': 10, 
+                'requests_per_minute': 8,
+                'concurrent_requests': 12,
+                'cpu_intensity': 9,
+                'memory_size': 200,
+                'request_duration': 30
+            },
+            {
+                'name': 'Medium Load Phase',
+                'duration_minutes': 10,
+                'requests_per_minute': 4,
+                'concurrent_requests': 6,
+                'cpu_intensity': 6,
+                'memory_size': 120,
+                'request_duration': 20
+            },
+            {
+                'name': 'Cool Down Phase',
+                'duration_minutes': 5,
+                'requests_per_minute': 1,
+                'concurrent_requests': 2,
+                'cpu_intensity': 2,
+                'memory_size': 30,
+                'request_duration': 10
+            }
+        ]
+        
+        total_start_time = time.time()
+        all_results = []
+        
+        for i, phase in enumerate(phases, 1):
+            logger.info(f"🔄 Phase {i}/4: {phase['name']} ({phase['duration_minutes']} minutes)")
+            logger.info(f"   📊 Load: {phase['requests_per_minute']} req/min, CPU={phase['cpu_intensity']}, Memory={phase['memory_size']}MB")
+            
+            # Create a temporary LoadTest for this phase
+            phase_test = LoadTest(
+                name=f"Phase {i}: {phase['name']}",
+                description=f"Deterministic phase {i} of comparison pattern",
+                concurrent_requests=phase['concurrent_requests'],
+                total_requests=phase['requests_per_minute'] * phase['duration_minutes'],
+                cpu_intensity=phase['cpu_intensity'],
+                memory_size=phase['memory_size'],
+                duration=phase['request_duration'],
+                async_mode="true",
+                delay_between_requests=60.0 / phase['requests_per_minute']  # Convert to seconds between requests
+            )
+            
+            # Run this phase (using original logic to avoid recursion)
+            phase_start_time = time.time()
+            semaphore = asyncio.Semaphore(phase_test.concurrent_requests)
+            tasks = []
+            
+            async def bounded_request(request_id: int):
+                async with semaphore:
+                    await asyncio.sleep(request_id * phase_test.delay_between_requests)
+                    return await self.send_process_request(phase_test, request_id)
+            
+            # Create all request tasks for this phase
+            for j in range(phase_test.total_requests):
+                task = asyncio.create_task(bounded_request(j + 1))
+                tasks.append(task)
+            
+            # Wait for all requests in this phase to complete
+            logger.info(f"   ⏳ Sending {phase_test.total_requests} requests over {phase['duration_minutes']} minutes...")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            phase_end_time = time.time()
+            phase_duration = phase_end_time - phase_start_time
+            
+            # Process results for this phase
+            successful_requests = [r for r in results if isinstance(r, dict) and r.get('success', False)]
+            success_rate = (len(successful_requests) / len(results)) * 100 if results else 0
+            
+            phase_summary = {
+                'phase': i,
+                'phase_name': phase['name'],
+                'duration_seconds': phase_duration,
+                'total_requests': len(results),
+                'successful_requests': len(successful_requests),
+                'success_rate': success_rate,
+                'requests_per_second': len(results) / phase_duration if phase_duration > 0 else 0
+            }
+            
+            all_results.append(phase_summary)
+            logger.info(f"   ✅ Phase {i} completed: {success_rate:.1f}% success rate in {phase_duration:.1f}s")
+        
+        total_end_time = time.time()
+        total_duration = total_end_time - total_start_time
+        
+        # Create overall summary
+        total_requests = sum(r['total_requests'] for r in all_results)
+        total_successful = sum(r['successful_requests'] for r in all_results)
+        overall_success_rate = (total_successful / total_requests) * 100 if total_requests > 0 else 0
+        
+        comparison_summary = {
+            'test_name': 'Deterministic Comparison Pattern',
+            'total_duration_seconds': total_duration,
+            'total_duration_minutes': total_duration / 60,
+            'phases': all_results,
+            'overall_total_requests': total_requests,
+            'overall_successful_requests': total_successful,
+            'overall_success_rate': overall_success_rate,
+            'overall_requests_per_second': total_requests / total_duration if total_duration > 0 else 0
+        }
+        
+        logger.info(f"🎉 DETERMINISTIC comparison pattern completed!")
+        logger.info(f"📊 Total duration: {total_duration/60:.1f} minutes")
+        logger.info(f"📈 Overall success rate: {overall_success_rate:.1f}% ({total_successful}/{total_requests})")
+        logger.info(f"🎯 Pattern guaranteed to trigger: Scale Up → Keep Same → Scale Down")
+        
+        self.results.append(comparison_summary)
+        return comparison_summary
     
     async def cleanup_service(self):
         """Clean up service memory"""

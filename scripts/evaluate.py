@@ -459,11 +459,11 @@ class KubernetesStateFocusedShowcase:
             
             action_labels = [action_name_map[action] for action in all_actions]
             action_colors = [action_color_map[action] for action in all_actions]
-            
+                
             # Scatter plot of CPU vs Memory limits colored by scaling action
             for i, action in enumerate(all_actions):
                 mask = self.df['scaling_action'] == action
-                if mask.sum() > 0:
+                    if mask.sum() > 0:
                     axes[1].scatter(self.df[mask][cpu_metric], 
                                   self.df[mask][memory_metric],
                                   alpha=0.6, label=action_labels[i], 
@@ -472,12 +472,12 @@ class KubernetesStateFocusedShowcase:
                     # Add empty scatter to show in legend
                     axes[1].scatter([], [], alpha=0.6, label=f'{action_labels[i]} (0 samples)', 
                                   color=action_colors[i], s=30)
-            
+                
             axes[1].set_xlabel('CPU Resource Limits (cores)')
             axes[1].set_ylabel('Memory Resource Limits (bytes)')
             axes[1].set_title('Resource Limits vs Scaling Decisions', fontweight='bold')
-            axes[1].legend()
-            axes[1].grid(True, alpha=0.3)
+                axes[1].legend()
+                axes[1].grid(True, alpha=0.3)
             
             # Add resource efficiency insight
             high_cpu_mask = self.df[cpu_metric] > self.df[cpu_metric].median()
@@ -494,22 +494,22 @@ class KubernetesStateFocusedShowcase:
             # Just CPU data available
             cpu_metric = cpu_limits[0]
             cpu_data = self.df[cpu_metric]
-            axes[1].hist(cpu_data, bins=30, 
+                axes[1].hist(cpu_data, bins=30, 
                        color=self.colors['accent'], alpha=0.7, edgecolor='black')
             axes[1].set_xlabel('CPU Resource Limits (cores)')
-            axes[1].set_ylabel('Frequency')
+                axes[1].set_ylabel('Frequency')
             axes[1].set_title('CPU Resource Limits Distribution', fontweight='bold')
-            axes[1].grid(alpha=0.3)
-            
-            # Add mean and median lines
-            mean_val = cpu_data.mean()
-            median_val = cpu_data.median()
-            
-            axes[1].axvline(mean_val, color='red', linestyle='--', linewidth=2, 
+                axes[1].grid(alpha=0.3)
+                
+                # Add mean and median lines
+                mean_val = cpu_data.mean()
+                median_val = cpu_data.median()
+                
+                axes[1].axvline(mean_val, color='red', linestyle='--', linewidth=2, 
                            label=f'Mean: {mean_val:.3f}')
-            axes[1].axvline(median_val, color='orange', linestyle='-', linewidth=2, 
+                axes[1].axvline(median_val, color='orange', linestyle='-', linewidth=2, 
                            label=f'Median: {median_val:.3f}')
-            axes[1].legend()
+                axes[1].legend()
         else:
             axes[1].text(0.5, 0.5, 'Resource limits data\nnot available', 
                         ha='center', va='center', transform=axes[1].transAxes,
@@ -561,20 +561,20 @@ class KubernetesStateFocusedShowcase:
                 wedges, texts, autotexts = ax1.pie(pie_counts, 
                                                   labels=pie_labels,
                                                   colors=pie_colors,
-                                                  autopct='%1.1f%%',
-                                                  startangle=90,
+                                          autopct='%1.1f%%',
+                                          startangle=90,
                                                   explode=pie_explode,
-                                                  wedgeprops={'edgecolor': 'black', 'linewidth': 0.8})
-                
-                # Enhance text appearance
-                for autotext in autotexts:
-                    autotext.set_color('white')
-                    autotext.set_fontweight('bold')
-                    autotext.set_fontsize(12)
-                
-                for text in texts:
-                    text.set_fontweight('bold')
-                    text.set_fontsize(10)
+                                          wedgeprops={'edgecolor': 'black', 'linewidth': 0.8})
+        
+        # Enhance text appearance
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+            autotext.set_fontsize(12)
+        
+        for text in texts:
+            text.set_fontweight('bold')
+            text.set_fontsize(10)
             else:
                 ax1.text(0.5, 0.5, 'No scaling data\navailable', 
                         ha='center', va='center', transform=ax1.transAxes,
@@ -679,9 +679,9 @@ class KubernetesStateFocusedShowcase:
         if 'final_scores' in feature_analysis:
             available_scores = {}
             for feature, score in feature_analysis['final_scores'].items():
-                if feature in selected_features and feature in self.df.columns:
+                    if feature in selected_features and feature in self.df.columns:
                     display_name = self.create_display_name(feature)
-                    available_scores[display_name] = score
+                        available_scores[display_name] = score
         else:
             # Fallback: create default scores for selected features
             available_scores = {}
@@ -702,25 +702,25 @@ class KubernetesStateFocusedShowcase:
                     display_name = self.create_display_name(feature)
                     score = score_mapping.get(feature, 50.0)
                     available_scores[display_name] = score
-        
-        if available_scores:
-            features = list(available_scores.keys())
-            scores = list(available_scores.values())
             
-            bars = ax4.barh(range(len(features)), scores, color=self.colors['primary'], alpha=0.8)
-            ax4.set_yticks(range(len(features)))
-            ax4.set_yticklabels(features)
-            ax4.set_xlabel('Feature Importance Score')
+            if available_scores:
+                features = list(available_scores.keys())
+                scores = list(available_scores.values())
+                
+                bars = ax4.barh(range(len(features)), scores, color=self.colors['primary'], alpha=0.8)
+                ax4.set_yticks(range(len(features)))
+                ax4.set_yticklabels(features)
+                ax4.set_xlabel('Feature Importance Score')
             ax4.set_title('Kubernetes Features for Scaling Decisions', fontweight='bold')
-            ax4.grid(axis='x', alpha=0.3)
-            
-            # Add score labels
-            for i, (bar, score) in enumerate(zip(bars, scores)):
-                ax4.text(score + 0.5, i, f'{score:.1f}', va='center', fontweight='bold')
-        else:
-            ax4.text(0.5, 0.5, 'Feature importance\ndata not available', 
-                    ha='center', va='center', transform=ax4.transAxes,
-                    fontsize=12, color=self.colors['dark'])
+                ax4.grid(axis='x', alpha=0.3)
+                
+                # Add score labels
+                for i, (bar, score) in enumerate(zip(bars, scores)):
+                    ax4.text(score + 0.5, i, f'{score:.1f}', va='center', fontweight='bold')
+            else:
+                ax4.text(0.5, 0.5, 'Feature importance\ndata not available', 
+                        ha='center', va='center', transform=ax4.transAxes,
+                        fontsize=12, color=self.colors['dark'])
             ax4.set_title('Kubernetes Features for Scaling Decisions', fontweight='bold')
         
         plt.tight_layout(rect=[0, 0.03, 1, 0.93])

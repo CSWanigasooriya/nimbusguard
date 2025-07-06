@@ -424,7 +424,7 @@ ports-stop:
 
 test-hpa-baseline: ## Run HPA-only test with deterministic load
 	@echo "🧪 Starting HPA baseline test with deterministic load..."
-	kubectl delete scaledobjects --all -n nimbusguard --ignore-not-found=true
+	kubectl delete jobs --all -n nimbusguard --ignore-not-found=true
 	kubectl scale deployment consumer --replicas=1 -n nimbusguard
 	kubectl apply -f kubernetes-manifests/components/consumer/hpa.yaml
 	sleep 10
@@ -434,6 +434,7 @@ test-hpa-baseline: ## Run HPA-only test with deterministic load
 
 test-dqn-baseline: ## Run DQN test with identical deterministic load  
 	@echo "🧠 Starting DQN test with identical deterministic load..."
+	kubectl delete jobs --all -n nimbusguard --ignore-not-found=true
 	kubectl delete hpa --all -n nimbusguard --ignore-not-found=true
 	kubectl scale deployment consumer --replicas=1 -n nimbusguard
 	kubectl apply -k kubernetes-manifests/overlays/development/

@@ -977,6 +977,13 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
                f"unavailable={metrics.get('kube_deployment_status_replicas_unavailable', 0)} "
                f"readiness={metrics.get('kube_pod_container_status_ready', 1.0):.3f}")
     
+    # DIAGNOSTIC: Log key features that should indicate load decrease
+    logger.info(f"LOAD_INDICATORS: "
+               f"cpu_limits={metrics.get('kube_pod_container_resource_limits_cpu', 0):.2f} "
+               f"memory_limits_mb={metrics.get('kube_pod_container_resource_limits_memory', 0)/1000000:.0f} "
+               f"running_containers={metrics.get('kube_pod_container_status_running', 0)} "
+               f"network_up={metrics.get('node_network_up', 0)}")
+    
     # Log LSTM insights if available
     proactive_override = None
     if lstm_available > 0:
@@ -1038,15 +1045,21 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
                 
                 q_values = dqn_model(input_tensor).cpu().numpy().flatten()
             
+            # ENHANCED: Boost exploration when over-provisioned to encourage scale-down learning
+            effective_epsilon = current_epsilon
+            if current_replicas >= 8:  # Over-provisioned scenario
+                effective_epsilon = max(current_epsilon, 0.15)  # Minimum 15% exploration
+                logger.info(f"DQN_EXPLORATION_BOOST: over_provisioned={current_replicas} epsilon_boosted={current_epsilon:.3f}→{effective_epsilon:.3f}")
+            
             # Epsilon-greedy exploration with detailed reasoning
-            if random.random() < current_epsilon:
+            if random.random() < effective_epsilon:
                 action_index = random.randint(0, 2)  # Random action
                 exploration_type = "exploration"
-                logger.info(f"DQN_EXPLORATION: random_action epsilon={current_epsilon:.3f}")
+                logger.info(f"DQN_EXPLORATION: random_action epsilon={effective_epsilon:.3f}")
             else:
                 action_index = np.argmax(q_values)  # Greedy action
                 exploration_type = "exploitation"  
-                logger.info(f"DQN_EXPLOITATION: best_action epsilon={current_epsilon:.3f}")
+                logger.info(f"DQN_EXPLOITATION: best_action epsilon={effective_epsilon:.3f}")
             
             # Decay epsilon
             current_epsilon = max(EPSILON_END, current_epsilon * EPSILON_DECAY)
@@ -1089,6 +1102,18 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
             confidence = explanation['confidence_metrics']['decision_confidence']
             risk_level = explanation['risk_assessment']
             confidence_gap = explanation['confidence_metrics']['confidence_gap']
+            
+            # DIAGNOSTIC: Enhanced Q-value logging for scale-down debugging
+            scale_down_q = q_values[0]
+            keep_same_q = q_values[1] 
+            scale_up_q = q_values[2]
+            
+            logger.info(f"DQN_Q_VALUES_DETAILED: ScaleDown={scale_down_q:.4f} KeepSame={keep_same_q:.4f} ScaleUp={scale_up_q:.4f}")
+            logger.info(f"DQN_Q_ANALYSIS: winner={'ScaleDown' if scale_down_q == max(q_values) else 'KeepSame' if keep_same_q == max(q_values) else 'ScaleUp'} "
+                       f"margin={max(q_values) - sorted(q_values, reverse=True)[1]:.4f}")
+            logger.info(f"DQN_REPLICA_PRESSURE: current={current_replicas} "
+                       f"scale_down_advantage={scale_down_q - keep_same_q:.4f} "
+                       f"should_scale_down={current_replicas > 5 and scale_down_q > keep_same_q}")
             
             if override_applied:
                 logger.info(f"FINAL_DECISION: action={action_name} (DQN={dqn_action_name}, LSTM_OVERRIDE) confidence={confidence} risk={risk_level}")
@@ -1202,6 +1227,12 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
                 action_name = "Scale Down"
                 reasoning_factors.append(f"Low utilization: {cpu_limits:.1f} CPU cores, {memory_mb:.1f}MB memory, healthy network")
                 reasoning_factors.append(f"System has excess capacity with {current_replicas} replicas - can optimize costs")
+                risk_level = "low"
+            # ENHANCED: Add explicit scale-down for high replica counts with stable system
+            elif current_replicas >= 8 and replicas_unavailable == 0 and pods_ready >= 0.9 and terminated_exitcode == 0:  # High replica count but stable
+                action_name = "Scale Down"
+                reasoning_factors.append(f"Over-provisioned: {current_replicas} replicas with perfect health - cost optimization opportunity")
+                reasoning_factors.append(f"System stability indicators: {pods_ready:.1%} ready, {replicas_unavailable} unavailable, clean exits")
                 risk_level = "low"
             else:
                 action_name = "Keep Same"
@@ -1339,7 +1370,7 @@ SAFETY ASSESSMENT QUESTIONS:
 - Is the DQN risk assessment reasonable given the circumstances?
 - Does this contradict strong LSTM predictions without good reason?
 
-IMPORTANT: You may use READ-ONLY Kubernetes tools to inspect cluster state if needed.
+IMPORTANT: You may use READ-ONLY Kubernetes tools to inspect cluster state if needed. 
 DO NOT attempt to scale, modify, or perform any write operations.
 
 CRITICAL: Respond with ONLY a valid JSON object. No markdown, no explanations.
@@ -1347,7 +1378,7 @@ CRITICAL: Respond with ONLY a valid JSON object. No markdown, no explanations.
 Example for NORMAL decision (approve):
 {{
     "approved": true,
-    "confidence": "high", 
+    "confidence": "high",
     "reasoning": "DQN reasoning is sound and decision is within safe parameters",
     "safety_risk": "none",
     "extreme_factors": [],
@@ -1392,7 +1423,7 @@ Your JSON response:"""
         if not validation_result['approved'] or safety_risk in ['high', 'medium']:
             logger.warning("SAFETY_ALERT: detailed_analysis")
             logger.warning(f"SAFETY_DECISION: approved={validation_result['approved']} "
-                         f"confidence={validation_result['confidence']} "
+                       f"confidence={validation_result['confidence']} "
                          f"risk={safety_risk}")
             
             logger.warning(f"SAFETY_REASONING: {validation_result['reasoning']}")
@@ -1422,7 +1453,7 @@ Your JSON response:"""
         
         # Check if this is a permission-related error or JSON parsing issue
         error_str = str(e).lower()
-        is_permission_error = any(keyword in error_str for keyword in
+        is_permission_error = any(keyword in error_str for keyword in 
                                  ['permission', 'forbidden', 'unauthorized', 'rbac', 'access denied'])
         is_parsing_error = 'json' in error_str or 'parse' in error_str
         
@@ -1493,20 +1524,20 @@ def parse_llm_json_response(response_text: str, action_name: str) -> Dict[str, A
         
     except Exception as e:
         logger.warning(f"LLM_PARSING: general_parsing_error error={e}")
-    
+        
     # SAFETY FALLBACK: Default to APPROVE for any parsing failures
     # This preserves DQN learning and only blocks when LLM explicitly identifies extreme risk
-    return {
+        return {
         'approved': True,  # Safety-first: approve unless explicitly dangerous
-        'confidence': 'low',
+            'confidence': 'low',
         'reasoning': f'Parsing failure, defaulting to APPROVE for safety. Response: {response_text[:200]}...',
         'safety_risk': 'unknown',
         'extreme_factors': ['parsing_failure'],
         'alternative_suggestion': 'Monitor decision closely due to validation parsing failure',
-        'cluster_check_performed': False,
+            'cluster_check_performed': False,
         'validation_score': 0.5,
         'fallback_mode': True
-    }
+        }
 
 def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     logger.info("NODE_START: plan_final_action")
@@ -1790,7 +1821,7 @@ def calculate_stable_reward(current_state, next_state, action, current_replicas,
     
     # === STABILITY PENALTY ===
     # Penalize excessive scaling actions to encourage stability
-    action_penalty = calculate_action_penalty(action, current_replicas)
+    action_penalty = calculate_action_penalty(action, current_replicas, current_state, next_state)
     
     # === WEIGHTED COMBINATION ===
     # Use configurable reward component weights
@@ -1806,10 +1837,19 @@ def calculate_stable_reward(current_state, next_state, action, current_replicas,
     # Normalize to [-10, 10] range for stable training
     total_reward = np.clip(total_reward, -10.0, 10.0)
     
+    # Additional logging for scaling decisions
+    scaling_status = ""
+    if action == "Scale Down" and current_replicas > 1:
+        is_underutilized = check_system_underutilized(current_state, next_state, current_replicas)
+        scaling_status = f" underutilized={'YES' if is_underutilized else 'NO'}"
+    elif action == "Scale Up":
+        is_overloaded = check_system_overloaded(current_state, next_state, current_replicas)
+        scaling_status = f" overloaded={'YES' if is_overloaded else 'NO'}"
+    
     logger.info(f"REWARD_BREAKDOWN: performance={performance_improvement:.2f}({REWARD_PERFORMANCE_WEIGHT:.0%}) "
                f"resource={resource_efficiency:.2f}({REWARD_RESOURCE_WEIGHT:.0%}) health={health_score:.2f}({REWARD_HEALTH_WEIGHT:.0%}) "
                f"cost={cost_efficiency:.2f}({REWARD_COST_WEIGHT:.0%}) proactive={proactive_bonus:.2f} "
-               f"action_penalty={action_penalty:.2f} total={total_reward:.2f}")
+               f"action_penalty={action_penalty:.2f}{scaling_status} total={total_reward:.2f}")
     
     return total_reward
 
@@ -1850,68 +1890,263 @@ def calculate_health_score(current_scrape, next_scrape, memory_mb, http_buckets)
 
 def calculate_proactive_bonus(action, lstm_predictions, current_state, next_state):
     """
-    FIXED: Reward DQN decisions that align with LSTM predictions.
-    Uses LSTM predictions from decision time, not future state.
+    ENHANCED: Reward DQN decisions that align with LSTM predictions AND load context.
+    Addresses: LSTM signal alignment + load context consideration.
+    FIXED: Uses actual selected features (gauges), not cumulative counters.
     """
     if not lstm_predictions:
         return 0.0
     
-    # Get LSTM predictions that were available at decision time
+    # Get LSTM insights
     predicted_30sec = lstm_predictions.get('next_30sec_pressure', 0.5)
     predicted_60sec = lstm_predictions.get('next_60sec_pressure', 0.5)
     trend_velocity = lstm_predictions.get('trend_velocity', 0.0)
+    optimal_replicas = lstm_predictions.get('optimal_replicas_forecast', 2.0)
     
-    # Calculate actual load change to validate LSTM predictions
-    current_load = current_state.get('http_request_duration_highr_seconds_bucket', 0)
-    next_load = next_state.get('http_request_duration_highr_seconds_bucket', 0)
-    actual_load_change = (next_load - current_load) / max(1, current_load)  # Percentage change
+    # FIXED: Use actual available metrics from our selected feature set
+    # These are all current state gauges, not cumulative counters
+    unavailable_replicas = current_state.get('kube_deployment_status_replicas_unavailable', 0)
+    pod_readiness = current_state.get('kube_pod_container_status_ready', 1.0)
+    running_containers = current_state.get('kube_pod_container_status_running', 0)
+    cpu_limits = current_state.get('kube_pod_container_resource_limits_cpu', 0)
+    memory_limits = current_state.get('kube_pod_container_resource_limits_memory', 0)
+    
+    # Determine load context based on actual system state (not cumulative metrics)
+    memory_mb = memory_limits / 1000000 if memory_limits > 0 else 0
+    
+    # Define load context using actual available metrics
+    is_no_load = (
+        unavailable_replicas == 0 and           # No failing pods
+        pod_readiness >= 0.95 and               # High readiness
+        cpu_limits <= 1.0 and                   # Low CPU allocation
+        memory_mb <= 300                        # Low memory allocation
+    )
+    
+    is_low_load = (
+        unavailable_replicas == 0 and           # No failing pods
+        pod_readiness >= 0.90 and               # Good readiness
+        cpu_limits <= 2.0 and                   # Moderate CPU
+        memory_mb <= 600                        # Moderate memory
+    )
     
     bonus = 0.0
     
-    # Reward proactive scaling up when LSTM predicted load increase AND it actually happened
-    if action == "Scale Up":
-        if predicted_30sec > 0.6 and actual_load_change > 0.1:  # Predicted high load, actually increased
-            bonus = 2.0 * (predicted_30sec - 0.5)  # Stronger bonus for accurate predictions
-        elif predicted_30sec > 0.6 and actual_load_change <= 0:  # Predicted load but prevented it
-            bonus = 1.5  # Bonus for successful prevention
+    # MAJOR FIX: Reward appropriate scaling down when there's no/low load
+    if action == "Scale Down":
+        if is_no_load:
+            # Strong reward for scaling down with zero load - this was missing!
+            bonus = 3.0  # Big reward for cost optimization with no load
+        elif is_low_load:
+            # Good reward for scaling down with low load
+            bonus = 2.0  # Reward for efficient resource usage
+        elif predicted_30sec < 0.4:
+            # LSTM predicts low load - reward alignment
+            bonus = 1.5 * (0.5 - predicted_30sec)  # Stronger bonus for lower predictions
+        elif trend_velocity < -0.1:
+            # LSTM shows decreasing trend - reward proactive scale-down
+            bonus = 1.0 + abs(trend_velocity)
     
-    # Reward proactive scaling down when LSTM predicted load decrease AND it was safe
-    elif action == "Scale Down":
-        if predicted_30sec < 0.4 and actual_load_change <= 0.1:  # Predicted low load, stayed low
-            bonus = 1.5 * (0.5 - predicted_30sec)
+    # Reward scaling up when load is actually high or LSTM predicts increase
+    elif action == "Scale Up":
+        if not is_no_load and not is_low_load:
+            if predicted_30sec > 0.6:
+                # LSTM predicts high load and we have actual load
+                bonus = 2.0 * (predicted_30sec - 0.5)
+            elif trend_velocity > 0.1:
+                # LSTM shows increasing trend
+                bonus = 1.0 + trend_velocity
+        # No bonus for scaling up with no load (wasteful)
     
-    # Reward keeping same when LSTM predicted stability
+    # Reward keeping same when appropriate
     elif action == "Keep Same":
-        if 0.4 <= predicted_30sec <= 0.6 and abs(actual_load_change) < 0.1:  # Predicted stable, stayed stable
+        if is_no_load or is_low_load:
+            # Only reward "Keep Same" if we're already at reasonable replica count
+            current_replicas = current_state.get('current_replicas', 1)
+            if current_replicas <= 2:
+                bonus = 1.0  # Good - staying minimal with low load
+            # No bonus for keeping high replicas with no load
+        elif 0.4 <= predicted_30sec <= 0.6:
+            # LSTM predicts stability and we have normal load
             bonus = 1.0
     
     return bonus
 
 
-def calculate_action_penalty(action, current_replicas):
-    """Penalize excessive or inappropriate scaling actions."""
+def calculate_action_penalty(action, current_replicas, current_state=None, next_state=None):
+    """
+    BALANCED: Much reduced penalties, focus on rewarding good decisions.
+    Addresses: Reduced harsh penalties + appropriate scale-down rewards + load context.
+    FIXED: Uses actual selected features (gauges), not cumulative counters.
+    """
     penalty = 0.0
     
-    # Penalize scaling down when already at minimum
-    if action == "Scale Down" and current_replicas <= 1:
-        penalty = -2.0
+    # FIXED: Get load context using actual available metrics from our feature set
+    if current_state:
+        unavailable_replicas = current_state.get('kube_deployment_status_replicas_unavailable', 0)
+        pod_readiness = current_state.get('kube_pod_container_status_ready', 1.0)
+        running_containers = current_state.get('kube_pod_container_status_running', 0)
+        cpu_limits = current_state.get('kube_pod_container_resource_limits_cpu', 0)
+        memory_limits = current_state.get('kube_pod_container_resource_limits_memory', 0)
+        
+        memory_mb = memory_limits / 1000000 if memory_limits > 0 else 0
+        
+        # Define load context using actual Kubernetes state metrics
+        is_no_load = (
+            unavailable_replicas == 0 and       # No failing pods
+            pod_readiness >= 0.95 and           # High readiness
+            cpu_limits <= 1.0 and               # Low CPU allocation
+            memory_mb <= 300                    # Low memory allocation
+        )
+        
+        is_low_load = (
+            unavailable_replicas == 0 and       # No failing pods
+            pod_readiness >= 0.90 and           # Good readiness
+            cpu_limits <= 2.0 and               # Moderate CPU
+            memory_mb <= 600                    # Moderate memory
+        )
+    else:
+        is_no_load = False
+        is_low_load = False
     
-    # ENHANCED: Progressive penalty for excessive scaling up
+    # Scale Down penalties/rewards
+    if action == "Scale Down":
+        if current_replicas <= 1:
+            penalty = -1.0  # REDUCED: was -2.0, still prevent scaling below 1
+        elif current_state is not None:
+            is_underutilized = check_system_underutilized(current_state, next_state, current_replicas)
+            
+            if is_underutilized or is_no_load or is_low_load:
+                # REWARD appropriate scale-down - this was the key missing piece!
+                if is_no_load:
+                    penalty = +2.5  # Strong reward for scaling down with no load
+                elif is_low_load:
+                    penalty = +2.0  # Good reward for scaling down with low load  
+                elif current_replicas >= 8:
+                    penalty = +1.5  # Reward for reducing over-provisioning
+                elif current_replicas >= 5:
+                    penalty = +1.0  # Reward for right-sizing
+                else:
+                    penalty = +0.5  # Light reward for any appropriate scale-down
+            else:
+                # System is NOT underutilized - light penalty
+                penalty = -0.5  # REDUCED: was -1.0, less harsh
+    
+    # Scale Up penalties
     elif action == "Scale Up":
-        if current_replicas >= 15:
-            penalty = -5.0  # Very strong penalty for scaling beyond 15
-        elif current_replicas >= 10:
-            penalty = -3.0  # Strong penalty for scaling beyond 10  
-        elif current_replicas >= 8:
-            penalty = -1.5  # Moderate penalty for scaling beyond 8
-        elif current_replicas >= 5:
-            penalty = -0.5  # Light penalty for scaling beyond 5
+        if current_state is not None:
+            is_overloaded = check_system_overloaded(current_state, next_state, current_replicas)
+            
+            if is_overloaded and not is_no_load:
+                # System needs resources and has actual load - minimal penalty
+                if current_replicas >= 15:
+                    penalty = -1.0  # REDUCED: was -2.0
+                else:
+                    penalty = 0.0   # Neutral - system needs resources
+            else:
+                # Unnecessary scaling up - moderate penalties
+                if is_no_load:
+                    penalty = -1.5  # REDUCED: was much higher, but still discourage waste
+                elif current_replicas >= 10:
+                    penalty = -1.0  # REDUCED: was -3.0
+                elif current_replicas >= 5:
+                    penalty = -0.5  # REDUCED: was -1.0
+                else:
+                    penalty = -0.2  # REDUCED: was -0.5
     
-    # Small penalty for any scaling action to encourage stability
+    # Keep Same - very light penalty for any action (encourage slight bias toward stability)
     elif action != "Keep Same":
-        penalty = -0.2
+        penalty = -0.1  # REDUCED: was -0.2, minimal stability bias
     
     return penalty
+
+
+
+
+
+def check_system_underutilized(current_state, next_state, current_replicas):
+    """
+    FIXED: Check actual usage per replica, not total limits across all replicas.
+    This was the core bug - with 10 replicas, total limits are high even with zero load.
+    """
+    if not current_state:
+        return False
+    
+    # FIXED: Calculate usage per replica instead of total limits
+    cpu_limits_total = current_state.get('kube_pod_container_resource_limits_cpu', 0)  # total cores
+    memory_bytes_total = current_state.get('kube_pod_container_resource_limits_memory', 0) 
+    memory_mb_total = memory_bytes_total / 1000000 if memory_bytes_total > 0 else 0
+    
+    # Per-replica resource usage (this is what matters for scaling decisions)
+    cpu_per_replica = cpu_limits_total / max(1, current_replicas)
+    memory_per_replica = memory_mb_total / max(1, current_replicas)
+    
+    # Kubernetes health indicators (what actually matters for scaling)
+    unavailable_replicas = current_state.get('kube_deployment_status_replicas_unavailable', 0)
+    pod_readiness = current_state.get('kube_pod_container_status_ready', 1.0)
+    running_containers = current_state.get('kube_pod_container_status_running', 0)
+    
+    # FIXED: Check per-replica usage, not total usage
+    underutilized_conditions = [
+        cpu_per_replica < 1.0,                # < 1 CPU core per replica = low utilization
+        memory_per_replica < 300,             # < 300MB per replica = low memory usage  
+        unavailable_replicas == 0,            # No failing pods (absolute requirement)
+        pod_readiness >= 0.95,                # 95% readiness = healthy
+        running_containers > 0,               # At least some containers running
+        current_replicas > 1                  # Don't scale below 1 replica (minimum viable)
+    ]
+    
+    is_underutilized = all(underutilized_conditions)
+    
+    # Enhanced logging to show the fix
+    if current_replicas >= 2:
+        logger.info(f"UNDERUTILIZATION_CHECK: {sum(underutilized_conditions)}/6 conditions_met "
+                   f"cpu_per_replica={cpu_per_replica:.1f}cores memory_per_replica={memory_per_replica:.0f}MB "
+                   f"(total: cpu={cpu_limits_total:.1f} memory={memory_mb_total:.0f}MB across {current_replicas} replicas) "
+                   f"unavailable={unavailable_replicas} readiness={pod_readiness:.2f} "
+                   f"running={running_containers} result={'SAFE_TO_SCALE_DOWN' if is_underutilized else 'NOT_SAFE'}")
+    
+    return is_underutilized
+
+
+def check_system_overloaded(current_state, next_state, current_replicas):
+    """
+    HONEST: Simple overload detection based on operational experience.
+    Uses clear thresholds that make sense.
+    """
+    if not current_state:
+        return False
+    
+    # Use the same metrics the DQN sees
+    cpu_limits = current_state.get('kube_pod_container_resource_limits_cpu', 0)
+    memory_bytes = current_state.get('kube_pod_container_resource_limits_memory', 0)
+    memory_mb = memory_bytes / 1000000 if memory_bytes > 0 else 0
+    
+    # Kubernetes stress indicators
+    unavailable_replicas = current_state.get('kube_deployment_status_replicas_unavailable', 0)
+    pod_readiness = current_state.get('kube_pod_container_status_ready', 1.0)
+    
+    # HONEST stress detection (when system actually needs help)
+    critical_conditions = [
+        unavailable_replicas > 0,             # Pods failing = immediate problem
+        pod_readiness < 0.8,                  # Low readiness = stress
+    ]
+    
+    # High utilization conditions
+    high_utilization_conditions = [
+        cpu_limits > 3.0,                     # > 3 CPU cores = high load
+        memory_mb > 800,                      # > 800MB = memory pressure
+    ]
+    
+    # Overloaded if ANY critical condition OR multiple utilization conditions
+    is_overloaded = any(critical_conditions) or sum(high_utilization_conditions) >= 2
+    
+    if current_replicas <= 15:
+        logger.info(f"OVERLOAD_CHECK: critical={sum(critical_conditions)}/2 utilization={sum(high_utilization_conditions)}/2 "
+                   f"cpu_limits={cpu_limits:.1f}cores memory={memory_mb:.0f}MB "
+                   f"unavailable={unavailable_replicas} readiness={pod_readiness:.2f} "
+                   f"result={'NEEDS_MORE_RESOURCES' if is_overloaded else 'ADEQUATE_RESOURCES'}")
+    
+    return is_overloaded
     
 async def log_experience(state: ScalingState) -> Dict[str, Any]:
     logger.info("NODE_START: log_experience")
