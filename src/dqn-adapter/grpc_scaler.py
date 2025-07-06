@@ -78,8 +78,10 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
         """
         Returns metric specification for HPA.
         
-        The target should be 1.0 since we return the absolute desired replica count.
-        HPA will calculate: desired = current * (metric_value / target_value)
+        SIMPLIFIED: With Value metric type, target=1.0 works perfectly.
+        HPA calculates: desired = metric_value / target = desired_replicas / 1.0 = desired_replicas
+        
+        Much simpler than AverageValue which required complex calculations.
         
         Args:
             request: ScaledObjectRef containing scaler metadata
@@ -93,14 +95,14 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             metric_spec = externalscaler_pb2.MetricSpec(
                 metricName="dqn-replica-need",
-                targetSize=1  # FIXED: Use 1 instead of 1000 to ensure HPA shows 1.0 not 1k
+                targetSize=1  # Perfect for Value metric: desired = metric_value / 1.0 
             )
             
             response = externalscaler_pb2.GetMetricSpecResponse(
                 metricSpecs=[metric_spec]
             )
             
-            self.logger.info(f"DQN_GRPC: GetMetricSpec_success target=1.0 metric_name=dqn-replica-need")
+            self.logger.info(f"DQN_GRPC: GetMetricSpec_success target=1.0 metric_name=dqn-replica-need metricType=Value")
             return response
             
         except Exception as e:
@@ -119,23 +121,21 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
     
     def GetMetrics(self, request, context):
         """
-        Returns current metric values for KEDA AverageValue calculation.
+        Returns current metric values for KEDA Value calculation.
         
-        FIXED: Work with KEDA's forced AverageValue metric type.
-        Since HPA calculates: desired = current × (averageValue / target)
-        And averageValue = metric_value ÷ current_replicas
-        We need: desired = current × (metric_value ÷ current_replicas) / target
+        SIMPLIFIED: Now using Value metric type instead of AverageValue.
+        With Value metric: HPA calculates desired = metric_value / target
+        Since target = 1.0, we simply return desired_replicas directly!
         
-        For desired = dqn_desired_replicas:
-        metric_value = dqn_desired_replicas × target × current_replicas ÷ current
-        metric_value = dqn_desired_replicas × target (since current_replicas = current)
+        Much cleaner than the previous AverageValue approach that required
+        complex multiplication by target and current replicas.
         
         Args:
             request: GetMetricsRequest containing metric name and scaler metadata
             context: gRPC context
             
         Returns:
-            GetMetricsResponse: Metric value for KEDA AverageValue calculation
+            GetMetricsResponse: Direct metric value for KEDA Value calculation
         """
         try:
             # Log the incoming request for debugging
@@ -146,16 +146,13 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             dqn_desired_replicas = int(self.dqn_desired_gauge._value._value)
             current_replicas = int(self.current_replicas_gauge._value._value)
             
-            # FIXED: Return desired_replicas × target for AverageValue calculation
-            # Target is 1.0, so return desired_replicas × 1000 (in milli-units)
-            # HPA will calculate: averageValue = (desired × 1000) ÷ current_replicas
-            # Then: desired = current × averageValue / 1.0 = current × (desired × 1000 ÷ current) / 1000 = desired ✅
-            target_millis = 1000  # Target is 1.0 in milli-units
-            metric_value_millis = dqn_desired_replicas * target_millis
+            # SIMPLIFIED: With Value metric type, just return desired replicas directly!
+            # HPA will calculate: desired = metric_value / target = desired_replicas / 1.0 = desired_replicas ✅
+            metric_value_millis = dqn_desired_replicas * 1000  # Convert to milli-units for precision
             
             metric_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
-                metricValue=metric_value_millis,  # Return desired × target in milli-units
+                metricValue=metric_value_millis,  # Direct desired replicas in milli-units
                 metricValueFloat=float(dqn_desired_replicas)  # For logging clarity
             )
             
@@ -165,8 +162,8 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             self.logger.info(f"DQN_GRPC: GetMetrics_success dqn_wants={dqn_desired_replicas} "
                            f"current={current_replicas} "
-                           f"returning_total_millis={metric_value_millis} "
-                           f"hpa_will_calculate=current×({metric_value_millis}÷current÷1000)={dqn_desired_replicas}")
+                           f"returning_direct_millis={metric_value_millis} "
+                           f"hpa_will_calculate=metric_value÷target={dqn_desired_replicas}÷1={dqn_desired_replicas}")
             return response
             
         except Exception as e:
@@ -186,7 +183,7 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             )
             return externalscaler_pb2.GetMetricsResponse(metricValues=[fallback_value])
     
-    def StreamIsActive(self, request, response_iterator):
+    def StreamIsActive(self, request, context):
         """
         REAL-TIME Push-based scaling - sends immediate scaling signals when DQN decision changes.
         
@@ -195,13 +192,13 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
         
         Args:
             request: ScaledObjectRef containing scaler metadata
-            response_iterator: gRPC stream for sending responses
+            context: gRPC server context for streaming
             
         Yields:
             IsActiveResponse: Immediate scaling signals
         """
         try:
-            self.logger.info(f"DQN_GRPC: StreamIsActive_started push_based_scaling=True "
+            self.logger.info(f"DQN_GRPC: StreamIsActive_started push_based_streaming=True "
                            f"name={request.name} namespace={request.namespace}")
             self._stream_active = True
             
@@ -209,7 +206,7 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             last_current_replicas = None
             last_signal_time = time.time()
             
-            while self._stream_active:
+            while self._stream_active and not context.cancelled():
                 try:
                     # Get current DQN decision and replica state
                     current_dqn_decision = int(self.dqn_desired_gauge._value._value)
@@ -223,7 +220,8 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
                     
                     if decision_changed or replicas_changed or time_for_heartbeat:
                         # Send active signal to trigger immediate scaling evaluation
-                        yield externalscaler_pb2.IsActiveResponse(result=True)
+                        response = externalscaler_pb2.IsActiveResponse(result=True)
+                        yield response
                         
                         if decision_changed:
                             self.logger.info(f"DQN_GRPC: StreamIsActive_DQN_CHANGE "
@@ -248,7 +246,7 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
                     self.logger.error(f"DQN_GRPC: StreamIsActive_loop_error error={e}")
                     time.sleep(1)  # Shorter sleep on error
             
-            self.logger.info("DQN_GRPC: StreamIsActive_ended")
+            self.logger.info("DQN_GRPC: StreamIsActive_ended connection_closed")
             
         except Exception as e:
             self.logger.error(f"DQN_GRPC: StreamIsActive_error error={e}")
