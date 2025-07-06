@@ -121,11 +121,15 @@ class TimeSeriesBuffer:
         
         self.sequence_length = sequence_length
         self.feature_names = feature_names or [
-            'http_request_duration_highr_seconds_bucket',   # HTTP Traffic patterns
-            'process_resident_memory_bytes',                # Memory resource usage  
-            'process_cpu_seconds_total',                    # CPU resource usage
-            'scrape_samples_scraped',                       # Health monitoring
-            'http_response_size_bytes_sum'                  # Response size patterns
+            'kube_deployment_status_replicas_unavailable',       # Current unavailable replicas (direct state)
+            'kube_pod_container_status_ready',                   # Current pod readiness (direct state)
+            'kube_deployment_spec_replicas',                     # Desired replica count (direct state) 
+            'kube_pod_container_resource_limits_cpu',            # Current CPU limits in cores (direct state)
+            'kube_pod_container_resource_limits_memory',         # Current memory limits in bytes (direct state)
+            'kube_pod_container_status_running',                 # Current running containers (direct state)
+            'kube_deployment_status_observed_generation',        # Current deployment generation (direct state)
+            'node_network_up',                                   # Current network status (direct state)
+            'kube_pod_container_status_last_terminated_exitcode' # Container termination status (statistically selected)
         ]
         
         # Buffer for storing sequences
@@ -141,7 +145,7 @@ class TimeSeriesBuffer:
         self.daily_patterns = {}
         self.weekly_patterns = {}
         
-        logger.info(f"LSTM_BUFFER: initialized steps={sequence_length} features={len(self.feature_names)}")
+        logger.info(f"LSTM_BUFFER: initialized steps={sequence_length} kubernetes_state_features={len(self.feature_names)}")
     
     def add_observation(self, metrics: Dict[str, float], timestamp: Optional[datetime] = None) -> None:
         """Add new observation to the buffer."""
@@ -181,26 +185,41 @@ class TimeSeriesBuffer:
             'timestamp': timestamp,
             'hour': timestamp.hour,
             'day_of_week': timestamp.weekday(),
-            'http_bucket': observation[0] if len(observation) > 0 else 0.0,     # HTTP bucket
-            'memory_usage': observation[1] if len(observation) > 1 else 0.0,    # Memory usage
-            'scrape_health': observation[3] if len(observation) > 3 else 0.0    # Scrape samples
+            'replicas_unavailable': observation[0] if len(observation) > 0 else 0.0,     # Unavailable replicas
+            'pods_ready': observation[1] if len(observation) > 1 else 0.0,              # Pod readiness
+            'desired_replicas': observation[2] if len(observation) > 2 else 0.0,        # Desired replica count
+            'cpu_limits': observation[3] if len(observation) > 3 else 0.0,              # CPU limits
+            'memory_limits': observation[4] if len(observation) > 4 else 0.0,           # Memory limits
+            'running_containers': observation[5] if len(observation) > 5 else 0.0,      # Running containers
+            'deployment_generation': observation[6] if len(observation) > 6 else 0.0,   # Deployment generation
+            'network_status': observation[7] if len(observation) > 7 else 0.0,          # Network up status
+            'termination_exitcode': observation[8] if len(observation) > 8 else 0.0     # Container termination status
         }
         self.pattern_history.append(pattern_data)
         
         # Update daily patterns (every hour)
         hour_key = timestamp.hour
         if hour_key not in self.daily_patterns:
-            self.daily_patterns[hour_key] = {'http_buckets': [], 'memory_usage': [], 'scrape_health': []}
+            self.daily_patterns[hour_key] = {
+                'replicas_unavailable': [], 'pods_ready': [], 'desired_replicas': [], 
+                'running_containers': [], 'deployment_generation': [], 'cpu_limits': [], 
+                'memory_limits': [], 'network_status': [], 'termination_exitcode': []
+            }
         
-        self.daily_patterns[hour_key]['http_buckets'].append(pattern_data['http_bucket'])
-        self.daily_patterns[hour_key]['memory_usage'].append(pattern_data['memory_usage'])
-        self.daily_patterns[hour_key]['scrape_health'].append(pattern_data['scrape_health'])
+        self.daily_patterns[hour_key]['replicas_unavailable'].append(pattern_data['replicas_unavailable'])
+        self.daily_patterns[hour_key]['pods_ready'].append(pattern_data['pods_ready'])
+        self.daily_patterns[hour_key]['desired_replicas'].append(pattern_data['desired_replicas'])
+        self.daily_patterns[hour_key]['running_containers'].append(pattern_data['running_containers'])
+        self.daily_patterns[hour_key]['deployment_generation'].append(pattern_data['deployment_generation'])
+        self.daily_patterns[hour_key]['cpu_limits'].append(pattern_data['cpu_limits'])
+        self.daily_patterns[hour_key]['memory_limits'].append(pattern_data['memory_limits'])
+        self.daily_patterns[hour_key]['network_status'].append(pattern_data['network_status'])
+        self.daily_patterns[hour_key]['termination_exitcode'].append(pattern_data['termination_exitcode'])
         
         # Keep only recent data (last 7 days)
-        if len(self.daily_patterns[hour_key]['http_buckets']) > 7:
-            self.daily_patterns[hour_key]['http_buckets'].pop(0)
-            self.daily_patterns[hour_key]['memory_usage'].pop(0)
-            self.daily_patterns[hour_key]['scrape_health'].pop(0)
+        if len(self.daily_patterns[hour_key]['replicas_unavailable']) > 7:
+            for key in self.daily_patterns[hour_key].keys():
+                self.daily_patterns[hour_key][key].pop(0)
     
     def get_sequence(self) -> Optional[np.ndarray]:
         """Get the current sequence as numpy array."""
@@ -225,30 +244,73 @@ class TimeSeriesBuffer:
         
         # Analyze recent trend (last 5 minutes)
         recent_data = list(self.pattern_history)[-60:] if len(self.pattern_history) >= 60 else list(self.pattern_history)
-        http_buckets = [d['http_bucket'] for d in recent_data]
-        memory_usage = [d['memory_usage'] for d in recent_data]
-        scrape_health = [d['scrape_health'] for d in recent_data]
+        replicas_unavailable = [d['replicas_unavailable'] for d in recent_data]
+        pods_ready = [d['pods_ready'] for d in recent_data]
+        desired_replicas = [d['desired_replicas'] for d in recent_data]
+        running_containers = [d['running_containers'] for d in recent_data]
+        cpu_limits = [d['cpu_limits'] for d in recent_data]
+        memory_limits = [d['memory_limits'] for d in recent_data]
         
-        # Simple trend detection using linear regression on HTTP buckets
-        if len(http_buckets) >= 3:
-            x = np.arange(len(http_buckets))
-            slope = np.polyfit(x, http_buckets, 1)[0]
-            trend_direction = np.clip(slope * 100, -1, 1)  # Scale and clip
-        else:
-            trend_direction = 0.0
+        # Advanced trend detection using multiple Kubernetes state indicators
+        trend_direction = 0.0
+        if len(replicas_unavailable) >= 3:
+            # Primary trend: unavailable replicas (main scaling signal)
+            x = np.arange(len(replicas_unavailable))
+            unavailable_slope = np.polyfit(x, replicas_unavailable, 1)[0]
+            
+            # Secondary indicators: pods readiness and resource pressure
+            if len(pods_ready) >= 3:
+                readiness_slope = np.polyfit(x, pods_ready, 1)[0] 
+                readiness_trend = -readiness_slope  # Inverse: decreasing readiness = increasing trend
+            else:
+                readiness_trend = 0.0
+            
+            # Resource utilization trend (if limits are changing, indicates resource pressure)
+            if len(cpu_limits) >= 3 and max(cpu_limits) > min(cpu_limits):
+                cpu_slope = np.polyfit(x, cpu_limits, 1)[0]
+                cpu_trend = cpu_slope * 10  # Scale CPU trend (cores to comparable scale)
+            else:
+                cpu_trend = 0.0
+            
+            # Combine trends with weights: unavailable replicas (60%), readiness (25%), CPU (15%)
+            combined_trend = (unavailable_slope * 0.6 + readiness_trend * 0.25 + cpu_trend * 0.15) * 100
+            trend_direction = np.clip(combined_trend, -1, 1)  # Scale and clip
         
-        # Daily pattern strength (check if current hour matches historical pattern)
+        # Daily pattern strength (comprehensive Kubernetes state analysis)
         current_hour = datetime.now().hour
         daily_pattern_strength = 0.0
         
         if current_hour in self.daily_patterns:
-            historical_avg = np.mean(self.daily_patterns[current_hour]['http_buckets'])
-            current_avg = np.mean(http_buckets[-5:]) if len(http_buckets) >= 5 else http_buckets[-1]
+            # Analyze multiple pattern indicators for better accuracy
+            pattern_similarities = []
             
-            # Pattern strength based on how well current matches historical
-            if historical_avg > 0:
-                similarity = 1 - abs(current_avg - historical_avg) / (historical_avg + 0.001)
-                daily_pattern_strength = max(0, similarity)
+            # 1. Unavailable replicas pattern
+            if self.daily_patterns[current_hour]['replicas_unavailable']:
+                historical_unavailable = np.mean(self.daily_patterns[current_hour]['replicas_unavailable'])
+                current_unavailable = np.mean(replicas_unavailable[-5:]) if len(replicas_unavailable) >= 5 else (replicas_unavailable[-1] if replicas_unavailable else 0.0)
+                if historical_unavailable + current_unavailable > 0:  # Avoid division by zero
+                    similarity = 1 - abs(current_unavailable - historical_unavailable) / (historical_unavailable + current_unavailable + 0.001)
+                    pattern_similarities.append(max(0, similarity))
+            
+            # 2. Pod readiness pattern
+            if self.daily_patterns[current_hour]['pods_ready']:
+                historical_ready = np.mean(self.daily_patterns[current_hour]['pods_ready'])
+                current_ready = np.mean(pods_ready[-5:]) if len(pods_ready) >= 5 else (pods_ready[-1] if pods_ready else 1.0)
+                if historical_ready + current_ready > 0:
+                    similarity = 1 - abs(current_ready - historical_ready) / (historical_ready + current_ready + 0.001)
+                    pattern_similarities.append(max(0, similarity))
+            
+            # 3. CPU limits pattern (resource pressure indicator)
+            if self.daily_patterns[current_hour]['cpu_limits']:
+                historical_cpu = np.mean(self.daily_patterns[current_hour]['cpu_limits'])
+                current_cpu = np.mean(cpu_limits[-5:]) if len(cpu_limits) >= 5 else (cpu_limits[-1] if cpu_limits else 0.5)
+                if historical_cpu + current_cpu > 0:
+                    similarity = 1 - abs(current_cpu - historical_cpu) / (historical_cpu + current_cpu + 0.001)
+                    pattern_similarities.append(max(0, similarity))
+            
+            # Overall pattern strength as weighted average
+            if pattern_similarities:
+                daily_pattern_strength = np.mean(pattern_similarities)
         
         # Overall pattern confidence
         pattern_confidence = (daily_pattern_strength + (1 - abs(trend_direction))) / 2
@@ -312,9 +374,9 @@ class LSTMWorkloadPredictor:
             self.load_model(model_path)
         
         logger.info(f"LSTM_PREDICTOR: initialized device={device}")
-        logger.info(f"LSTM_PREDICTOR: features={len(feature_names)}")
+        logger.info(f"LSTM_PREDICTOR: features={len(feature_names)} kubernetes_state_metrics")
         logger.info(f"LSTM_PREDICTOR: sequence_length={sequence_length} steps")
-        logger.info(f"LSTM_PREDICTOR: forecast_horizon=5_steps_25_seconds")
+        logger.info(f"LSTM_PREDICTOR: forecast_horizon=temporal_intelligence_features")
     
     async def add_observation_async(self, metrics: Dict[str, float]) -> None:
         """Async wrapper for adding observations."""
@@ -406,7 +468,8 @@ class LSTMWorkloadPredictor:
                         f"60sec_pressure={next_60sec_pressure:.2f} "
                         f"trend_velocity={trend_velocity:+.2f} "
                         f"pattern={pattern_types[np.argmax(pattern_probs)]} "
-                        f"time_to_peak={time_to_peak:.0f}s")
+                        f"time_to_peak={time_to_peak:.0f}s "
+                        f"based_on=kubernetes_state_metrics")
             
             return features
             

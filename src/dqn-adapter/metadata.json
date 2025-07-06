@@ -1,0 +1,396 @@
+{
+  "methodology": {
+    "approach": "Advanced multi-method feature selection",
+    "target_features": 9,
+    "selection_methods": [
+      "mutual_information",
+      "random_forest",
+      "correlation",
+      "rfe"
+    ],
+    "statistical_validation": true,
+    "scaler_type": "RobustScaler"
+  },
+  "dataset_info": {
+    "n_samples": 894,
+    "n_features": 9,
+    "time_range": null,
+    "action_distribution": {
+      "0": 781,
+      "2": 113
+    }
+  },
+  "selected_features": [
+    "kube_deployment_status_replicas_unavailable",
+    "kube_pod_container_status_ready",
+    "kube_deployment_spec_replicas",
+    "kube_pod_container_resource_limits_cpu",
+    "kube_pod_container_resource_limits_memory",
+    "kube_pod_container_status_running",
+    "kube_deployment_status_observed_generation",
+    "node_network_up",
+    "kube_pod_container_status_last_terminated_exitcode"
+  ],
+  "feature_analysis": {
+    "selection_methods": {
+      "mutual_information": {
+        "kube_deployment_status_replicas_unavailable": 0.28741421852191973,
+        "kube_pod_container_status_ready": 0.2788930737978177,
+        "kube_pod_container_state_started": 0.17290671825428472,
+        "scrape_duration_seconds": 0.14278797757301298,
+        "kube_pod_container_status_running": 0.11671422025601963,
+        "kube_deployment_spec_replicas": 0.09740714214483326,
+        "memory_growth_rate_ma_10": 0.09540461468620531,
+        "memory_usage_mb": 0.0945532276413541,
+        "kube_deployment_status_observed_generation": 0.09302116407693006,
+        "kube_deployment_status_replicas_unavailable_ma_10": 0.08721114500137439
+      },
+      "random_forest": {
+        "kube_deployment_status_replicas_unavailable": 0.581898262747191,
+        "kube_pod_container_status_ready": 0.18331234161085053,
+        "kube_deployment_spec_replicas": 0.08032761295989879,
+        "memory_usage_mb_ma_10": 0.027994309485514228,
+        "health_ratio_ma_10": 0.013719943434070134,
+        "health_ratio_volatility": 0.010845108336916896,
+        "kube_deployment_spec_replicas_ma_10": 0.008819946995165225,
+        "memory_growth_rate_ma_10": 0.005603679667870433,
+        "kube_deployment_status_observed_generation": 0.005413774471180732,
+        "kube_pod_container_state_started_volatility": 0.004572121667933472
+      },
+      "correlation": {
+        "kube_pod_container_status_ready": [
+          0.5760750644589407,
+          3.59218048509557e-80
+        ],
+        "kube_deployment_status_replicas_unavailable": [
+          0.5725921728736281,
+          5.179970947074807e-79
+        ],
+        "health_ratio_ma_10": [
+          0.3999544200936551,
+          1.145723419184738e-35
+        ],
+        "kube_pod_container_status_ready_ma_10": [
+          0.2743039826407419,
+          6.77665333595147e-17
+        ],
+        "kube_deployment_status_replicas_unavailable_ma_10": [
+          0.2655091281563599,
+          6.864717755317171e-16
+        ],
+        "memory_usage_mb_ma_10": [
+          0.1882036352718394,
+          1.4269133974540894e-08
+        ],
+        "kube_pod_container_status_waiting": [
+          0.18136934763109583,
+          4.743256150414974e-08
+        ],
+        "kube_pod_container_state_started_volatility": [
+          0.18094143520919595,
+          5.106117382763588e-08
+        ],
+        "kube_pod_container_status_running_dev_10": [
+          0.1775511691608336,
+          9.099993360755941e-08
+        ],
+        "health_ratio_volatility": [
+          0.1688234765594474,
+          3.83003317840558e-07
+        ]
+      },
+      "rfecv_selected": [
+        "kube_deployment_spec_replicas",
+        "kube_deployment_status_replicas_unavailable",
+        "kube_pod_container_status_ready",
+        "memory_usage_mb_ma_10",
+        "health_ratio_ma_10",
+        "health_ratio_volatility"
+      ],
+      "statistical_significance": {
+        "kube_pod_container_status_ready": [
+          443.05449574958226,
+          3.5921804850939275e-80
+        ],
+        "kube_deployment_status_replicas_unavailable": [
+          435.1080192590967,
+          5.179970947076777e-79
+        ],
+        "health_ratio_ma_10": [
+          169.8586698465029,
+          1.1457234191840137e-35
+        ],
+        "kube_pod_container_status_ready_ma_10": [
+          72.57738239205382,
+          6.776653335946891e-17
+        ],
+        "kube_deployment_status_replicas_unavailable_ma_10": [
+          67.65066698408734,
+          6.864717755312892e-16
+        ],
+        "memory_usage_mb_ma_10": [
+          32.75539878083951,
+          1.426913397453254e-08
+        ],
+        "kube_pod_container_status_waiting": [
+          30.340234685468882,
+          4.743256150411397e-08
+        ],
+        "kube_pod_container_state_started_volatility": [
+          30.19239739631815,
+          5.106117382760511e-08
+        ],
+        "kube_pod_container_status_running_dev_10": [
+          29.035095024633744,
+          9.099993360750553e-08
+        ],
+        "health_ratio_volatility": [
+          26.169073018144644,
+          3.8300331784033137e-07
+        ]
+      },
+      "low_vif_features": [
+        "is_business_hours_volatility",
+        "hour_sin_dev_10",
+        "hour_cos_dev_10",
+        "system_stability_dev_10",
+        "memory_growth_rate",
+        "is_business_hours_dev_10",
+        "kube_pod_container_status_last_terminated_exitcode_dev_10",
+        "kube_pod_container_status_last_terminated_timestamp_dev_10",
+        "hour_cos_volatility",
+        "day_sin_dev_10",
+        "hour_sin_volatility",
+        "day_sin_volatility",
+        "kube_pod_container_status_terminated_volatility",
+        "memory_usage_mb",
+        "up_dev_10",
+        "kube_deployment_status_observed_generation_dev_10",
+        "memory_growth_rate_ma_10",
+        "kube_deployment_status_observed_generation_volatility",
+        "kube_pod_container_state_started_dev_10",
+        "system_stability_volatility"
+      ],
+      "real_time_scores": {
+        "kube_deployment_spec_replicas": 7.0,
+        "kube_deployment_status_observed_generation": 6.0,
+        "kube_deployment_status_replicas_unavailable": 7.0,
+        "kube_pod_container_resource_limits_cpu": 7.0,
+        "kube_pod_container_resource_limits_memory": 7.0,
+        "kube_pod_container_state_started": 6.0,
+        "kube_pod_container_status_last_terminated_exitcode": 6.0,
+        "kube_pod_container_status_ready": 7.0,
+        "kube_pod_container_status_running": 6.0,
+        "kube_pod_container_status_terminated": 6.0,
+        "kube_pod_container_status_waiting": 6.0,
+        "kube_pod_status_phase": 6.0,
+        "node_network_up": 6.0,
+        "scrape_duration_seconds": 5.0,
+        "scrape_samples_scraped": 6.0,
+        "hour": 4.0,
+        "day_of_week": 4.0,
+        "is_business_hours": 4.0,
+        "hour_sin": -1.0,
+        "hour_cos": -1.0,
+        "memory_usage_mb": 5.0,
+        "memory_growth_rate": 5.0,
+        "kube_deployment_spec_replicas_ma_10": 2.0,
+        "kube_deployment_spec_replicas_dev_10": 2.0,
+        "kube_deployment_spec_replicas_volatility": 2.0,
+        "kube_deployment_status_observed_generation_dev_10": 1.0,
+        "kube_deployment_status_observed_generation_volatility": 1.0,
+        "kube_deployment_status_replicas_unavailable_ma_10": 2.0,
+        "kube_deployment_status_replicas_unavailable_volatility": 2.0,
+        "kube_pod_container_resource_limits_cpu_ma_10": 2.0,
+        "kube_pod_container_resource_limits_cpu_dev_10": 2.0,
+        "kube_pod_container_resource_limits_cpu_volatility": 2.0,
+        "kube_pod_container_resource_limits_memory_volatility": 2.0,
+        "kube_pod_container_state_started_dev_10": 1.0,
+        "kube_pod_container_state_started_volatility": 1.0,
+        "kube_pod_container_status_last_terminated_exitcode_dev_10": 1.0,
+        "kube_pod_container_status_last_terminated_exitcode_volatility": 1.0,
+        "kube_pod_container_status_last_terminated_timestamp_dev_10": 1.0,
+        "kube_pod_container_status_last_terminated_timestamp_volatility": 1.0,
+        "kube_pod_container_status_ready_ma_10": 2.0,
+        "kube_pod_container_status_ready_volatility": 2.0,
+        "kube_pod_container_status_running_ma_10": 1.0,
+        "kube_pod_container_status_running_dev_10": 1.0,
+        "kube_pod_container_status_running_volatility": 1.0,
+        "kube_pod_container_status_terminated_ma_10": 1.0,
+        "kube_pod_container_status_terminated_dev_10": 1.0,
+        "kube_pod_container_status_terminated_volatility": 1.0,
+        "kube_pod_container_status_waiting_ma_10": 1.0,
+        "kube_pod_status_phase_ma_10": 1.0,
+        "kube_pod_status_phase_dev_10": 1.0,
+        "node_network_up_ma_10": 1.0,
+        "node_network_up_dev_10": 1.0,
+        "node_network_up_volatility": 1.0,
+        "scrape_duration_seconds_ma_10": 0.0,
+        "scrape_duration_seconds_dev_10": 0.0,
+        "scrape_duration_seconds_volatility": 0.0,
+        "scrape_samples_scraped_dev_10": 1.0,
+        "scrape_samples_scraped_volatility": 1.0,
+        "up_dev_10": 1.0,
+        "up_volatility": 1.0,
+        "is_business_hours_dev_10": -1.0,
+        "is_business_hours_volatility": -1.0,
+        "hour_sin_dev_10": -1.0,
+        "hour_sin_volatility": -1.0,
+        "hour_cos_dev_10": -1.0,
+        "hour_cos_volatility": -1.0,
+        "day_sin_dev_10": -1.0,
+        "day_sin_volatility": -1.0,
+        "memory_usage_mb_ma_10": 0.0,
+        "memory_usage_mb_volatility": 0.0,
+        "memory_growth_rate_ma_10": 0.0,
+        "health_ratio_ma_10": 1.0,
+        "health_ratio_volatility": 1.0,
+        "system_stability_dev_10": -1.0,
+        "system_stability_volatility": -1.0
+      }
+    },
+    "advanced_metrics": {
+      "rfecv_optimal_features": 6,
+      "statistically_significant_count": 38,
+      "low_multicollinearity_count": 30,
+      "real_time_preferred_count": 31,
+      "ensemble_weights": {
+        "mutual_information": 0.2,
+        "random_forest": 0.2,
+        "correlation": 0.15,
+        "rfecv": 0.15,
+        "statistical_significance": 0.1,
+        "vif_bonus": 0.05,
+        "real_time_bias": 0.15
+      }
+    },
+    "final_scores": {
+      "kube_deployment_status_replicas_unavailable": 138.55,
+      "kube_pod_container_status_ready": 138.4,
+      "kube_deployment_spec_replicas": 130.4,
+      "kube_pod_container_resource_limits_cpu": 109.1,
+      "kube_pod_container_resource_limits_memory": 109.0,
+      "kube_pod_container_status_running": 105.15,
+      "kube_deployment_status_observed_generation": 102.1,
+      "node_network_up": 98.55,
+      "kube_pod_container_status_last_terminated_exitcode": 87.7
+    },
+    "selected_features": [
+      "kube_deployment_status_replicas_unavailable",
+      "kube_pod_container_status_ready",
+      "kube_deployment_spec_replicas",
+      "kube_pod_container_resource_limits_cpu",
+      "kube_pod_container_resource_limits_memory",
+      "kube_pod_container_status_running",
+      "kube_deployment_status_observed_generation",
+      "node_network_up",
+      "kube_pod_container_status_last_terminated_exitcode"
+    ]
+  },
+  "scaler_statistics": {
+    "scaler_type": "RobustScaler",
+    "features": [
+      "kube_deployment_status_replicas_unavailable",
+      "kube_pod_container_status_ready",
+      "kube_deployment_spec_replicas",
+      "kube_pod_container_resource_limits_cpu",
+      "kube_pod_container_resource_limits_memory",
+      "kube_pod_container_status_running",
+      "kube_deployment_status_observed_generation",
+      "node_network_up",
+      "kube_pod_container_status_last_terminated_exitcode"
+    ],
+    "n_features": 9,
+    "n_samples": 894,
+    "feature_statistics": {
+      "kube_deployment_status_replicas_unavailable": {
+        "median": 0.0,
+        "scale": 0.07407407407407407,
+        "original_mean": 0.040535440448192135,
+        "original_std": 0.08757000018411402,
+        "original_min": 0.0,
+        "original_max": 1.3241538461538591
+      },
+      "kube_pod_container_status_ready": {
+        "median": 0.9473684210526315,
+        "scale": 0.030612244897959107,
+        "original_mean": 0.9405031017180199,
+        "original_std": 0.02832926138273111,
+        "original_min": 0.7009722222222222,
+        "original_max": 0.9775280898876404
+      },
+      "kube_deployment_spec_replicas": {
+        "median": 1.9807692307692308,
+        "scale": 1.193019943019943,
+        "original_mean": 2.1303402869398393,
+        "original_std": 0.967620075186619,
+        "original_min": 1.0,
+        "original_max": 4.846153846153846
+      },
+      "kube_pod_container_resource_limits_cpu": {
+        "median": 2.1027027027027025,
+        "scale": 0.019078461021505344,
+        "original_mean": 2.102809041976298,
+        "original_std": 0.020775032615996076,
+        "original_min": 1.927027027027027,
+        "original_max": 2.142857142857143
+      },
+      "kube_pod_container_resource_limits_memory": {
+        "median": 367219034.6666667,
+        "scale": 76071791.38784695,
+        "original_mean": 359505394.3223358,
+        "original_std": 64477955.210933656,
+        "original_min": 227846562.38753247,
+        "original_max": 463174185.46478873
+      },
+      "kube_pod_container_status_running": {
+        "median": 0.9565217391304348,
+        "scale": 0.014729950900163713,
+        "original_mean": 0.9531287871091075,
+        "original_std": 0.017621035517297778,
+        "original_min": 0.726233552631579,
+        "original_max": 0.9777777777777777
+      },
+      "kube_deployment_status_observed_generation": {
+        "median": 8.296296296296296,
+        "scale": 2.064814814814815,
+        "original_mean": 7.694438070836282,
+        "original_std": 2.39222954456768,
+        "original_min": 1.2307692307692308,
+        "original_max": 12.76923076923077
+      },
+      "node_network_up": {
+        "median": 0.5652173913043478,
+        "scale": 0.12616822429906538,
+        "original_mean": 0.5670338059384659,
+        "original_std": 0.08460087745971087,
+        "original_min": 0.3411801242236025,
+        "original_max": 0.7504487179487234
+      },
+      "kube_pod_container_status_last_terminated_exitcode": {
+        "median": 125.125,
+        "scale": 45.23106060606061,
+        "original_mean": 137.7826911961893,
+        "original_std": 25.5342781194769,
+        "original_min": 69.1590909090909,
+        "original_max": 204.1
+      }
+    }
+  },
+  "quality_metrics": {
+    "missing_data_percentage": 0.0,
+    "feature_stability": {
+      "kube_deployment_status_replicas_unavailable": 2.160278485626616,
+      "kube_pod_container_status_ready": 0.030121358674546996,
+      "kube_deployment_spec_replicas": 0.4542089481711971,
+      "kube_pod_container_resource_limits_cpu": 0.009879652560756718,
+      "kube_pod_container_resource_limits_memory": 0.17935184347504382,
+      "kube_pod_container_status_running": 0.018487550966949946,
+      "kube_deployment_status_observed_generation": 0.310903695843767,
+      "node_network_up": 0.14919873802048703,
+      "kube_pod_container_status_last_terminated_exitcode": 0.1853228276532625
+    }
+  },
+  "created_at": "2025-07-06T21:22:41.853609",
+  "research_grade": true
+}

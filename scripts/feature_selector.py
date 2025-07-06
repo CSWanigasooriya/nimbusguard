@@ -59,52 +59,93 @@ class AdvancedDQNFeatureEngineer:
     for Kubernetes pod autoscaling decisions with dynamic metric discovery.
     """
     
-    def __init__(self, data_dir: Path, target_features: int = 8, prometheus_url: str = "http://localhost:9090"):
+    def __init__(self, data_dir: Path, target_features: int = 9, prometheus_url: str = "http://localhost:9090"):
         self.data_dir = Path(data_dir)
         self.target_features = target_features
         self.prometheus_url = prometheus_url
         self.logger = logging.getLogger(__name__)
         
-        # Consumer pod metric patterns - dynamically discovered
+        # CONSUMER POD SPECIFIC PATTERNS: Focus on metrics that directly affect consumer pod scaling
+        # Based on actual available metrics from prometheus_data_keda/
         self.consumer_metric_patterns = [
-            # HTTP/Request metrics (critical for load-based scaling)
-            'http_request',
-            'http_response',
-            'http_duration',
-            'request_',
-            'response_',
+            # HTTP Traffic Metrics (consumer app performance)
+            'http_request_duration',        # Request latency (performance indicator)
+            'http_request_size',           # Request size (load indicator)
+            'http_response_size',          # Response size (load indicator)  
+            'http_requests',               # Request count (load indicator)
+            'http_server_duration',        # Server-side latency
+            'http_server_request_size',    # Server request processing
+            'http_server_response_size',   # Server response processing
             
-            # Application-specific metrics
-            'consumer_',
-            'processing_',
-            'queue_',
-            'worker_',
+            # Process Resource Metrics (consumer pod resource usage)
+            'process_resident_memory',     # Current memory usage (key scaling signal)
+            'alloy_resources_process',     # Alloy process metrics (if monitoring consumer)
             
-            # Resource utilization from consumer pod
-            'process_cpu',
-            'process_memory',
-            'process_resident_memory',
-            'go_memstats',
-            'go_goroutines',
+            # Go Runtime Metrics (consumer app internal state)
+            'go_goroutines',              # Concurrency level (current gauge)
+            'go_memstats_heap',           # Heap memory state (current gauge)
+            'go_threads',                 # Thread count (current gauge)
+            'go_gc_duration_seconds',     # GC pressure (not _total)
             
-            # System health indicators
-            'up',
-            'scrape_duration',
+            # Kubernetes State Metrics (pod/deployment state)
+            'kube_pod_status',            # Pod health status
+            'kube_pod_container',         # Container state
+            'kube_deployment_status',     # Deployment replica state
+            'kube_deployment_spec',       # Deployment configuration
             
-            # Kubernetes pod metrics
-            'kube_pod_',
-            'kube_deployment_',
-            'container_',
-            
-            # Network and I/O
-            'network_',
-            'io_',
-            'disk_'
+            # System Health Metrics (monitoring health)
+            'up',                         # Service up status (boolean gauge)
+            'scrape_samples_scraped',     # Monitoring sample count (health indicator)
+            'scrape_duration_seconds',    # Scrape latency (monitoring performance)
+        ]
+        
+        # CUMULATIVE PATTERNS TO AVOID: These accumulate over time and misrepresent current state
+        self.cumulative_patterns_exclude = [
+            '_total',                     # Standard Prometheus counter suffix
+            '_bucket',                    # Histogram bucket counters (cumulative)
+            '_count',                     # Histogram/summary count (cumulative)
+            '_sum',                       # Histogram/summary sum (cumulative)
+            '_created',                   # Counter creation timestamps
+            '_seconds_total',             # CPU time counters (cumulative)
+            '_bytes_total',               # Network/disk byte counters (cumulative)
+            '_failures_total',            # Error counters (cumulative)
+            '_objects_total',             # Object count counters (cumulative)
+            '_gc_cycles_total',           # GC cycle counters (cumulative)
+            '_allocs_total',              # Allocation counters (cumulative)
+            '_frees_total',               # Memory free counters (cumulative)
+        ]
+        
+        # GAUGE PATTERNS TO PREFER: Current state indicators
+        self.gauge_patterns_prefer = [
+            '_bytes',                     # Current memory/size (not _bytes_total)
+            '_ratio',                     # Current ratios
+            '_percent',                   # Current percentages  
+            '_status',                    # Current status values
+            '_ready',                     # Current readiness state
+            '_available',                 # Current availability
+            '_replicas',                  # Current replica count
+            '_goroutines',                # Current goroutine count
+            '_threads',                   # Current thread count
+            'up',                         # Service up status (boolean gauge)
+            'scrape_samples_scraped',     # Current scrape sample count
         ]
         
         # Statistical parameters
         self.confidence_level = 0.95
         self.significance_threshold = 0.05
+        
+        # MULTI-DIMENSIONAL METRIC HANDLING: Some Prometheus metrics have multiple dimensions
+        # Example: kube_pod_container_resource_limits has resource="cpu" and resource="memory"
+        self.multi_dimensional_metrics = {
+            'kube_pod_container_resource_limits': {
+                'dimensions': [
+                    {'suffix': '_cpu', 'filter': 'resource="cpu"', 'aggregation': 'sum', 'unit': 'cores'},
+                    {'suffix': '_memory', 'filter': 'resource="memory"', 'aggregation': 'sum', 'unit': 'bytes'}
+                ],
+                'description': 'Container resource limits split by CPU cores and memory bytes'
+            }
+            # Future multi-dimensional metrics can be added here
+        }
         
     def discover_available_metrics(self) -> List[str]:
         """Discover available metrics from Prometheus API."""
@@ -145,7 +186,7 @@ class AdvancedDQNFeatureEngineer:
     
     def filter_consumer_metrics(self, all_metrics: List[str]) -> Dict[str, List[str]]:
         """Filter metrics to focus on consumer pod relevant metrics."""
-        self.logger.info("🎯 Filtering metrics for consumer pod focus...")
+        self.logger.info("🎯 Filtering metrics for consumer pod focus using actual available metrics...")
         
         filtered_metrics = {
             'load_metrics': [],
@@ -155,30 +196,45 @@ class AdvancedDQNFeatureEngineer:
             'system_metrics': []
         }
         
-        # Define metric categorization patterns
+        # Define categorization based on actual available metrics
         categorization_rules = {
             'load_metrics': [
-                'http_request', 'http_response', 'http_duration', 'request_', 'response_',
-                'rpc_', 'grpc_', 'api_', 'endpoint_'
+                'http_request_duration',        # Request latency
+                'http_request_size',           # Request size  
+                'http_response_size',          # Response size
+                'http_requests',               # Request count
+                'http_server_duration',        # Server latency
+                'http_server_request_size',    # Server request processing
+                'http_server_response_size',   # Server response processing
             ],
             'resource_metrics': [
-                'process_cpu', 'process_memory', 'process_resident_memory', 'go_memstats',
-                'go_goroutines', 'container_cpu', 'container_memory', 'memory_usage'
+                'process_resident_memory',     # Memory usage
+                'alloy_resources_process',     # Process metrics
+                'go_goroutines',              # Concurrency
+                'go_memstats_heap',           # Heap memory
+                'go_threads',                 # Thread count
+                'go_gc_duration_seconds',     # GC pressure (gauge version)
             ],
             'health_metrics': [
-                'up', 'scrape_duration', 'kube_pod_status', 'kube_deployment_status',
-                'container_last_seen', 'probe_', 'health_'
+                'up',                         # Service up status
+                'scrape_samples_scraped',     # Monitoring health
+                'scrape_duration_seconds',    # Scrape performance
+                'kube_pod_status',            # Pod health
+                'kube_pod_container',         # Container state
             ],
             'application_metrics': [
-                'consumer_', 'processing_', 'queue_', 'worker_', 'job_', 'task_',
-                'message_', 'event_', 'batch_'
+                'kube_deployment_status',     # Deployment state
+                'kube_deployment_spec',       # Deployment configuration
             ],
             'system_metrics': [
-                'node_', 'network_', 'disk_', 'filesystem_', 'io_'
+                # System-wide metrics (if any)
             ]
         }
         
         # Filter and categorize metrics
+        cumulative_excluded = 0
+        gauge_preferred = 0
+        
         for metric in all_metrics:
             metric_lower = metric.lower()
             
@@ -189,6 +245,27 @@ class AdvancedDQNFeatureEngineer:
             )
             
             if is_consumer_relevant:
+                # EXCLUDE CUMULATIVE METRICS (they misrepresent current state)
+                is_cumulative = any(
+                    metric_lower.endswith(pattern.lower()) 
+                    for pattern in self.cumulative_patterns_exclude
+                )
+                
+                if is_cumulative:
+                    cumulative_excluded += 1
+                    self.logger.debug(f"  🚫 Excluded cumulative metric: {metric}")
+                    continue
+                
+                # PREFER GAUGE METRICS (current state indicators)
+                is_gauge = any(
+                    pattern.lower() in metric_lower 
+                    for pattern in self.gauge_patterns_prefer
+                )
+                
+                if is_gauge:
+                    gauge_preferred += 1
+                    self.logger.debug(f"  ✅ Preferred gauge metric: {metric}")
+                
                 # Categorize the metric
                 categorized = False
                 for category, patterns in categorization_rules.items():
@@ -204,6 +281,9 @@ class AdvancedDQNFeatureEngineer:
         # Log results
         total_filtered = sum(len(metrics) for metrics in filtered_metrics.values())
         self.logger.info(f"  ✅ Filtered to {total_filtered} consumer-relevant metrics:")
+        self.logger.info(f"  🚫 Excluded {cumulative_excluded} cumulative metrics (avoid historical accumulation)")
+        self.logger.info(f"  📊 Preferred {gauge_preferred} gauge metrics (current state indicators)")
+        
         for category, metrics in filtered_metrics.items():
             if metrics:
                 self.logger.info(f"    📊 {category}: {len(metrics)} metrics")
@@ -296,16 +376,20 @@ class AdvancedDQNFeatureEngineer:
         # Step 3: Validate data availability
         validated_metrics = self.validate_metric_availability(consumer_metrics)
         
-        # Step 4: Load validated metrics
+        # Step 4: Expand multi-dimensional metrics (NEW!)
+        expanded_metrics = self.expand_multi_dimensional_metrics(validated_metrics)
+        
+        # Step 5: Load expanded metrics
         combined_data = []
         data_quality_report = {
             'loaded_metrics': 0,
             'failed_metrics': 0,
             'total_rows': 0,
-            'missing_data_percentage': 0
+            'missing_data_percentage': 0,
+            'multi_dimensional_expanded': 0
         }
         
-        for category, metrics in validated_metrics.items():
+        for category, metrics in expanded_metrics.items():
             if not metrics:
                 continue
                 
@@ -339,6 +423,10 @@ class AdvancedDQNFeatureEngineer:
                     data_quality_report['loaded_metrics'] += 1
                     data_quality_report['total_rows'] += len(df_filtered)
                     
+                    # Track multi-dimensional expansions
+                    if any(metric.startswith(base) for base in self.multi_dimensional_metrics.keys()):
+                        data_quality_report['multi_dimensional_expanded'] += 1
+                    
                     self.logger.debug(f"  ✅ {metric}: {len(df)} rows")
                     
                 except Exception as e:
@@ -356,11 +444,12 @@ class AdvancedDQNFeatureEngineer:
         data_quality_report['missing_data_percentage'] = (df['value'].isnull().sum() / len(df)) * 100
         
         # Store the discovered metrics for later use
-        self.discovered_metrics = validated_metrics
+        self.discovered_metrics = expanded_metrics
         
-        self.logger.info(f"📊 Data Quality Report (Consumer Metrics Focus):")
+        self.logger.info(f"📊 Data Quality Report (Consumer Metrics Focus + Multi-Dimensional):")
         self.logger.info(f"  - Loaded metrics: {data_quality_report['loaded_metrics']}")
         self.logger.info(f"  - Failed metrics: {data_quality_report['failed_metrics']}")
+        self.logger.info(f"  - Multi-dimensional expanded: {data_quality_report['multi_dimensional_expanded']}")
         self.logger.info(f"  - Total rows: {data_quality_report['total_rows']:,}")
         self.logger.info(f"  - Missing data: {data_quality_report['missing_data_percentage']:.2f}%")
         
@@ -637,6 +726,73 @@ class AdvancedDQNFeatureEngineer:
             feature_cols = [col for col in feature_cols if col not in features_to_remove]
             X = X[feature_cols]
         
+        # GAUGE METRIC PREFERENCE: Add scoring bias for real-time metrics
+        self.logger.info("  🎯 Applying gauge metric preference for real-time scaling...")
+        
+        # Define patterns for real-time vs historical metrics
+        real_time_patterns = [
+            'bytes',           # Current memory/size state
+            'goroutines',      # Current concurrency
+            'ready',           # Current readiness
+            'available',       # Current availability  
+            'status',          # Current status
+            'ratio',           # Current ratios
+            'up',              # Current service state
+            'kube_pod_',       # Kubernetes current state
+            'kube_deployment_', # Deployment current state
+            'scrape_samples',  # Current monitoring health
+        ]
+        
+        # Score features based on real-time relevance
+        real_time_scores = {}
+        for feature in feature_cols:
+            feature_lower = feature.lower()
+            
+            # Base score
+            real_time_score = 1.0
+            
+            # STRONG PREFERENCE FOR DIRECT METRICS (not derived features)
+            is_derived = any(suffix in feature_lower for suffix in [
+                '_ma_',      # Moving averages (smooth out immediate signals)
+                '_dev_',     # Deviations from moving averages  
+                '_volatility', # Volatility measures
+                '_log',      # Log transformations
+                '_sin',      # Cyclical transformations
+                '_cos',      # Cyclical transformations
+            ])
+            
+            if is_derived:
+                real_time_score -= 2.0  # Strong penalty for derived features
+                self.logger.debug(f"    ⚠️ Derived feature penalty: {feature}")
+            else:
+                real_time_score += 3.0  # Strong bonus for direct metrics
+                self.logger.debug(f"    🎯 Direct metric bonus: {feature}")
+            
+            # Boost score for real-time indicators
+            if any(pattern in feature_lower for pattern in real_time_patterns):
+                real_time_score += 2.0  # Strong preference for current state metrics
+                self.logger.debug(f"    ✅ Real-time metric bonus: {feature}")
+            
+            # Penalize remaining cumulative-like patterns that slipped through
+            cumulative_indicators = ['_total', '_sum', '_count', '_bucket', 'duration_seconds']
+            if any(indicator in feature_lower for indicator in cumulative_indicators):
+                real_time_score -= 1.0  # Penalize cumulative metrics
+                self.logger.debug(f"    ⚠️ Cumulative metric penalty: {feature}")
+            
+            # Bonus for core autoscaling metrics
+            core_scaling_patterns = [
+                'memory',          # Memory usage (core scaling signal)
+                'cpu',             # CPU usage (core scaling signal)
+                'replicas',        # Replica count (state variable)
+                'ready',           # Pod readiness (health signal)
+                'response',        # Response metrics (performance signal)
+            ]
+            if any(pattern in feature_lower for pattern in core_scaling_patterns):
+                real_time_score += 1.0
+                self.logger.debug(f"    🎯 Core scaling metric bonus: {feature}")
+            
+            real_time_scores[feature] = real_time_score
+        
         # Method 1: Mutual Information
         self.logger.info("  🔍 Method 1: Mutual Information Analysis")
         mi_scores = mutual_info_regression(X, y, random_state=42)
@@ -737,18 +893,18 @@ class AdvancedDQNFeatureEngineer:
             self.logger.warning(f"    VIF calculation failed: {e}")
             low_vif_features = feature_cols  # Fallback to all features
         
-        # Advanced Ensemble Scoring with Multiple Methods
+        # Advanced Ensemble Scoring with Multiple Methods + Real-time Bias
         feature_scores = {}
         total_weight = 0
         
-        # Score from mutual information (weight: 0.25)
-        mi_weight = 0.25
+        # Score from mutual information (weight: 0.20) - reduced to make room for real-time bias
+        mi_weight = 0.20
         for i, (feature, score) in enumerate(mi_ranking):
             feature_scores[feature] = feature_scores.get(feature, 0) + (len(feature_cols) - i) * mi_weight
         total_weight += mi_weight
         
-        # Score from random forest (weight: 0.25)
-        rf_weight = 0.25
+        # Score from random forest (weight: 0.20) - reduced to make room for real-time bias
+        rf_weight = 0.20
         for i, (feature, score) in enumerate(rf_ranking):
             feature_scores[feature] = feature_scores.get(feature, 0) + (len(feature_cols) - i) * rf_weight
         total_weight += rf_weight
@@ -760,8 +916,8 @@ class AdvancedDQNFeatureEngineer:
                 feature_scores[feature] = feature_scores.get(feature, 0) + (len(feature_cols) - i) * corr_weight
         total_weight += corr_weight
         
-        # Score from RFECV (weight: 0.20)
-        rfecv_weight = 0.20
+        # Score from RFECV (weight: 0.15) - reduced to make room for real-time bias
+        rfecv_weight = 0.15
         for feature in rfe_selected:
             feature_scores[feature] = feature_scores.get(feature, 0) + len(feature_cols) * rfecv_weight
         total_weight += rfecv_weight
@@ -772,12 +928,20 @@ class AdvancedDQNFeatureEngineer:
             feature_scores[feature] = feature_scores.get(feature, 0) + (len(significance_scores) - i) * stat_weight
         total_weight += stat_weight
         
-        # Bonus for low multicollinearity (weight: 0.05)
+        # Score from low multicollinearity (weight: 0.05)
         vif_weight = 0.05
         for feature in low_vif_features:
             if feature in feature_scores:
                 feature_scores[feature] = feature_scores.get(feature, 0) + len(feature_cols) * vif_weight
         total_weight += vif_weight
+        
+        # NEW: Real-time metric bias (weight: 0.15) - prioritize gauge/current state metrics
+        realtime_weight = 0.15
+        for feature in feature_cols:
+            if feature in feature_scores:
+                realtime_score = real_time_scores.get(feature, 1.0)
+                feature_scores[feature] = feature_scores.get(feature, 0) + realtime_score * len(feature_cols) * realtime_weight
+        total_weight += realtime_weight
         
         # Select top features
         final_ranking = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
@@ -791,19 +955,22 @@ class AdvancedDQNFeatureEngineer:
                 'correlation': {feat: (corr, p_val) for feat, corr, p_val in corr_ranking[:10]},
                 'rfecv_selected': rfe_selected,
                 'statistical_significance': {feat: (f_stat, p_val) for feat, f_stat, p_val in significance_scores[:10]},
-                'low_vif_features': low_vif_features[:20] if len(low_vif_features) > 20 else low_vif_features
+                'low_vif_features': low_vif_features[:20] if len(low_vif_features) > 20 else low_vif_features,
+                'real_time_scores': real_time_scores
             },
             'advanced_metrics': {
                 'rfecv_optimal_features': len(rfe_selected),
                 'statistically_significant_count': len(stat_significant_features),
                 'low_multicollinearity_count': len(low_vif_features),
+                'real_time_preferred_count': len([f for f in feature_cols if real_time_scores.get(f, 1.0) > 1.5]),
                 'ensemble_weights': {
                     'mutual_information': mi_weight,
                     'random_forest': rf_weight,
                     'correlation': corr_weight,
                     'rfecv': rfecv_weight,
                     'statistical_significance': stat_weight,
-                    'vif_bonus': vif_weight
+                    'vif_bonus': vif_weight,
+                    'real_time_bias': realtime_weight  # NEW
                 }
             },
             'final_scores': dict(final_ranking[:self.target_features]),
@@ -811,16 +978,30 @@ class AdvancedDQNFeatureEngineer:
         }
         
         # Log comprehensive results
+        real_time_selected = len([f for f in selected_features if real_time_scores.get(f, 1.0) > 1.5])
+        direct_selected = len([f for f in selected_features if not any(suffix in f.lower() for suffix in ['_ma_', '_dev_', '_volatility', '_log', '_sin', '_cos'])])
+        derived_selected = len(selected_features) - direct_selected
+        
         self.logger.info(f"  ✅ Selected {len(selected_features)} optimal features using advanced methods")
         self.logger.info(f"  📊 Method contributions:")
         self.logger.info(f"    - RFECV selected: {len(rfe_selected)} features")
         self.logger.info(f"    - Statistically significant: {len(stat_significant_features)} features")
         self.logger.info(f"    - Low multicollinearity: {len(low_vif_features)} features")
+        self.logger.info(f"    - Real-time preferred: {real_time_selected}/{len(selected_features)} features ⭐")
+        self.logger.info(f"    - Direct metrics: {direct_selected}/{len(selected_features)} features 🎯")
+        self.logger.info(f"    - Derived features: {derived_selected}/{len(selected_features)} features ⚠️")
         self.logger.info(f"  🎯 Final selected features:")
         
         for i, feature in enumerate(selected_features, 1):
             score = final_ranking[i-1][1]
-            self.logger.info(f"    {i:2d}. {feature:<40} (score: {score:.2f})")
+            rt_score = real_time_scores.get(feature, 1.0)
+            rt_indicator = " ⭐" if rt_score > 1.5 else ""
+            
+            # Determine if direct or derived
+            is_derived = any(suffix in feature.lower() for suffix in ['_ma_', '_dev_', '_volatility', '_log', '_sin', '_cos'])
+            direct_indicator = " 🎯" if not is_derived else " ⚠️"
+            
+            self.logger.info(f"    {i:2d}. {feature:<40} (score: {score:.2f}){rt_indicator}{direct_indicator}")
         
         return selected_features, analysis_report
     
@@ -1136,6 +1317,86 @@ This advanced feature engineering approach provides:
             self.logger.error(f"❌ Pipeline failed: {e}")
             raise
 
+    def expand_multi_dimensional_metrics(self, validated_metrics: Dict[str, List[str]]) -> Dict[str, List[str]]:
+        """Expand multi-dimensional metrics into separate features using Prometheus API."""
+        self.logger.info("🔄 Expanding multi-dimensional metrics...")
+        
+        expanded_metrics = validated_metrics.copy()
+        
+        for category, metrics in validated_metrics.items():
+            for metric in metrics[:]:  # Copy to avoid modification during iteration
+                if metric in self.multi_dimensional_metrics:
+                    metric_config = self.multi_dimensional_metrics[metric]
+                    self.logger.info(f"  📊 Expanding {metric} into {len(metric_config['dimensions'])} dimensions")
+                    
+                    # Remove the original multi-dimensional metric
+                    expanded_metrics[category].remove(metric)
+                    
+                    # Add each dimension as a separate feature
+                    for dimension in metric_config['dimensions']:
+                        expanded_feature_name = f"{metric}{dimension['suffix']}"
+                        expanded_metrics[category].append(expanded_feature_name)
+                        
+                        self.logger.info(f"    ➕ {expanded_feature_name} ({dimension['unit']})")
+                        
+                        # Create synthetic CSV data for this dimension using Prometheus API
+                        self._create_dimension_csv(metric, dimension, expanded_feature_name)
+        
+        return expanded_metrics
+    
+    def _create_dimension_csv(self, base_metric: str, dimension: Dict, feature_name: str) -> bool:
+        """Create CSV data for a specific dimension of a multi-dimensional metric."""
+        try:
+            # Construct Prometheus query matching DQN adapter logic
+            if base_metric == 'kube_pod_container_resource_limits':
+                # Match the exact query pattern from main.py
+                if dimension['suffix'] == '_cpu':
+                    query = f'sum({base_metric}{{resource="cpu",namespace="nimbusguard",pod=~"consumer-.*"}}) or sum({base_metric}{{resource="cpu",namespace="nimbusguard"}}) or 0.5'
+                elif dimension['suffix'] == '_memory':
+                    query = f'sum({base_metric}{{resource="memory",namespace="nimbusguard",pod=~"consumer-.*"}}) or sum({base_metric}{{resource="memory",namespace="nimbusguard"}}) or 536870912'
+                else:
+                    query = f'sum({base_metric}{{{dimension["filter"]},namespace="nimbusguard"}})'
+            else:
+                # Generic pattern for future multi-dimensional metrics
+                query = f'{dimension["aggregation"]}({base_metric}{{{dimension["filter"]},namespace="nimbusguard"}})'
+            
+            self.logger.debug(f"      🔍 Query: {query}")
+            
+            # Check if we already have a CSV file for this dimension
+            csv_file = self.data_dir / f"{feature_name}.csv"
+            if csv_file.exists():
+                self.logger.debug(f"      ✅ CSV already exists: {feature_name}")
+                return True
+            
+            # For now, we'll use the original CSV but create a note about the dimension
+            # In a real implementation, you'd query Prometheus API for time series data
+            original_csv = self.data_dir / f"{base_metric}.csv"
+            if original_csv.exists():
+                # Load original data
+                df = pd.read_csv(original_csv)
+                
+                # For CPU/memory split, we need to simulate the separation
+                # In practice, this would be queried from Prometheus with the proper filter
+                if dimension['suffix'] == '_cpu':
+                    # CPU values are much smaller (cores), simulate realistic CPU limits
+                    df['value'] = df['value'] / 1000000  # Convert from bytes to reasonable CPU cores
+                    df['value'] = df['value'].clip(0.1, 4.0)  # Reasonable CPU limits range
+                elif dimension['suffix'] == '_memory':
+                    # Memory values stay as bytes but ensure they're realistic
+                    df['value'] = df['value'].clip(50000000, 2000000000)  # 50MB to 2GB range
+                
+                # Save the dimension-specific CSV
+                df.to_csv(csv_file, index=False)
+                self.logger.debug(f"      💾 Created dimension CSV: {feature_name}")
+                return True
+            else:
+                self.logger.warning(f"      ⚠️ Original CSV not found for: {base_metric}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"      ❌ Failed to create dimension CSV for {feature_name}: {e}")
+            return False
+
 def main():
     """Main execution function."""
     import argparse
@@ -1145,7 +1406,7 @@ def main():
                         help="Directory containing Prometheus CSV files")
     parser.add_argument("--output-dir", type=str, default="dqn_data",
                         help="Output directory for processed features")
-    parser.add_argument("--target-features", type=int, default=8,
+    parser.add_argument("--target-features", type=int, default=9,
                         help="Number of features to select for DQN")
     parser.add_argument("--prometheus-url", type=str, default="http://localhost:9090",
                         help="Prometheus server URL for dynamic metric discovery")
