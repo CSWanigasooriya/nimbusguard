@@ -1521,7 +1521,7 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     elif action_name == 'Scale Down': 
         new_replicas -= 1
     
-    final_decision = max(1, new_replicas)  # Never go below 1 replica
+    final_decision = max(1, min(20, new_replicas))  # Never go below 1 or above 20 replicas (SAFETY CONSTRAINT)
     
     # Create comprehensive decision explanation
     decision_explanation = {
@@ -1869,9 +1869,16 @@ def calculate_action_penalty(action, current_replicas):
     if action == "Scale Down" and current_replicas <= 1:
         penalty = -2.0
     
-    # Penalize excessive scaling up
-    elif action == "Scale Up" and current_replicas >= 8:
-        penalty = -1.0
+    # ENHANCED: Progressive penalty for excessive scaling up
+    elif action == "Scale Up":
+        if current_replicas >= 15:
+            penalty = -5.0  # Very strong penalty for scaling beyond 15
+        elif current_replicas >= 10:
+            penalty = -3.0  # Strong penalty for scaling beyond 10  
+        elif current_replicas >= 8:
+            penalty = -1.5  # Moderate penalty for scaling beyond 8
+        elif current_replicas >= 5:
+            penalty = -0.5  # Light penalty for scaling beyond 5
     
     # Small penalty for any scaling action to encourage stability
     elif action != "Keep Same":

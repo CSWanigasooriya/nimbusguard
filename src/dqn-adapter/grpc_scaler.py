@@ -123,37 +123,41 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
         """
         Returns current metric values for KEDA Value calculation.
         
-        SIMPLIFIED: Now using Value metric type instead of AverageValue.
-        With Value metric: HPA calculates desired = metric_value / target
-        Since target = 1.0, we simply return desired_replicas directly!
+        FIXED: Even with Value metric type, HPA uses proportional calculation:
+        desired = current × (metric_value / target)
         
-        Much cleaner than the previous AverageValue approach that required
-        complex multiplication by target and current replicas.
+        To get desired = dqn_desired_replicas:
+        We need: metric_value = (dqn_desired_replicas / current_replicas) × target
+        Since target = 1: metric_value = dqn_desired_replicas / current_replicas
         
         Args:
             request: GetMetricsRequest containing metric name and scaler metadata
             context: gRPC context
             
         Returns:
-            GetMetricsResponse: Direct metric value for KEDA Value calculation
+            GetMetricsResponse: Ratio metric value for HPA proportional calculation
         """
         try:
             # Log the incoming request for debugging
             self.logger.info(f"DQN_GRPC: GetMetrics_called metric={request.metricName} "
                            f"name={request.scaledObjectRef.name} namespace={request.scaledObjectRef.namespace}")
             
-            # Get DQN's desired replica count directly
+            # Get DQN's desired replica count and current replica count
             dqn_desired_replicas = int(self.dqn_desired_gauge._value._value)
             current_replicas = int(self.current_replicas_gauge._value._value)
             
-            # SIMPLIFIED: With Value metric type, just return desired replicas directly!
-            # HPA will calculate: desired = metric_value / target = desired_replicas / 1.0 = desired_replicas ✅
-            metric_value_millis = dqn_desired_replicas * 1000  # Convert to milli-units for precision
+            # FIXED: Calculate the scaling ratio for HPA proportional calculation
+            # HPA will calculate: desired = current × (ratio / target) = current × (ratio / 1) = current × ratio
+            # So if ratio = desired/current, then: desired = current × (desired/current) = desired ✅
+            scaling_ratio = dqn_desired_replicas / max(1, current_replicas)  # Avoid division by zero
+            
+            # Convert to milli-units for precision
+            metric_value_millis = int(scaling_ratio * 1000)
             
             metric_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
-                metricValue=metric_value_millis,  # Direct desired replicas in milli-units
-                metricValueFloat=float(dqn_desired_replicas)  # For logging clarity
+                metricValue=metric_value_millis,  # Scaling ratio in milli-units
+                metricValueFloat=scaling_ratio     # For logging clarity
             )
             
             response = externalscaler_pb2.GetMetricsResponse(
@@ -162,8 +166,9 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             self.logger.info(f"DQN_GRPC: GetMetrics_success dqn_wants={dqn_desired_replicas} "
                            f"current={current_replicas} "
-                           f"returning_direct_millis={metric_value_millis} "
-                           f"hpa_will_calculate=metric_value÷target={dqn_desired_replicas}÷1={dqn_desired_replicas}")
+                           f"scaling_ratio={scaling_ratio:.3f} "
+                           f"returning_ratio_millis={metric_value_millis} "
+                           f"hpa_will_calculate=current×(ratio÷target)={current_replicas}×({scaling_ratio:.3f}÷1)={dqn_desired_replicas}")
             return response
             
         except Exception as e:
@@ -173,13 +178,12 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             
-            # Return safe fallback (maintain current replica count)
-            current_replicas = int(self.current_replicas_gauge._value._value) if self.current_replicas_gauge else 2
-            fallback_millis = current_replicas * 1000  # current × target
+            # Return safe fallback (maintain current replica count = ratio of 1.0)
+            fallback_millis = 1000  # ratio = 1.0 = maintain current
             fallback_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
                 metricValue=fallback_millis,
-                metricValueFloat=float(current_replicas)
+                metricValueFloat=1.0
             )
             return externalscaler_pb2.GetMetricsResponse(metricValues=[fallback_value])
     
@@ -202,11 +206,15 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
                            f"name={request.name} namespace={request.namespace}")
             self._stream_active = True
             
+            # Timing configuration for responsive push-based scaling
+            heartbeat_interval_seconds = 10  # Send heartbeat every 10 seconds
+            check_interval_seconds = 0.5     # Check for changes every 500ms
+            
             last_dqn_decision = None
             last_current_replicas = None
-            last_signal_time = time.time()
+            last_heartbeat_time = time.time()
             
-            while self._stream_active and not context.cancelled():
+            while self._stream_active and context.is_active():
                 try:
                     # Get current DQN decision and replica state
                     current_dqn_decision = int(self.dqn_desired_gauge._value._value)
@@ -216,35 +224,40 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
                     # Send signal when DQN decision changes OR replica count changes OR heartbeat
                     decision_changed = current_dqn_decision != last_dqn_decision
                     replicas_changed = current_replicas != last_current_replicas
-                    time_for_heartbeat = (current_time - last_signal_time) > 10  # Faster heartbeat
+                    time_for_heartbeat = (current_time - last_heartbeat_time) >= heartbeat_interval_seconds
                     
-                    if decision_changed or replicas_changed or time_for_heartbeat:
-                        # Send active signal to trigger immediate scaling evaluation
+                    should_send_signal = decision_changed or replicas_changed or time_for_heartbeat
+                    
+                    if should_send_signal:
+                        # Create push signal to KEDA
                         response = externalscaler_pb2.IsActiveResponse(result=True)
                         yield response
                         
+                        # Log the push signal details
+                        reason = []
                         if decision_changed:
-                            self.logger.info(f"DQN_GRPC: StreamIsActive_DQN_CHANGE "
-                                           f"from={last_dqn_decision} to={current_dqn_decision} "
-                                           f"current_replicas={current_replicas} PUSH_SIGNAL_SENT")
-                        elif replicas_changed:
-                            self.logger.info(f"DQN_GRPC: StreamIsActive_REPLICA_CHANGE "
-                                           f"from={last_current_replicas} to={current_replicas} "
-                                           f"dqn_wants={current_dqn_decision} PUSH_SIGNAL_SENT")
-                        elif time_for_heartbeat:
-                            self.logger.debug(f"DQN_GRPC: StreamIsActive_HEARTBEAT "
-                                            f"dqn={current_dqn_decision} replicas={current_replicas}")
+                            reason.append(f"DQN_CHANGE({last_dqn_decision}→{current_dqn_decision})")
+                        if replicas_changed:
+                            reason.append(f"REPLICA_CHANGE({last_current_replicas}→{current_replicas})")
+                        if time_for_heartbeat:
+                            reason.append("HEARTBEAT")
                         
+                        self.logger.info(f"DQN_GRPC: PUSH_SIGNAL_SENT "
+                                       f"reasons={','.join(reason)} "
+                                       f"dqn_decision={current_dqn_decision} "
+                                       f"current_replicas={current_replicas}")
+                        
+                        # Update tracking variables
                         last_dqn_decision = current_dqn_decision
                         last_current_replicas = current_replicas
-                        last_signal_time = current_time
+                        last_heartbeat_time = current_time
                     
-                    # Ultra-fast checking for real-time DQN decision detection
-                    time.sleep(0.5)  # Check every 500ms for sub-second responsiveness
+                    # Sleep briefly before next check (responsive but not excessive CPU usage)
+                    time.sleep(check_interval_seconds)
                     
-                except Exception as e:
-                    self.logger.error(f"DQN_GRPC: StreamIsActive_loop_error error={e}")
-                    time.sleep(1)  # Shorter sleep on error
+                except Exception as inner_e:
+                    self.logger.error(f"DQN_GRPC: StreamIsActive_inner_error error={inner_e}")
+                    # Continue the loop, don't break on inner errors
             
             self.logger.info("DQN_GRPC: StreamIsActive_ended connection_closed")
             
