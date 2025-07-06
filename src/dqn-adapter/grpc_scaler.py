@@ -76,12 +76,19 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
     
     def GetMetricSpec(self, request, context):
         """
-        Returns metric specification for HPA.
+        Returns metric specification for HPA using AverageValue semantics.
         
-        SIMPLIFIED: With Value metric type, target=1.0 works perfectly.
-        HPA calculates: desired = metric_value / target = desired_replicas / 1.0 = desired_replicas
+        CORRECTED APPROACH: Using AverageValue logic instead of Value
+        - Our metric represents "workload demand" (units of work needed)
+        - Target represents "workload capacity per pod" (units of work per pod)
+        - HPA calculates: desired_replicas = current_workload / target_per_pod
         
-        Much simpler than AverageValue which required complex calculations.
+        Example: If DQN wants 9 replicas:
+        - metric_value = 9.0 (workload units needed)
+        - target = 1.0 (workload units per pod capacity)
+        - HPA: desired = 9.0 / 1.0 = 9 replicas ✓
+        
+        This is semantically correct: we need 9 units of work, each pod can handle 1 unit.
         
         Args:
             request: ScaledObjectRef containing scaler metadata
@@ -95,14 +102,14 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             metric_spec = externalscaler_pb2.MetricSpec(
                 metricName="dqn-replica-need",
-                targetSize=1  # Perfect for Value metric: desired = metric_value / 1.0 
+                targetSize=1  # Each pod can handle 1 unit of workload
             )
             
             response = externalscaler_pb2.GetMetricSpecResponse(
                 metricSpecs=[metric_spec]
             )
             
-            self.logger.info(f"DQN_GRPC: GetMetricSpec_success target=1.0 metric_name=dqn-replica-need metricType=Value")
+            self.logger.info(f"DQN_GRPC: GetMetricSpec_success target=1.0 metric_name=dqn-replica-need metricType=AverageValue")
             return response
             
         except Exception as e:
@@ -115,27 +122,29 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             # Return safe fallback
             fallback_spec = externalscaler_pb2.MetricSpec(
                 metricName="dqn-replica-need",
-                targetSize=1  # FIXED: Use 1 instead of 1000
+                targetSize=1  # Fallback: 1 unit per pod
             )
             return externalscaler_pb2.GetMetricSpecResponse(metricSpecs=[fallback_spec])
     
     def GetMetrics(self, request, context):
         """
-        Returns current metric values for KEDA Value calculation.
+        Returns current metric values for KEDA calculation using AverageValue semantics.
         
-        FIXED: Even with Value metric type, HPA uses proportional calculation:
-        desired = current × (metric_value / target)
+        CORRECTED APPROACH: Send workload demand directly as metric value.
+        HPA calculates: desired_replicas = current_workload / target_per_pod
         
-        To get desired = dqn_desired_replicas:
-        We need: metric_value = (dqn_desired_replicas / current_replicas) × target
-        Since target = 1: metric_value = dqn_desired_replicas / current_replicas
+        Since target_per_pod = 1.0 (from GetMetricSpec):
+        desired = dqn_desired_workload / 1.0 = dqn_desired_replicas ✅
+        
+        This is semantically correct: if DQN determines we need 9 units of workload,
+        and each pod handles 1 unit, then we need 9 pods.
         
         Args:
             request: GetMetricsRequest containing metric name and scaler metadata
             context: gRPC context
             
         Returns:
-            GetMetricsResponse: Ratio metric value for HPA proportional calculation
+            GetMetricsResponse: Workload demand metric value
         """
         try:
             # Log the incoming request for debugging
@@ -146,18 +155,11 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             dqn_desired_replicas = int(self.dqn_desired_gauge._value._value)
             current_replicas = int(self.current_replicas_gauge._value._value)
             
-            # FIXED: Calculate the scaling ratio for HPA proportional calculation
-            # HPA will calculate: desired = current × (ratio / target) = current × (ratio / 1) = current × ratio
-            # So if ratio = desired/current, then: desired = current × (desired/current) = desired ✅
-            scaling_ratio = dqn_desired_replicas / max(1, current_replicas)  # Avoid division by zero
-            
-            # Convert to milli-units for precision
-            metric_value_millis = int(scaling_ratio * 1000)
-            
+            # Send workload demand (which equals desired replica count)
+            # HPA will calculate: desired = workload_demand / target_per_pod = dqn_desired / 1.0 = dqn_desired
             metric_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
-                metricValue=metric_value_millis,  # Scaling ratio in milli-units
-                metricValueFloat=scaling_ratio     # For logging clarity
+                metricValue=dqn_desired_replicas     # Workload demand in "units"
             )
             
             response = externalscaler_pb2.GetMetricsResponse(
@@ -166,9 +168,9 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             self.logger.info(f"DQN_GRPC: GetMetrics_success dqn_wants={dqn_desired_replicas} "
                            f"current={current_replicas} "
-                           f"scaling_ratio={scaling_ratio:.3f} "
-                           f"returning_ratio_millis={metric_value_millis} "
-                           f"hpa_will_calculate=current×(ratio÷target)={current_replicas}×({scaling_ratio:.3f}÷1)={dqn_desired_replicas}")
+                           f"workload_demand={dqn_desired_replicas} "
+                           f"target_per_pod=1.0 "
+                           f"hpa_will_calculate=workload÷target={dqn_desired_replicas}÷1.0={dqn_desired_replicas}")
             return response
             
         except Exception as e:
@@ -178,12 +180,11 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             
-            # Return safe fallback (maintain current replica count = ratio of 1.0)
-            fallback_millis = 1000  # ratio = 1.0 = maintain current
+            # Return safe fallback (maintain current replica count)
+            current_replicas = int(self.current_replicas_gauge._value._value)
             fallback_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
-                metricValue=fallback_millis,
-                metricValueFloat=1.0
+                metricValue=current_replicas         # Maintain current workload demand
             )
             return externalscaler_pb2.GetMetricsResponse(metricValues=[fallback_value])
     

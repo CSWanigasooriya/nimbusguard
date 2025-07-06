@@ -271,11 +271,10 @@ class TimeSeriesBuffer:
                 cpu_trend = cpu_slope * 10  # Scale CPU trend (cores to comparable scale)
             else:
                 cpu_trend = 0.0
+                # Combine trends with weights: unavailable replicas (60%), readiness (25%), CPU (15%)
+                combined_trend = (unavailable_slope * 0.6 + readiness_trend * 0.25 + cpu_trend * 0.15) * 100
+                trend_direction = np.clip(combined_trend, -1, 1)  # Scale and clip
             
-            # Combine trends with weights: unavailable replicas (60%), readiness (25%), CPU (15%)
-            combined_trend = (unavailable_slope * 0.6 + readiness_trend * 0.25 + cpu_trend * 0.15) * 100
-            trend_direction = np.clip(combined_trend, -1, 1)  # Scale and clip
-        
         # Daily pattern strength (comprehensive Kubernetes state analysis)
         current_hour = datetime.now().hour
         daily_pattern_strength = 0.0
