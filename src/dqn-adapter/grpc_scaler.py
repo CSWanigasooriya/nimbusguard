@@ -93,7 +93,7 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             metric_spec = externalscaler_pb2.MetricSpec(
                 metricName="dqn-replica-need",
-                targetSize=1000  # 1.0 in milli-units - we return absolute replica counts
+                targetSize=1  # FIXED: Use 1 instead of 1000 to ensure HPA shows 1.0 not 1k
             )
             
             response = externalscaler_pb2.GetMetricSpecResponse(
@@ -113,23 +113,29 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             # Return safe fallback
             fallback_spec = externalscaler_pb2.MetricSpec(
                 metricName="dqn-replica-need",
-                targetSize=1000  # 1.0
+                targetSize=1  # FIXED: Use 1 instead of 1000
             )
             return externalscaler_pb2.GetMetricSpecResponse(metricSpecs=[fallback_spec])
     
     def GetMetrics(self, request, context):
         """
-        Returns current metric values - DQN desired replica count as absolute value.
+        Returns current metric values for KEDA AverageValue calculation.
         
-        FIXED: Return absolute DQN desired replica count, not ratios.
-        HPA will calculate: desired = current * (dqn_desired / 1.0) = dqn_desired
+        FIXED: Work with KEDA's forced AverageValue metric type.
+        Since HPA calculates: desired = current × (averageValue / target)
+        And averageValue = metric_value ÷ current_replicas
+        We need: desired = current × (metric_value ÷ current_replicas) / target
+        
+        For desired = dqn_desired_replicas:
+        metric_value = dqn_desired_replicas × target × current_replicas ÷ current
+        metric_value = dqn_desired_replicas × target (since current_replicas = current)
         
         Args:
             request: GetMetricsRequest containing metric name and scaler metadata
             context: gRPC context
             
         Returns:
-            GetMetricsResponse: Current replica need based on DQN decision (absolute value)
+            GetMetricsResponse: Metric value for KEDA AverageValue calculation
         """
         try:
             # Log the incoming request for debugging
@@ -140,12 +146,17 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             dqn_desired_replicas = int(self.dqn_desired_gauge._value._value)
             current_replicas = int(self.current_replicas_gauge._value._value)
             
-            # Return the absolute DQN desired replica count
-            # HPA will calculate: desired = current * (dqn_desired / 1.0) = dqn_desired
+            # FIXED: Return desired_replicas × target for AverageValue calculation
+            # Target is 1.0, so return desired_replicas × 1000 (in milli-units)
+            # HPA will calculate: averageValue = (desired × 1000) ÷ current_replicas
+            # Then: desired = current × averageValue / 1.0 = current × (desired × 1000 ÷ current) / 1000 = desired ✅
+            target_millis = 1000  # Target is 1.0 in milli-units
+            metric_value_millis = dqn_desired_replicas * target_millis
+            
             metric_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
-                metricValue=dqn_desired_replicas * 1000,  # Convert to milli-units
-                metricValueFloat=float(dqn_desired_replicas)
+                metricValue=metric_value_millis,  # Return desired × target in milli-units
+                metricValueFloat=float(dqn_desired_replicas)  # For logging clarity
             )
             
             response = externalscaler_pb2.GetMetricsResponse(
@@ -154,8 +165,8 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             self.logger.info(f"DQN_GRPC: GetMetrics_success dqn_wants={dqn_desired_replicas} "
                            f"current={current_replicas} "
-                           f"returning_absolute_value={dqn_desired_replicas} "
-                           f"hpa_will_calculate=current*({dqn_desired_replicas}/1.0)={dqn_desired_replicas}")
+                           f"returning_total_millis={metric_value_millis} "
+                           f"hpa_will_calculate=current×({metric_value_millis}÷current÷1000)={dqn_desired_replicas}")
             return response
             
         except Exception as e:
@@ -165,11 +176,12 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             
-            # Return safe fallback (current replica count to maintain status quo)
+            # Return safe fallback (maintain current replica count)
             current_replicas = int(self.current_replicas_gauge._value._value) if self.current_replicas_gauge else 2
+            fallback_millis = current_replicas * 1000  # current × target
             fallback_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
-                metricValue=current_replicas * 1000,  # Maintain current state
+                metricValue=fallback_millis,
                 metricValueFloat=float(current_replicas)
             )
             return externalscaler_pb2.GetMetricsResponse(metricValues=[fallback_value])
