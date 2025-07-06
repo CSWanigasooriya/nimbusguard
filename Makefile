@@ -418,3 +418,26 @@ ports-stop:
 	@pkill -f "kubectl port-forward.*nimbusguard" || true
 	@pkill -f "kubectl port-forward.*kubeflow" || true
 	@echo "✅ All port forwarding stopped"
+
+# Experimental comparison targets
+.PHONY: test-hpa-baseline test-dqn-baseline
+
+test-hpa-baseline: ## Run HPA-only test with deterministic load
+	@echo "🧪 Starting HPA baseline test with deterministic load..."
+	kubectl delete scaledobjects --all -n nimbusguard --ignore-not-found=true
+	kubectl scale deployment consumer --replicas=1 -n nimbusguard
+	kubectl apply -f kubernetes-manifests/components/consumer/hpa.yaml
+	sleep 10
+	kubectl apply -f kubernetes-manifests/components/load-generator/job-comparison-baseline.yaml -n nimbusguard
+	@echo "✅ HPA test started. Monitor with: kubectl logs -f job/load-test-comparison-baseline"
+	@echo "⏱️  Test duration: 30 minutes"
+
+test-dqn-baseline: ## Run DQN test with identical deterministic load  
+	@echo "🧠 Starting DQN test with identical deterministic load..."
+	kubectl delete hpa --all -n nimbusguard --ignore-not-found=true
+	kubectl scale deployment consumer --replicas=1 -n nimbusguard
+	kubectl apply -k kubernetes-manifests/overlays/development/
+	sleep 30  # Wait for DQN to initialize
+	kubectl apply -f kubernetes-manifests/components/load-generator/job-comparison-baseline.yaml -n nimbusguard
+	@echo "✅ DQN test started. Monitor with: kubectl logs -f job/load-test-comparison-baseline"
+	@echo "⏱️  Test duration: 30 minutes"

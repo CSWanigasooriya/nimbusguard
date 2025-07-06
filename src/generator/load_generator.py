@@ -284,6 +284,18 @@ LOAD_TESTS = {
         memory_size=50,
         duration=25,
         async_mode="false"  # Keep one synchronous test for comparison
+    ),
+    
+    'comparison_pattern': LoadTest(
+        name="HPA vs DQN Comparison Pattern",
+        description="Deterministic pattern for fair HPA vs DQN comparison with multiple phases",
+        concurrent_requests=8,
+        total_requests=100,  # More requests for 30-minute test
+        cpu_intensity=7,
+        memory_size=120,
+        duration=20,
+        async_mode="true",
+        delay_between_requests=18.0  # 100 requests over 30 minutes = ~18 second intervals
     )
 }
 
@@ -295,13 +307,23 @@ async def main():
     parser.add_argument('--cleanup', action='store_true', help='Cleanup service memory before starting')
     parser.add_argument('--monitor', action='store_true', help='Monitor service status during tests')
     parser.add_argument('--list', action='store_true', help='List available load tests')
+    parser.add_argument('--seed', type=int, help='Random seed for deterministic testing (for comparison mode)')
+    parser.add_argument('--duration', type=int, help='Override total test duration in seconds')
     
     args = parser.parse_args()
+    
+    # Set random seed for deterministic testing
+    if args.seed is not None:
+        import random
+        import numpy as np
+        random.seed(args.seed)
+        np.random.seed(args.seed) if 'numpy' in sys.modules else None
+        logger.info(f"🎲 Using deterministic seed: {args.seed}")
     
     if args.list:
         print("Available load tests:")
         for key, test in LOAD_TESTS.items():
-            print(f"  {key:12} - {test.description}")
+            print(f"  {key:18} - {test.description}")
         return
     
     async with LoadGenerator(args.url) as generator:
@@ -319,7 +341,24 @@ async def main():
         if args.test == 'all':
             logger.info("🚀 Running ALL load tests...")
             for test_name in LOAD_TESTS.keys():
-                await generator.run_load_test(LOAD_TESTS[test_name])
+                test_config = LOAD_TESTS[test_name]
+                
+                # Override duration if specified
+                if args.duration:
+                    test_config = LoadTest(
+                        name=test_config.name,
+                        description=f"{test_config.description} (duration override: {args.duration}s)",
+                        concurrent_requests=test_config.concurrent_requests,
+                        total_requests=max(test_config.total_requests, args.duration // 10),  # Scale requests with duration
+                        cpu_intensity=test_config.cpu_intensity,
+                        memory_size=test_config.memory_size,
+                        duration=test_config.duration,  # Keep individual request duration same
+                        async_mode=test_config.async_mode,
+                        delay_between_requests=max(0.1, args.duration / max(test_config.total_requests, args.duration // 10))
+                    )
+                    logger.info(f"⏱️  Duration override: {args.duration}s")
+                
+                await generator.run_load_test(test_config)
                 
                 if args.monitor:
                     await generator.monitor_service_status()
@@ -333,7 +372,24 @@ async def main():
                 logger.error(f"❌ Unknown test: {args.test}")
                 sys.exit(1)
             
-            await generator.run_load_test(LOAD_TESTS[args.test])
+            test_config = LOAD_TESTS[args.test]
+            
+            # Override duration if specified (for comparison testing)
+            if args.duration:
+                test_config = LoadTest(
+                    name=test_config.name,
+                    description=f"{test_config.description} (duration override: {args.duration}s)",
+                    concurrent_requests=test_config.concurrent_requests,
+                    total_requests=max(test_config.total_requests, args.duration // 10),  # Scale requests with duration
+                    cpu_intensity=test_config.cpu_intensity,
+                    memory_size=test_config.memory_size,
+                    duration=test_config.duration,  # Keep individual request duration same
+                    async_mode=test_config.async_mode,
+                    delay_between_requests=max(0.1, args.duration / max(test_config.total_requests, args.duration // 10))
+                )
+                logger.info(f"⏱️  Duration override: {args.duration}s for deterministic comparison")
+            
+            await generator.run_load_test(test_config)
             
             if args.monitor:
                 await generator.monitor_service_status()

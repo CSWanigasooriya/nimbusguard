@@ -130,40 +130,40 @@ SCALER_NAME = os.getenv("SCALER_NAME", "feature_scaler.gz")
 # 4. Fixed LSTM integration to use predictions from decision time, not future state
 # 5. Weighted reward components: Performance(40%) + Resource(30%) + Health(20%) + Cost(10%)
 
-# The adapter uses **5 scientifically selected raw features** identified through advanced statistical analysis using 6 rigorous methods (Mutual Information, Random Forest, Correlation Analysis, RFECV, Statistical Significance, and VIF Analysis) from 894 real per-minute decision points. These are combined with **6 LSTM temporal features** for predictive intelligence, creating a total of **11 features** with zero overlap and no redundancy.
+# The adapter uses **9 scientifically selected raw features** identified through advanced statistical analysis using 6 rigorous methods (Mutual Information, Random Forest, Correlation Analysis, RFECV, Statistical Significance, and VIF Analysis) from 894 real per-minute decision points. Multi-dimensional metrics like resource_limits have been properly separated into CPU and memory components with correct aggregation across multiple pods, containers, and scraping sources. These are combined with **6 LSTM temporal features** for predictive intelligence, creating a total of **15 features** with zero overlap and no redundancy.
 
-# ## 🏗️ Clean Feature Architecture
+# ## 🏗️ Clean Feature Architecture - Multi-Dimensional Fixed ✅
 
 # The system uses a **clean separation** approach with **zero redundancy**:
 
-# ### 📊 RAW BASE FEATURES (5)
-# Current system state observations without any temporal computations:
-# 1. **Scaling Issues** (`kube_deployment_status_replicas_unavailable`) - Score: 22.35
-# 2. **Pod Health** (`kube_pod_container_status_ready`) - Score: 21.85  
-# 3. **CPU Usage** (`process_cpu_seconds_total`) - Score: 17.55
-# 4. **HTTP Latency** (`http_request_duration_highr_seconds_sum`) - Score: 17.30
-# 5. **System Stability** (`kube_pod_container_status_restarts_total`) - Score: 16.40
+# ### 📊 RAW BASE FEATURES (9) - Multi-Dimensional Properly Handled
+# Current system state observations without any temporal processing or derived computations.
 
 # ### 🧠 LSTM TEMPORAL FEATURES (6)
 # Predictive intelligence and pattern-based features:
-# 1. **Predicted Response Time** (5-minute forecast)
-# 2. **Predicted Memory Usage** (5-minute forecast)  
-# 3. **Workload Trend Direction** (-1: decreasing, 0: stable, 1: increasing)
-# 4. **Pattern Confidence** (confidence in detected patterns)
-# 5. **Anomaly Score** (0-1 anomaly detection score)
-# 6. **Optimal Replicas Forecast** (LSTM's replica recommendation)
+# 1. **30-sec Load Pressure** - PROACTIVE: Load pressure forecast in 30 seconds
+# 2. **60-sec Load Pressure** - PROACTIVE: Load pressure forecast in 60 seconds  
+# 3. **Trend Velocity** - How fast the trend is changing (-1: decreasing, 0: stable, 1: increasing)
+# 4. **Pattern Detection** - Spike/gradual/cyclical pattern probabilities
+# 5. **Temporal Intelligence** - Pattern confidence and anomaly detection
+# 6. **Predictive Scaling** - LSTM's optimal replica recommendation
 
-# **Total: 11 features with ZERO overlap between raw metrics and temporal intelligence!**
+# **Total: 15 features (9 multi-dimensional base + 6 LSTM) with ZERO overlap and proper aggregation!**
 
 # CLEAN FEATURE ARCHITECTURE: Raw base features + LSTM temporal features (no computed temporal features)
 
 # Raw base features (current state observations) - exactly as selected by balanced feature_selector.py
+# FIXED: Separate CPU and memory resource limits into distinct features
 BASE_FEATURE_ORDER = [
-    'http_request_duration_highr_seconds_bucket',   # HTTP Traffic patterns
-    'process_resident_memory_bytes',                # Memory resource usage  
-    'process_cpu_seconds_total',                    # CPU resource usage
-    'scrape_samples_scraped',                       # Health monitoring
-    'http_response_size_bytes_sum'                  # Response size patterns
+    'kube_deployment_status_replicas_unavailable',       # 1. Current unavailable replicas
+    'kube_pod_container_status_ready',                   # 2. Current pod readiness
+    'kube_deployment_spec_replicas',                     # 3. Desired replica count
+    'kube_pod_container_resource_limits_cpu',            # 4. Current CPU limits in cores (separated)
+    'kube_pod_container_resource_limits_memory',         # 5. Current memory limits in bytes (separated)
+    'kube_pod_container_status_running',                 # 6. Current running containers
+    'kube_deployment_status_observed_generation',        # 7. Current deployment generation
+    'node_network_up',                                   # 8. Current network status
+    'kube_pod_container_status_last_terminated_exitcode' # 9. Container termination status (statistically selected)
 ]
 
 # LSTM temporal features (PURE temporal intelligence - no current state redundancy)
@@ -176,7 +176,7 @@ LSTM_FEATURE_ORDER = [
     'pattern_type_cyclical',                        # LSTM: Probability of cyclical pattern (0-1)
 ]
 
-# Clean feature architecture: 5 raw base + 6 LSTM temporal = 11 total features (no redundancy)
+# Clean feature architecture: 9 raw base + 6 LSTM temporal = 15 total features (no redundancy)
 FEATURE_ORDER = BASE_FEATURE_ORDER + LSTM_FEATURE_ORDER
 
 # Exploration parameters for epsilon-greedy strategy
@@ -343,12 +343,12 @@ class CombinedDQNTrainer:
             return np.zeros(len(self.feature_order))
         
         try:
-            # Scale the 5 raw base features from Prometheus with proper feature names
+            # Scale the 9 raw base features from Prometheus with proper feature names
             raw_features = [state_dict.get(feat, 0.0) for feat in BASE_FEATURE_ORDER]
             
-            # Create DataFrame with proper feature names to avoid sklearn warning
-            raw_features_df = pd.DataFrame([raw_features], columns=BASE_FEATURE_ORDER)
-            scaled_raw_features = scaler.transform(raw_features_df)
+            # Transform numpy array to maintain consistency with how scaler was fitted (no feature names)
+            raw_features_array = np.array([raw_features])
+            scaled_raw_features = scaler.transform(raw_features_array)
             
             # Get LSTM features with enhanced importance for temporal predictions
             lstm_features = []
@@ -758,18 +758,22 @@ class ScalingState(TypedDict):
 
 # --- Feature Engineering Helper ---
 def _ensure_raw_features(metrics: Dict[str, float]) -> Dict[str, float]:
-    """Ensure raw base features have fallback values - no computed features."""
+    """Ensure Kubernetes state features have fallback values - no computed features."""
     
-    # Raw feature defaults (no computations, no temporal features) - balanced selection
+    # Kubernetes state feature defaults (current state indicators)
     feature_defaults = {
-        'http_request_duration_highr_seconds_bucket': 0.0,   # Default no HTTP traffic bucket
-        'process_resident_memory_bytes': 100000000.0,        # Default ~100MB memory
-        'process_cpu_seconds_total': 0.0,                    # Default no CPU usage
-        'scrape_samples_scraped': 300.0,                     # Default ~300 samples per scrape
-        'http_response_size_bytes_sum': 0.0                  # Default no response size
+        'kube_deployment_status_replicas_unavailable': 0.0,                 # Default: no unavailable replicas (healthy)
+        'kube_pod_container_status_ready': 1.0,                             # Default: containers ready (healthy)
+        'kube_deployment_spec_replicas': 1.0,                               # Default: 1 desired replica
+        'kube_pod_container_resource_limits_cpu': 0.5,                      # Default: 0.5 CPU cores
+        'kube_pod_container_resource_limits_memory': 536870912,             # Default: 512MB in bytes
+        'kube_pod_container_status_running': 1.0,                           # Default: containers running (healthy)
+        'kube_deployment_status_observed_generation': 1.0,                  # Default: deployment generation 1
+        'node_network_up': 1.0,                                             # Default: network up (healthy)
+        'kube_pod_container_status_last_terminated_exitcode': 0.0,          # Default: 0 exit code (successful termination)
     }
     
-    # Apply defaults for missing raw base features only
+    # Apply defaults for missing Kubernetes state features only
     for feature, default_value in feature_defaults.items():
         if feature not in metrics or metrics[feature] == 0:
             metrics[feature] = default_value
@@ -785,22 +789,34 @@ async def get_live_metrics(state: ScalingState, is_next_state: bool = False) -> 
     from datetime import datetime
     current_time = datetime.now()
     
-    # Raw base feature queries (exactly the 5 balanced selected features - no computed temporal features)
+    # FIXED: Multi-dimensional Kubernetes state queries with proper aggregation
     queries = {
-        # 1. HTTP Traffic patterns - Request duration bucket
-        "http_request_duration_highr_seconds_bucket": 'sum(http_request_duration_highr_seconds_bucket{job="prometheus.scrape.nimbusguard_consumer"}) or sum(http_request_duration_highr_seconds_bucket{instance="consumer:8000"}) or sum(http_request_duration_highr_seconds_bucket)',
+        # 1. Deployment unavailable replicas (single value per deployment, deduplicate across scraping sources)
+        "kube_deployment_status_replicas_unavailable": f'max(kube_deployment_status_replicas_unavailable{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}}) or vector(0)',
         
-        # 2. Memory resource usage - Process resident memory
-        "process_resident_memory_bytes": 'sum(process_resident_memory_bytes{job="prometheus.scrape.nimbusguard_consumer"}) or sum(process_resident_memory_bytes{instance="consumer:8000"}) or sum(process_resident_memory_bytes)',
+        # 2. Pod container readiness (sum across all consumer containers, handle multiple pods)
+        "kube_pod_container_status_ready": f'sum(kube_pod_container_status_ready{{namespace="{TARGET_NAMESPACE}",pod=~"{TARGET_DEPLOYMENT}-.*"}}) or sum(kube_pod_container_status_ready{{namespace="{TARGET_NAMESPACE}"}})',
         
-        # 3. CPU resource usage - Process CPU seconds total
-        "process_cpu_seconds_total": f'sum(rate(process_cpu_seconds_total{{job="prometheus.scrape.nimbusguard_consumer"}}[5m])) * 100 or sum(rate(process_cpu_seconds_total{{instance="consumer:8000"}}[5m])) * 100 or sum(rate(process_cpu_seconds_total[5m])) * 100',
+        # 3. Desired replica count (single value per deployment, deduplicate)
+        "kube_deployment_spec_replicas": f'max(kube_deployment_spec_replicas{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}}) or vector(1)',
         
-        # 4. Health monitoring - Scrape samples scraped
-        "scrape_samples_scraped": 'sum(scrape_samples_scraped{job="prometheus.scrape.nimbusguard_consumer"}) or sum(scrape_samples_scraped{instance="consumer:8000"}) or sum(scrape_samples_scraped)',
+        # 4. Running containers (sum across all consumer containers)
+        "kube_pod_container_status_running": f'sum(kube_pod_container_status_running{{namespace="{TARGET_NAMESPACE}",pod=~"{TARGET_DEPLOYMENT}-.*"}}) or sum(kube_pod_container_status_running{{namespace="{TARGET_NAMESPACE}"}})',
         
-        # 5. Response size patterns - HTTP response size sum
-        "http_response_size_bytes_sum": 'sum(http_response_size_bytes_sum{job="prometheus.scrape.nimbusguard_consumer"}) or sum(http_response_size_bytes_sum{instance="consumer:8000"}) or sum(http_response_size_bytes_sum)'
+        # 5. Deployment generation (single value per deployment, deduplicate)
+        "kube_deployment_status_observed_generation": f'max(kube_deployment_status_observed_generation{{deployment="{TARGET_DEPLOYMENT}",namespace="{TARGET_NAMESPACE}"}}) or vector(1)',
+        
+        # 6. CPU resource limits (sum across all consumer containers with CPU resource)
+        "kube_pod_container_resource_limits_cpu": f'sum(kube_pod_container_resource_limits{{resource="cpu",namespace="{TARGET_NAMESPACE}",pod=~"{TARGET_DEPLOYMENT}-.*"}}) or sum(kube_pod_container_resource_limits{{resource="cpu",namespace="{TARGET_NAMESPACE}"}}) or vector(0.5)',
+        
+        # 7. Memory resource limits (sum across all consumer containers with memory resource)
+        "kube_pod_container_resource_limits_memory": f'sum(kube_pod_container_resource_limits{{resource="memory",namespace="{TARGET_NAMESPACE}",pod=~"{TARGET_DEPLOYMENT}-.*"}}) or sum(kube_pod_container_resource_limits{{resource="memory",namespace="{TARGET_NAMESPACE}"}}) or vector(536870912)',
+        
+        # 8. Network status (check if any nodes have network up - cluster-wide indicator)
+        "node_network_up": 'sum(up{job=~".*node.*"}) or sum(up{job="node-exporter"}) or sum(node_network_up) or vector(1)',
+        
+        # 9. Container last terminated exit code (termination health indicator)
+        "kube_pod_container_status_last_terminated_exitcode": f'max(kube_pod_container_status_last_terminated_exitcode{{namespace=\"{TARGET_NAMESPACE}\",pod=~\"{TARGET_DEPLOYMENT}-.*\"}}) or max(kube_pod_container_status_last_terminated_exitcode{{namespace=\"{TARGET_NAMESPACE}\"}}) or vector(0)',
     }
     # CLEAN ARCHITECTURE: No computed temporal features (moving averages, deviations, etc.)
     # All temporal intelligence now comes from LSTM predictions
@@ -872,17 +888,30 @@ async def get_live_metrics(state: ScalingState, is_next_state: bool = False) -> 
     
     CURRENT_REPLICAS_GAUGE.set(current_replicas)
     
-    # Enhanced logging with balanced feature architecture
-    http_bucket = metrics.get('http_request_duration_highr_seconds_bucket', 0)
-    memory_bytes = metrics.get('process_resident_memory_bytes', 0)
-    cpu_usage = metrics.get('process_cpu_seconds_total', 0)
-    scrape_samples = metrics.get('scrape_samples_scraped', 0)
-    response_size = metrics.get('http_response_size_bytes_sum', 0)
+    # Enhanced logging with Kubernetes state architecture
+    replicas_unavailable = metrics.get('kube_deployment_status_replicas_unavailable', 0)
+    pods_ready = metrics.get('kube_pod_container_status_ready', 1)
+    desired_replicas = metrics.get('kube_deployment_spec_replicas', 1)
+    containers_running = metrics.get('kube_pod_container_status_running', 1)
+    deployment_generation = metrics.get('kube_deployment_status_observed_generation', 1)
+    cpu_limits = metrics.get('kube_pod_container_resource_limits_cpu', 0.5)
+    memory_limits = metrics.get('kube_pod_container_resource_limits_memory', 536870912)
+    network_up = metrics.get('node_network_up', 1)
+    terminated_exitcode = metrics.get('kube_pod_container_status_last_terminated_exitcode', 0)
     
-    logger.info(f"RAW_FEATURES: http_bucket={http_bucket:.1f} "
-                f"memory_mb={memory_bytes/1000000:.1f} cpu={cpu_usage:.2f} "
-                f"scrape_samples={scrape_samples:.0f} response_size={response_size:.0f} "
+    logger.info(f"KUBERNETES_STATE: unavailable_replicas={replicas_unavailable} "
+                f"pods_ready={pods_ready} desired_replicas={desired_replicas} "
+                f"containers_running={containers_running} deployment_gen={deployment_generation} "
                 f"current_replicas={current_replicas}")
+    
+    logger.info(f"RESOURCE_LIMITS: cpu_cores={cpu_limits:.2f} "
+                f"memory_mb={memory_limits/1000000:.1f} network_up={network_up} "
+                f"last_exit_code={terminated_exitcode}")
+    
+    logger.info(f"MULTI_DIMENSIONAL: aggregated_across_pods=consumer-* "
+                f"cpu_sum={cpu_limits:.2f} memory_sum={memory_limits/1000000:.1f}MB "
+                f"ready_containers={pods_ready} running_containers={containers_running} "
+                f"termination_health={terminated_exitcode}")
     
     # Log LSTM proactive analysis if available
     if lstm_features:
@@ -924,12 +953,12 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
     metrics = state['current_metrics'].copy()
     current_replicas = state['current_replicas']
     
-    # FIXED: Only scale the 5 raw base features from Prometheus with proper feature names
+    # FIXED: Only scale the 9 raw base features from Prometheus with proper feature names
     raw_features = [metrics.get(feat, 0.0) for feat in BASE_FEATURE_ORDER]
     
-    # Create DataFrame with proper feature names to avoid sklearn warning
-    raw_features_df = pd.DataFrame([raw_features], columns=BASE_FEATURE_ORDER)
-    scaled_raw_features = scaler.transform(raw_features_df)
+    # Transform numpy array to maintain consistency with how scaler was fitted (no feature names)
+    raw_features_array = np.array([raw_features])
+    scaled_raw_features = scaler.transform(raw_features_array)
     
     # Get LSTM features separately (these are already in appropriate ranges)
     lstm_features = [metrics.get(feat, 0.0) for feat in LSTM_FEATURE_ORDER]
@@ -1138,39 +1167,45 @@ async def get_dqn_recommendation(state: ScalingState) -> Dict[str, Any]:
         else:
             # Enhanced fallback: Rule-based logic with balanced selected features
             logger.info("DQN_FALLBACK: using_rule_based_logic model_not_available")
-            http_bucket = metrics.get('http_request_duration_highr_seconds_bucket', 0)
-            memory_bytes = metrics.get('process_resident_memory_bytes', 100000000)  # bytes
-            cpu_usage = metrics.get('process_cpu_seconds_total', 0)  # %
-            scrape_samples = metrics.get('scrape_samples_scraped', 300)
-            response_size = metrics.get('http_response_size_bytes_sum', 0)
+            
+            # Get current Kubernetes state features for fallback decision
+            replicas_unavailable = metrics.get('kube_deployment_status_replicas_unavailable', 0)
+            pods_ready = metrics.get('kube_pod_container_status_ready', 1)
+            desired_replicas = metrics.get('kube_deployment_spec_replicas', 1)
+            containers_running = metrics.get('kube_pod_container_status_running', 1)
+            deployment_generation = metrics.get('kube_deployment_status_observed_generation', 1)
+            cpu_limits = metrics.get('kube_pod_container_resource_limits_cpu', 0.5)
+            memory_limits = metrics.get('kube_pod_container_resource_limits_memory', 536870912)
+            network_up = metrics.get('node_network_up', 1)
+            terminated_exitcode = metrics.get('kube_pod_container_status_last_terminated_exitcode', 0)
             
             # Generate analysis for fallback decision
             analysis = decision_reasoning.analyze_metrics(metrics, current_replicas)
             
-            # Enhanced rule-based decision with raw feature reasoning
+            # Enhanced rule-based decision with Kubernetes state features
             reasoning_factors = []
             
-            # Decision logic based on balanced selected features
-            memory_mb = memory_bytes / 1000000  # Convert to MB for readability
+            # Decision logic based on multi-dimensional Kubernetes state
+            memory_mb = memory_limits / 1000000  # Convert to MB for readability
             
-            if http_bucket > 1000 or memory_mb > 500 or scrape_samples < 100:  # System stress
+            if replicas_unavailable > 0 or pods_ready < 0.8 or containers_running < 0.8:  # Health issues
                 action_name = "Scale Up"
-                reasoning_factors.append(f"System stress detected: {http_bucket:.0f} HTTP buckets, {memory_mb:.1f}MB memory, {scrape_samples:.0f} scrape samples")
-                reasoning_factors.append("Scaling up to improve system performance and health")
+                reasoning_factors.append(f"Health issues detected: {replicas_unavailable} unavailable, {pods_ready:.1f} ready ratio, {containers_running:.1f} running ratio")
+                reasoning_factors.append("Scaling up to improve system health and availability")
                 risk_level = "high"
-            elif cpu_usage > 80 or response_size > 100000:  # High load
+            elif cpu_limits > 2.0 or memory_mb > 800 or terminated_exitcode > 0:  # Resource pressure
                 action_name = "Scale Up"
-                reasoning_factors.append(f"High load detected: {cpu_usage:.1f}% CPU, {response_size:.0f} response size")
-                reasoning_factors.append("Scaling up to handle increased workload")
+                reasoning_factors.append(f"Resource pressure: {cpu_limits:.1f} CPU cores, {memory_mb:.1f}MB memory, exit code {terminated_exitcode}")
+                reasoning_factors.append("Scaling up to handle resource pressure")
                 risk_level = "medium"
-            elif cpu_usage < 20 and http_bucket < 100 and current_replicas > 1 and scrape_samples > 200:  # Low load
+            elif cpu_limits < 1.0 and memory_mb < 300 and current_replicas > 1 and network_up > 0.8:  # Low utilization
                 action_name = "Scale Down"
-                reasoning_factors.append(f"Low load detected: {cpu_usage:.1f}% CPU, {http_bucket:.0f} HTTP buckets, healthy scrape samples")
+                reasoning_factors.append(f"Low utilization: {cpu_limits:.1f} CPU cores, {memory_mb:.1f}MB memory, healthy network")
                 reasoning_factors.append(f"System has excess capacity with {current_replicas} replicas - can optimize costs")
                 risk_level = "low"
             else:
                 action_name = "Keep Same"
-                reasoning_factors.append(f"Moderate load: {cpu_usage:.1f}% CPU, {http_bucket:.0f} HTTP buckets, {memory_mb:.1f}MB memory")
+                reasoning_factors.append(f"Balanced state: {cpu_limits:.1f} CPU cores, {memory_mb:.1f}MB memory, {desired_replicas} replicas")
                 reasoning_factors.append("System operating within acceptable parameters")
                 risk_level = "low"
             
@@ -1223,19 +1258,19 @@ async def validate_with_llm(state: ScalingState) -> Dict[str, Any]:
     logger.info("NODE_START: validate_with_llm")
     logger.info("=" * 60)
     
-    # Check if LLM validation is disabled
+    # Check if LLM validation is enabled
     if not ENABLE_LLM_VALIDATION:
-        logger.info("LLM_VALIDATION: disabled_by_config skipping")
-        return {"llm_validation_response": {"approved": True, "reason": "LLM validation disabled by configuration.", "confidence": "medium"}}
+        logger.info("SAFETY_MONITOR: disabled_by_config skipping")
+        return {"llm_validation_response": {"approved": True, "reason": "Safety monitor disabled by configuration.", "confidence": "medium"}}
     
     if not validator_agent:
         if ENABLE_LLM_VALIDATION:
-            logger.warning("LLM_VALIDATION: agent_not_initialized skipping")
-            return {"llm_validation_response": {"approved": True, "reason": "LLM validation enabled but agent not available.", "confidence": "low"}}
+            logger.warning("SAFETY_MONITOR: agent_not_initialized skipping")
+            return {"llm_validation_response": {"approved": True, "reason": "Safety monitor enabled but agent not available.", "confidence": "low"}}
         else:
             # This case should not happen since we check ENABLE_LLM_VALIDATION earlier, but adding for safety
-            logger.debug("LLM_VALIDATION: agent_not_initialized validation_disabled")
-            return {"llm_validation_response": {"approved": True, "reason": "LLM validation disabled by configuration.", "confidence": "medium"}}
+            logger.debug("SAFETY_MONITOR: agent_not_initialized validation_disabled")
+            return {"llm_validation_response": {"approved": True, "reason": "Safety monitor disabled by configuration.", "confidence": "medium"}}
 
     # Handle missing dqn_prediction gracefully
     dqn_prediction = state.get('dqn_prediction', {'action_name': 'Keep Same'})
@@ -1257,151 +1292,168 @@ async def validate_with_llm(state: ScalingState) -> Dict[str, Any]:
     pressure_change_60s = next_60sec - baseline_pressure
     
     # Create comprehensive validation prompt with LSTM intelligence
-    prompt = f"""You are an expert Kubernetes autoscaling validator with access to advanced LSTM predictive intelligence. Analyze the following DQN scaling recommendation.
+    prompt = f"""You are a SAFETY MONITOR for Kubernetes autoscaling. Your ONLY role is to detect and prevent EXTREME or DANGEROUS scaling decisions that could harm the cluster.
 
-DQN RECOMMENDATION ANALYSIS:
+🚨 CRITICAL: Only intervene for EXTREME decisions. Allow normal DQN learning to proceed uninterrupted.
+
+DQN SCALING DECISION TO EVALUATE:
 - Recommended Action: {action_name}
-- DQN Confidence: {dqn_confidence} 
-- Risk Assessment: {dqn_risk}
-- Current Deployment: {TARGET_DEPLOYMENT} in namespace {TARGET_NAMESPACE}
 - Current Replicas: {state['current_replicas']}
+- DQN Confidence: {dqn_confidence}
+- DQN Risk Assessment: {dqn_risk}
+
+DQN REASONING FACTORS:
+{chr(10).join(f"- {factor}" for factor in dqn_explanation.get('reasoning_factors', ['No DQN reasoning available']))}
 
 CURRENT SYSTEM METRICS:
 - Pod Readiness: {metrics.get('kube_pod_container_status_ready', 1.0):.1%}
 - Unavailable Replicas: {metrics.get('kube_deployment_status_replicas_unavailable', 0)}
 - CPU Usage: {metrics.get('process_cpu_seconds_total', 0):.1f}%
-- HTTP Latency Sum: {metrics.get('http_request_duration_highr_seconds_sum', 0):.3f}s
+- HTTP Latency: {metrics.get('http_request_duration_highr_seconds_sum', 0):.3f}s
 - Container Restarts: {metrics.get('kube_pod_container_status_restarts_total', 0)}
 
-LSTM PREDICTIVE INTELLIGENCE (CRITICAL FOR PROACTIVE SCALING):
+LSTM PREDICTIVE INTELLIGENCE:
 - Next 30sec Load Pressure: {next_30sec:.2f} (change: {pressure_change_30s:+.2f})
 - Next 60sec Load Pressure: {next_60sec:.2f} (change: {pressure_change_60s:+.2f})
-- Trend Velocity: {trend_velocity:+.2f} (negative=slowing, positive=accelerating)
-- LSTM Optimal Replicas: {optimal_replicas:.1f} (AI recommendation)
-- Pressure Trend: {"INCREASING" if max(pressure_change_30s, pressure_change_60s) > 0.1 else "DECREASING" if max(pressure_change_30s, pressure_change_60s) < -0.1 else "STABLE"}
+- Trend Velocity: {trend_velocity:+.2f}
+- LSTM Optimal Replicas: {optimal_replicas:.1f}
 
-DQN REASONING FACTORS:
-{chr(10).join(f"- {factor}" for factor in dqn_explanation.get('reasoning_factors', ['No reasoning available']))}
+🔍 EXTREME DECISION CRITERIA (Block these ONLY):
 
-VALIDATION REQUIREMENTS:
-1. Analyze if the DQN decision makes sense given both current and predicted metrics
-2. Provide expert commentary on the scaling decision quality
-3. Identify any potential risks or missed opportunities
-4. Assess the balance between proactive (LSTM) and reactive (current) considerations
-5. Rate the decision quality and provide constructive feedback
+1. **RUNAWAY SCALING**: Scaling to >15 replicas without clear justification
+2. **RESOURCE EXHAUSTION**: Scaling up when cluster resources are constrained  
+3. **MASSIVE OVER-SCALING**: Requesting 3x+ more replicas than LSTM suggests
+4. **DANGEROUS DOWN-SCALING**: Scaling to 0 or very low when load is increasing
+5. **RAPID OSCILLATION**: Frequent large scaling changes without stabilization
+6. **CONTRADICTS LSTM**: Scaling opposite to strong LSTM trend predictions
+7. **IGNORES HIGH RISK**: DQN marked decision as "high" risk but proceeding anyway
 
-ANALYSIS FRAMEWORK:
-- Does the decision align with LSTM temporal intelligence?
-- Are there any red flags in current system metrics?
-- Is this decision likely to maintain good performance?
-- What are the potential consequences of this action?
-- How confident are you in this scaling decision?
+⚠️  **DEFAULT: APPROVE** - Only block if decision meets extreme criteria above.
 
-IMPORTANT: You may use READ-ONLY Kubernetes tools to inspect cluster state if needed. 
-DO NOT attempt to scale, modify, or perform any write operations. Only inspect current state.
+🛡️  **MCP ACCESS**: You have read-only access to Kubernetes cluster via MCP tools if needed for safety assessment.
 
-CRITICAL: Respond with ONLY a valid JSON object. No markdown, no explanations, just the JSON.
+SAFETY ASSESSMENT QUESTIONS:
+- Does the DQN reasoning justify this decision?
+- Is this decision likely to cause cluster instability?
+- Does this risk resource exhaustion or service outage?
+- Is the DQN risk assessment reasonable given the circumstances?
+- Does this contradict strong LSTM predictions without good reason?
 
-Example format:
+IMPORTANT: You may use READ-ONLY Kubernetes tools to inspect cluster state if needed.
+DO NOT attempt to scale, modify, or perform any write operations.
+
+CRITICAL: Respond with ONLY a valid JSON object. No markdown, no explanations.
+
+Example for NORMAL decision (approve):
 {{
     "approved": true,
+    "confidence": "high", 
+    "reasoning": "DQN reasoning is sound and decision is within safe parameters",
+    "safety_risk": "none",
+    "extreme_factors": [],
+    "cluster_check_performed": false
+}}
+
+Example for EXTREME decision (block):
+{{
+    "approved": false,
     "confidence": "high",
-    "reasoning": "DQN decision aligns well with LSTM predictions and current metrics",
-    "risk_factors": ["minimal risk identified"],
-    "benefits": ["maintains system stability", "cost effective"],
-    "alternative_actions": [],
-    "cluster_check_performed": false,
-    "validation_score": 0.8
+    "reasoning": "EXTREME: Scaling to 25 replicas risks cluster resource exhaustion despite DQN confidence",
+    "safety_risk": "high",
+    "extreme_factors": ["runaway_scaling", "resource_exhaustion_risk"],
+    "alternative_suggestion": "Scale more gradually to 8-10 replicas first",
+    "cluster_check_performed": true
 }}
 
 Your JSON response:"""
 
     try:
-        logger.info(f"LLM_VALIDATION: validating action={action_name} dqn_confidence={dqn_confidence}")
+        logger.info(f"SAFETY_MONITOR: evaluating action={action_name} dqn_confidence={dqn_confidence}")
         
         # Invoke the validator agent
         response = await validator_agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
         last_message = response['messages'][-1].content
         
-        logger.info(f"LLM_VALIDATION: response_received chars={len(last_message)}")
+        logger.info(f"SAFETY_MONITOR: response_received chars={len(last_message)}")
         
         # Debug: Log first 200 chars of response to see what we're getting
         if len(last_message) > 0:
-            logger.debug(f"LLM_RAW_RESPONSE: {last_message[:200]}...")
+            logger.debug(f"SAFETY_RAW_RESPONSE: {last_message[:200]}...")
         
         # Enhanced JSON parsing with fallback
         validation_result = parse_llm_json_response(last_message, action_name)
         
-        # Enhanced logging with validation outcome - single comprehensive log
-        approval_status = "APPROVED" if validation_result['approved'] else "REJECTED"
-        logger.info(f"LLM_VALIDATION: {approval_status} confidence={validation_result['confidence']}")
+        # Enhanced logging with safety assessment outcome
+        safety_status = "BLOCKED" if not validation_result['approved'] else "APPROVED"
+        safety_risk = validation_result.get('safety_risk', 'none')
+        logger.info(f"SAFETY_MONITOR: {safety_status} risk_level={safety_risk}")
         
-        # Log validation reasoning only if detailed reasoning is enabled
-        if ENABLE_DETAILED_REASONING:
-            logger.info("LLM_REASONING: detailed_analysis")
-            logger.info(f"LLM_DETAILS: approved={validation_result['approved']} "
-                       f"confidence={validation_result['confidence']} "
-                       f"score={validation_result.get('validation_score', 'N/A')}")
+        # Log safety details only if decision was blocked or high risk detected
+        if not validation_result['approved'] or safety_risk in ['high', 'medium']:
+            logger.warning("SAFETY_ALERT: detailed_analysis")
+            logger.warning(f"SAFETY_DECISION: approved={validation_result['approved']} "
+                         f"confidence={validation_result['confidence']} "
+                         f"risk={safety_risk}")
             
-            logger.info(f"LLM_REASONING_TEXT: {validation_result['reasoning']}")
+            logger.warning(f"SAFETY_REASONING: {validation_result['reasoning']}")
             
-            if validation_result.get('risk_factors'):
-                logger.info(f"LLM_RISKS: count={len(validation_result['risk_factors'])}")
-                for i, risk in enumerate(validation_result['risk_factors'][:3]):  # Top 3 risks
-                    logger.info(f"LLM_RISK_{i+1}: {risk}")
+            if validation_result.get('extreme_factors'):
+                logger.warning(f"EXTREME_FACTORS: count={len(validation_result['extreme_factors'])}")
+                for i, factor in enumerate(validation_result['extreme_factors']):
+                    logger.warning(f"EXTREME_FACTOR_{i+1}: {factor}")
             
-            if validation_result.get('benefits'):
-                logger.info(f"LLM_BENEFITS: count={len(validation_result['benefits'])}")
-                for i, benefit in enumerate(validation_result['benefits'][:2]):  # Top 2 benefits
-                    logger.info(f"LLM_BENEFIT_{i+1}: {benefit}")
+            if validation_result.get('alternative_suggestion'):
+                logger.info(f"SAFETY_ALTERNATIVE: {validation_result['alternative_suggestion']}")
+        else:
+            # Normal approval - minimal logging to avoid noise
+            logger.info(f"SAFETY_APPROVED: confidence={validation_result['confidence']}")
         
         if not validation_result['approved']:
-            logger.warning(f"LLM_REJECTION: reason={validation_result['reasoning']}")
-            if validation_result.get('alternative_actions'):
-                alternatives = ','.join(validation_result['alternative_actions'])
-                logger.info(f"LLM_ALTERNATIVES: {alternatives}")
+            logger.error(f"SCALING_BLOCKED: reason={validation_result['reasoning']}")
+            if validation_result.get('alternative_suggestion'):
+                logger.info(f"SUGGESTED_ALTERNATIVE: {validation_result['alternative_suggestion']}")
         
         logger.info("=" * 60)
         logger.info("NODE_END: validate_with_llm")
         return {"llm_validation_response": validation_result}
         
     except Exception as e:
-        logger.error(f"LLM_VALIDATION: failed error={e}")
+        logger.error(f"SAFETY_MONITOR: failed error={e}")
         
         # Check if this is a permission-related error or JSON parsing issue
         error_str = str(e).lower()
-        is_permission_error = any(keyword in error_str for keyword in 
+        is_permission_error = any(keyword in error_str for keyword in
                                  ['permission', 'forbidden', 'unauthorized', 'rbac', 'access denied'])
         is_parsing_error = 'json' in error_str or 'parse' in error_str
         
         if is_permission_error:
-            logger.warning("LLM_VALIDATION: permission_error_detected suggesting_disable")
-            logger.warning("LLM_VALIDATION: consider_setting ENABLE_LLM_VALIDATION=false")
+            logger.warning("SAFETY_MONITOR: permission_error_detected suggesting_disable")
+            logger.warning("SAFETY_MONITOR: consider_setting ENABLE_LLM_VALIDATION=false")
         elif is_parsing_error:
-            logger.warning("LLM_VALIDATION: json_parsing_issues_detected")
-            logger.warning("LLM_VALIDATION: llm_not_following_json_format")
+            logger.warning("SAFETY_MONITOR: json_parsing_issues_detected")
+            logger.warning("SAFETY_MONITOR: llm_not_following_json_format")
         
-        # Enhanced fallback validation
+        # Enhanced fallback - APPROVE by default for safety (preserve DQN learning)
         fallback_result = {
-            "approved": True,  # Default to approval when validation fails
+            "approved": True,  # Safety-first: only block explicitly dangerous decisions
             "confidence": "low",
-            "reasoning": f"Validation system error: {str(e)}. Defaulting to approval with caution.",
-            "risk_factors": ["Validation system unavailable", "Decision made without LLM oversight"],
-            "benefits": ["DQN recommendation preserved"],
-            "alternative_actions": ["Monitor system closely", "Consider manual review"],
+            "reasoning": f"Safety monitor error: {str(e)}. Defaulting to APPROVAL to preserve DQN learning.",
+            "safety_risk": "unknown",
+            "extreme_factors": ["safety_monitor_unavailable"],
+            "alternative_suggestion": "Monitor system closely - safety checks temporarily disabled",
             "cluster_check_performed": False,
             "validation_score": 0.3,
             "fallback_mode": True,
             "permission_error": is_permission_error
         }
         
-        logger.warning("LLM_VALIDATION: fallback_approved caution_mode")
+        logger.warning("SAFETY_MONITOR: fallback_approved preserving_dqn_learning")
         logger.info("=" * 60)
         logger.info("NODE_END: validate_with_llm")
         return {"llm_validation_response": fallback_result}
 
 def parse_llm_json_response(response_text: str, action_name: str) -> Dict[str, Any]:
-    """Parse LLM JSON response with robust error handling and fallbacks."""
+    """Parse LLM JSON response with robust error handling and safety-first fallbacks."""
     try:
         import re
         
@@ -1411,91 +1463,50 @@ def parse_llm_json_response(response_text: str, action_name: str) -> Dict[str, A
             json_str = json_match.group()
             parsed = json.loads(json_str)
             
-            # Validate required fields
+            # Validate required fields for safety monitoring
             required_fields = ['approved', 'confidence', 'reasoning']
             if all(field in parsed for field in required_fields):
                 
-                # Ensure all expected fields exist with defaults
-                defaults = {
-                    'risk_factors': [],
-                    'benefits': [],
-                    'alternative_actions': [],
-                    'cluster_check_performed': False,
-                    'validation_score': 0.5
+                # Ensure all expected safety fields exist with defaults
+                safety_defaults = {
+                    'safety_risk': parsed.get('safety_risk', 'none'),
+                    'extreme_factors': parsed.get('extreme_factors', []),
+                    'alternative_suggestion': parsed.get('alternative_suggestion', ''),
+                    'cluster_check_performed': parsed.get('cluster_check_performed', False),
+                    'validation_score': 0.8 if parsed.get('approved', True) else 0.3
                 }
                 
-                for key, default_value in defaults.items():
-                    if key not in parsed:
-                        parsed[key] = default_value
+                # Merge parsed response with safety defaults
+                result = {**parsed, **safety_defaults}
                 
-                return parsed
+                # Ensure confidence is valid
+                if result['confidence'] not in ['low', 'medium', 'high']:
+                    result['confidence'] = 'medium'
+                
+                return result
         
-        # If JSON parsing fails, try to extract key information
-        logger.warning("LLM_PARSING: json_failed attempting_text_analysis")
-        logger.debug(f"LLM_PARSING: failed_text={response_text[:300]}...")
+        # If JSON parsing failed, log and use safety fallback
+        logger.warning(f"LLM_PARSING: json_extraction_failed response_preview={response_text[:100]}")
         
-        # Enhanced text analysis fallback
-        text_lower = response_text.lower()
-        
-        # Count positive vs negative indicators
-        positive_indicators = ['approve', 'safe', 'good', 'reasonable', 'appropriate', 'valid', 'correct', 'fine', 'ok', 'yes']
-        negative_indicators = ['reject', 'deny', 'dangerous', 'risky', 'inappropriate', 'invalid', 'wrong', 'bad', 'no', 'unsafe']
-        
-        positive_count = sum(1 for indicator in positive_indicators if indicator in text_lower)
-        negative_count = sum(1 for indicator in negative_indicators if indicator in text_lower)
-        
-        # Determine approval based on indicator balance
-        if positive_count > negative_count:
-            approved = True
-        elif negative_count > positive_count:
-            approved = False
-        else:
-            approved = True  # Default to approval when unclear
-        
-        # Determine confidence based on language certainty
-        high_confidence_words = ['confident', 'certain', 'sure', 'clear', 'obvious', 'definitely']
-        low_confidence_words = ['uncertain', 'unsure', 'maybe', 'possibly', 'might', 'unclear', 'concerned']
-        
-        high_conf_count = sum(1 for word in high_confidence_words if word in text_lower)
-        low_conf_count = sum(1 for word in low_confidence_words if word in text_lower)
-        
-        if high_conf_count > low_conf_count and high_conf_count > 0:
-            confidence = 'high'
-        elif low_conf_count > high_conf_count and low_conf_count > 0:
-            confidence = 'low'
-        else:
-            confidence = 'medium'
-        
-        # Log the analysis for debugging
-        logger.info(f"LLM_TEXT_ANALYSIS: pos_indicators={positive_count} neg_indicators={negative_count} approved={approved} confidence={confidence}")
-        
-        return {
-            'approved': approved,
-            'confidence': confidence,
-            'reasoning': response_text[:500],  # First 500 chars
-            'risk_factors': ['JSON parsing failed - text analysis used'],
-            'benefits': [f'Action {action_name} analyzed via text parsing'],
-            'alternative_actions': [],
-            'cluster_check_performed': False,
-            'validation_score': 0.4,
-            'parsing_fallback': True
-        }
+    except json.JSONDecodeError as e:
+        logger.warning(f"LLM_PARSING: json_decode_error position={e.pos}")
         
     except Exception as e:
-        logger.error(f"  - ❌ JSON parsing completely failed: {e}")
-        
-        # Ultimate fallback
-        return {
-            'approved': True,
-            'confidence': 'low',
-            'reasoning': f'Complete parsing failure. Original response: {response_text[:200]}...',
-            'risk_factors': ['Complete validation parsing failure'],
-            'benefits': ['Preserving DQN recommendation'],
-            'alternative_actions': ['Manual review recommended'],
-            'cluster_check_performed': False,
-            'validation_score': 0.2,
-            'complete_fallback': True
-        }
+        logger.warning(f"LLM_PARSING: general_parsing_error error={e}")
+    
+    # SAFETY FALLBACK: Default to APPROVE for any parsing failures
+    # This preserves DQN learning and only blocks when LLM explicitly identifies extreme risk
+    return {
+        'approved': True,  # Safety-first: approve unless explicitly dangerous
+        'confidence': 'low',
+        'reasoning': f'Parsing failure, defaulting to APPROVE for safety. Response: {response_text[:200]}...',
+        'safety_risk': 'unknown',
+        'extreme_factors': ['parsing_failure'],
+        'alternative_suggestion': 'Monitor decision closely due to validation parsing failure',
+        'cluster_check_performed': False,
+        'validation_score': 0.5,
+        'fallback_mode': True
+    }
 
 def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     logger.info("NODE_START: plan_final_action")
@@ -1521,7 +1532,17 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     elif action_name == 'Scale Down': 
         new_replicas -= 1
     
-    final_decision = max(1, min(20, new_replicas))  # Never go below 1 or above 20 replicas (SAFETY CONSTRAINT)
+    # SAFETY OVERRIDE: If safety monitor blocks the decision, keep current replicas
+    if not llm_approved:
+        logger.warning(f"SAFETY_OVERRIDE: blocking_{action_name} maintaining_current_replicas={current_replicas}")
+        final_decision = current_replicas  # KEEP CURRENT - NO SCALING
+        decision_explanation['decision_factors'].append("SAFETY OVERRIDE: Extreme scaling decision blocked - maintaining current replica count")
+        decision_explanation['risk_mitigation'].append("CRITICAL: Dangerous scaling prevented by safety monitor")
+    else:
+        final_decision = max(1, min(20, new_replicas))  # Normal decision with safety constraints
+    
+    # Ensure we never go below 1 replica regardless of safety decisions
+    final_decision = max(1, final_decision)
     
     # Create comprehensive decision explanation
     decision_explanation = {
@@ -1550,10 +1571,10 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     
     # Add decision factors
     if llm_approved:
-        decision_explanation['decision_factors'].append("LLM validator approved the DQN recommendation")
+        decision_explanation['decision_factors'].append("Safety monitor found no extreme risks - DQN decision approved")
     else:
-        decision_explanation['decision_factors'].append("LLM validator rejected DQN recommendation - proceeding with caution")
-        decision_explanation['risk_mitigation'].append("Enhanced monitoring recommended due to LLM concerns")
+        decision_explanation['decision_factors'].append("SAFETY ALERT: Decision blocked due to extreme risk factors")
+        decision_explanation['risk_mitigation'].append("CRITICAL: Extreme scaling decision prevented by safety monitor")
     
     # Add confidence assessment
     overall_confidence = 'high'
@@ -1587,23 +1608,28 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     
     # Create comprehensive audit trail
     if 'dqn_prediction' in state and 'explanation' in dqn_prediction:
-        audit_trail = decision_reasoning.create_audit_trail(
-            explanation=dqn_prediction['explanation'],
-            final_decision=final_decision,
-            llm_validation=llm_validation
-        )
+        # Simple audit trail creation (inline)
+        audit_trail = {
+            'decision_id': f"dqn_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            'timestamp': datetime.now().isoformat(),
+            'current_replicas': current_replicas,
+            'final_decision': final_decision,
+            'dqn_action': action_name,
+            'dqn_confidence': dqn_confidence,
+            'safety_approved': llm_approved,
+            'safety_reasoning': llm_reasoning
+        }
         decision_explanation['audit_trail_id'] = audit_trail['decision_id']
     
     # Enhanced logging with complete decision reasoning
     logger.info(f"FINAL_DECISION: scale_from={current_replicas} scale_to={final_decision}")
-    logger.info(f"FINAL_CONFIDENCE: overall={overall_confidence} dqn={dqn_confidence} llm={llm_confidence}")
-    logger.info(f"FINAL_APPROVAL: llm_approved={llm_approved}")
+    logger.info(f"FINAL_CONFIDENCE: overall={overall_confidence} dqn={dqn_confidence} safety={llm_confidence}")
+    logger.info(f"SAFETY_STATUS: approved={llm_approved}")
     logger.info(f"PROMETHEUS: gauge_updated value={final_decision}")
     
     if ENABLE_DETAILED_REASONING:
         logger.info("FINAL_DECISION_ANALYSIS: detailed_breakdown")
         logger.info(f"FINAL_DECISION_ANALYSIS: action_path={action_name}_to_{decision_explanation['decision_pipeline']['final_decision']['action_executed']}")
-        logger.info(f"FINAL_DECISION_ANALYSIS: risk_level={dqn_risk}")
         logger.info(f"FINAL_DECISION_ANALYSIS: expected_outcomes_count={len(decision_explanation['expected_outcomes'])}")
         for i, outcome in enumerate(decision_explanation['expected_outcomes']):
             logger.info(f"FINAL_DECISION_ANALYSIS: outcome_{i+1}={outcome}")
@@ -1618,10 +1644,11 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
         logger.warning("LOW_CONFIDENCE: enhanced_monitoring_recommended")
         logger.warning("LOW_CONFIDENCE: consider_manual_review")
     
-    # Warning for LLM rejection but proceeding anyway
+    # CRITICAL warning for safety monitor blocking (extreme decisions only)
     if not llm_approved:
-        logger.warning("LLM_OVERRIDE: proceeding_despite_concerns")
-        logger.warning(f"LLM_REASONING: {llm_reasoning}")
+        logger.error("EXTREME_DECISION_BLOCKED: safety_monitor_intervention")
+        logger.error(f"SAFETY_BLOCK_REASON: {llm_reasoning}")
+        logger.error("EXTREME_DECISION_BLOCKED: this_indicates_potentially_dangerous_scaling")
     
     logger.info("=" * 60)
     logger.info("NODE_END: plan_final_action")

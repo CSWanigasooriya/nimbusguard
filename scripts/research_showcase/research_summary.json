@@ -1,38 +1,38 @@
 {
-  "consumer_focused_summary": {
-    "target_application": "consumer (port 8000)",
-    "total_samples": 893,
-    "total_features": 5,
+  "kubernetes_state_summary": {
+    "target_system": "Multi-dimensional Kubernetes metrics",
+    "total_samples": 894,
+    "total_features": 9,
     "time_range": {
       "start": "N/A",
       "end": "N/A"
     },
     "action_distribution": {
-      "1": 572,
-      "2": 214,
-      "0": 107
+      "0": 781,
+      "2": 113
     },
-    "consumer_categories": {
-      "load_indicators": 2,
-      "resource_utilization": 2,
-      "kubernetes_health": 0,
-      "consumer_health": 0
+    "kubernetes_categories": {
+      "deployment_state": 3,
+      "pod_container": 5,
+      "resource_management": 2,
+      "network_health": 1
     }
   },
-  "scale_down_analysis": {
-    "opportunities_count": 107,
-    "opportunities_percentage": 11.98208286674132,
-    "cost_savings_potential": "Moderate",
+  "scaling_analysis": {
+    "opportunities_count": 781,
+    "opportunities_percentage": 87.36017897091722,
+    "resource_optimization_potential": "High",
     "primary_indicators": [
-      "HTTP request rate",
-      "Consumer CPU usage",
-      "Pod health status"
+      "Pod readiness",
+      "Resource limits",
+      "Deployment state",
+      "Container status"
     ]
   },
-  "consumer_insights": {
-    "http_traffic_analysis": false,
-    "resource_monitoring": true,
-    "health_integration": false,
-    "approach": "Consumer-focused feature selection with weighted ensemble methods"
+  "kubernetes_insights": {
+    "multi_dimensional_handling": true,
+    "real_time_state_focus": true,
+    "statistical_feature_selection": true,
+    "approach": "Kubernetes state-focused with multi-dimensional metric handling"
   }
 }
