@@ -102,7 +102,7 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             metric_spec = externalscaler_pb2.MetricSpec(
                 metricName="dqn-replica-need",
-                targetSize=1  # Each pod can handle 1 unit of workload
+                targetSize=1000  # Each pod can handle 1000 milli-units of workload (1 unit)
             )
             
             response = externalscaler_pb2.GetMetricSpecResponse(
@@ -130,7 +130,7 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
         """
         Returns current metric values for KEDA calculation using AverageValue semantics.
         
-        CORRECTED APPROACH: Send workload demand directly as metric value.
+        AVERAGEVALUE METRIC APPROACH: Send workload demand directly as metric value.
         HPA calculates: desired_replicas = current_workload / target_per_pod
         
         Since target_per_pod = 1.0 (from GetMetricSpec):
@@ -157,9 +157,10 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             # Send workload demand (which equals desired replica count)
             # HPA will calculate: desired = workload_demand / target_per_pod = dqn_desired / 1.0 = dqn_desired
+            # NOTE: KEDA converts to milli-units, so send as milli-units to avoid conversion issues
             metric_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
-                metricValue=dqn_desired_replicas     # Workload demand in "units"
+                metricValue=dqn_desired_replicas * 1000     # Workload demand in milli-units for KEDA compatibility
             )
             
             response = externalscaler_pb2.GetMetricsResponse(
@@ -168,9 +169,9 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             
             self.logger.info(f"DQN_GRPC: GetMetrics_success dqn_wants={dqn_desired_replicas} "
                            f"current={current_replicas} "
-                           f"workload_demand={dqn_desired_replicas} "
-                           f"target_per_pod=1.0 "
-                           f"hpa_will_calculate=workload÷target={dqn_desired_replicas}÷1.0={dqn_desired_replicas}")
+                           f"workload_demand_milli={dqn_desired_replicas * 1000} "
+                           f"target_per_pod=1000 "
+                           f"hpa_will_calculate=workload÷target={dqn_desired_replicas * 1000}÷1000={dqn_desired_replicas}")
             return response
             
         except Exception as e:

@@ -1765,91 +1765,166 @@ async def observe_next_state_and_calculate_reward(state: ScalingState) -> Dict[s
 
 def calculate_stable_reward(current_state, next_state, action, current_replicas, lstm_predictions=None):
     """
-    IMPROVED: Multi-objective reward function that avoids circular dependencies.
-    Uses outcome-based metrics separate from DQN input features.
+    RESEARCH-BASED: Reward function using ONLY the metrics DQN actually sees.
+    Fixes the fundamental issue where reward used different metrics than DQN input.
     """
     
+    # === USE ONLY ACTUAL DQN INPUT FEATURES ===
+    # These are the 9 gauge metrics the DQN was trained on
+    
+    # Current state metrics (what DQN saw when making decision)
+    curr_unavailable = current_state.get('kube_deployment_status_replicas_unavailable', 0)
+    curr_ready = current_state.get('kube_pod_container_status_ready', 1.0)
+    curr_desired = current_state.get('kube_deployment_spec_replicas', 1)
+    curr_running = current_state.get('kube_pod_container_status_running', 1.0)
+    curr_generation = current_state.get('kube_deployment_status_observed_generation', 1)
+    curr_cpu_limits = current_state.get('kube_pod_container_resource_limits_cpu', 0.5)
+    curr_memory_limits = current_state.get('kube_pod_container_resource_limits_memory', 536870912)
+    curr_network_up = current_state.get('node_network_up', 1)
+    curr_exit_code = current_state.get('kube_pod_container_status_last_terminated_exitcode', 0)
+    
+    # Next state metrics (outcome after DQN action)
+    next_unavailable = next_state.get('kube_deployment_status_replicas_unavailable', 0)
+    next_ready = next_state.get('kube_pod_container_status_ready', 1.0)
+    next_desired = next_state.get('kube_deployment_spec_replicas', 1)
+    next_running = next_state.get('kube_pod_container_status_running', 1.0)
+    next_generation = next_state.get('kube_deployment_status_observed_generation', 1)
+    next_cpu_limits = next_state.get('kube_pod_container_resource_limits_cpu', 0.5)
+    next_memory_limits = next_state.get('kube_pod_container_resource_limits_memory', 536870912)
+    next_network_up = next_state.get('node_network_up', 1)
+    next_exit_code = next_state.get('kube_pod_container_status_last_terminated_exitcode', 0)
+    
+    # Convert to more interpretable units
+    curr_memory_mb = curr_memory_limits / 1000000
+    next_memory_mb = next_memory_limits / 1000000
+    
     # === PERFORMANCE COMPONENT (40%) ===
-    # Use derived metrics that measure actual system outcomes, not raw input features
+    # Reward system stability and health improvements
     
-    # 1. Response time improvement (derived from HTTP metrics)
-    current_http_bucket = current_state.get('http_request_duration_highr_seconds_bucket', 0)
-    next_http_bucket = next_state.get('http_request_duration_highr_seconds_bucket', 0)
-    current_response_size = current_state.get('http_response_size_bytes_sum', 0)
-    next_response_size = next_state.get('http_response_size_bytes_sum', 0)
+    # Pod health improvement (most important for performance)
+    readiness_improvement = (next_ready / max(0.1, curr_ready)) - 1.0  # % improvement in readiness
+    availability_improvement = max(0, curr_unavailable - next_unavailable)  # Reduced unavailable pods
     
-    # Calculate response efficiency (lower bucket count + reasonable response size = better performance)
-    current_efficiency = calculate_response_efficiency(current_http_bucket, current_response_size)
-    next_efficiency = calculate_response_efficiency(next_http_bucket, next_response_size)
-    performance_improvement = (next_efficiency - current_efficiency) * 4.0
+    # Container health improvement
+    running_improvement = (next_running - curr_running) / max(1, curr_running)
+    exit_code_improvement = max(0, abs(curr_exit_code) - abs(next_exit_code)) * 0.1  # Better exit codes
     
-    # === RESOURCE EFFICIENCY COMPONENT (30%) ===
-    # Measure resource utilization effectiveness
-    
-    current_memory = current_state.get('process_resident_memory_bytes', 100000000) / 1000000  # MB
-    next_memory = next_state.get('process_resident_memory_bytes', 100000000) / 1000000
-    current_cpu = current_state.get('process_cpu_seconds_total', 0)
-    next_cpu = next_state.get('process_cpu_seconds_total', 0)
-    
-    # Resource efficiency: stable memory + appropriate CPU usage
-    memory_stability = max(0, 3.0 - abs(next_memory - current_memory) * 0.002)  # Reward stability
-    cpu_efficiency = calculate_cpu_efficiency(current_cpu, next_cpu, current_replicas)
-    resource_efficiency = (memory_stability + cpu_efficiency) / 2.0
-    
-    # === SYSTEM HEALTH COMPONENT (20%) ===
-    # Use health indicators that reflect system reliability
-    
-    current_scrape = current_state.get('scrape_samples_scraped', 300)
-    next_scrape = next_state.get('scrape_samples_scraped', 300)
-    
-    # Health score based on monitoring effectiveness and system stability
-    health_score = calculate_health_score(current_scrape, next_scrape, next_memory, next_http_bucket)
-    
-    # === COST OPTIMIZATION COMPONENT (10%) ===
-    # Economic efficiency with non-linear scaling costs
-    
-    base_cost = 1.0
-    replica_cost = base_cost * (current_replicas ** 1.2)  # Non-linear cost growth
-    cost_efficiency = max(0, 5.0 - replica_cost * 0.05)  # Diminishing returns for more replicas
-    
-    # === PROACTIVE INTELLIGENCE BONUS ===
-    # FIXED: Use LSTM predictions from CURRENT state, not next state
-    proactive_bonus = 0.0
-    if lstm_predictions:
-        proactive_bonus = calculate_proactive_bonus(action, lstm_predictions, 
-                                                   current_state, next_state)
-    
-    # === STABILITY PENALTY ===
-    # Penalize excessive scaling actions to encourage stability
-    action_penalty = calculate_action_penalty(action, current_replicas, current_state, next_state)
-    
-    # === WEIGHTED COMBINATION ===
-    # Use configurable reward component weights
-    total_reward = (
-        performance_improvement * REWARD_PERFORMANCE_WEIGHT +    # Configurable: User experience
-        resource_efficiency * REWARD_RESOURCE_WEIGHT +          # Configurable: Resource optimization  
-        health_score * REWARD_HEALTH_WEIGHT +                   # Configurable: System reliability
-        cost_efficiency * REWARD_COST_WEIGHT +                  # Configurable: Economic efficiency
-        proactive_bonus +                                       # Bonus: Intelligent prediction alignment
-        action_penalty                                          # Penalty: Excessive scaling
+    performance_score = (
+        readiness_improvement * 3.0 +      # Readiness is critical
+        availability_improvement * 2.0 +   # Availability is key
+        running_improvement * 1.0 +        # More running containers
+        exit_code_improvement              # Healthier exits
     )
     
-    # Normalize to [-10, 10] range for stable training
+    # === RESOURCE EFFICIENCY COMPONENT (30%) ===
+    # Reward optimal resource utilization per replica
+    
+    curr_cpu_per_replica = curr_cpu_limits / max(1, current_replicas)
+    next_cpu_per_replica = next_cpu_limits / max(1, next_desired)
+    curr_memory_per_replica = curr_memory_mb / max(1, current_replicas)
+    next_memory_per_replica = next_memory_mb / max(1, next_desired)
+    
+    # Optimal range: 0.5-2.0 CPU cores per replica, 100-500MB per replica
+    def resource_efficiency_score(cpu_per_replica, memory_per_replica):
+        cpu_score = 2.0 if 0.5 <= cpu_per_replica <= 2.0 else max(0, 2.0 - abs(cpu_per_replica - 1.25))
+        memory_score = 2.0 if 100 <= memory_per_replica <= 500 else max(0, 2.0 - abs(memory_per_replica - 300) * 0.002)
+        return (cpu_score + memory_score) / 2.0
+    
+    curr_efficiency = resource_efficiency_score(curr_cpu_per_replica, curr_memory_per_replica)
+    next_efficiency = resource_efficiency_score(next_cpu_per_replica, next_memory_per_replica)
+    resource_score = next_efficiency - curr_efficiency
+    
+    # === SYSTEM HEALTH COMPONENT (20%) ===
+    # Reward network stability and deployment health
+    
+    network_health = next_network_up / max(0.1, curr_network_up) - 1.0  # Network improvement
+    deployment_stability = max(0, 2.0 - abs(next_generation - curr_generation) * 0.1)  # Stable deployments
+    
+    health_score = network_health + deployment_stability
+    
+    # === COST OPTIMIZATION COMPONENT (10%) ===
+    # Reward efficient replica management
+    
+    replica_efficiency = max(0, 5.0 - next_desired * 0.2)  # Linear cost with replicas
+    cost_score = replica_efficiency
+    
+    # === LSTM ALIGNMENT BONUS (CRITICAL FIX) ===
+    # Strong rewards for following LSTM guidance
+    
+    lstm_bonus = 0.0
+    if lstm_predictions:
+        optimal_replicas = lstm_predictions.get('optimal_replicas_forecast', current_replicas)
+        next_30sec_pressure = lstm_predictions.get('next_30sec_pressure', 0.5)
+        next_60sec_pressure = lstm_predictions.get('next_60sec_pressure', 0.5)
+        
+        # Calculate how close the action gets us to LSTM optimal
+        current_distance = abs(current_replicas - optimal_replicas)
+        next_distance = abs(next_desired - optimal_replicas)
+        lstm_alignment = current_distance - next_distance  # Positive = moving toward optimal
+        
+        # Strong bonus for following LSTM guidance
+        if lstm_alignment > 0:
+            lstm_bonus = lstm_alignment * 2.0  # Strong reward for LSTM alignment
+        elif lstm_alignment < 0:
+            lstm_bonus = lstm_alignment * 1.0  # Moderate penalty for moving away
+        
+        # Additional bonus for pressure-aware decisions
+        if action == "Scale Up" and max(next_30sec_pressure, next_60sec_pressure) > 0.6:
+            lstm_bonus += 1.5  # Reward scaling up when LSTM predicts high pressure
+        elif action == "Scale Down" and max(next_30sec_pressure, next_60sec_pressure) < 0.4:
+            lstm_bonus += 1.5  # Reward scaling down when LSTM predicts low pressure
+    
+    # === ACTION APPROPRIATENESS PENALTY ===
+    # Light penalties for inappropriate actions
+    
+    action_penalty = 0.0
+    
+    # Define system state using actual metrics
+    is_healthy = (next_unavailable == 0 and next_ready >= 0.95 and next_running > 0)
+    is_low_resource = (next_cpu_per_replica < 1.0 and next_memory_per_replica < 300)
+    
+    if action == "Scale Down":
+        if current_replicas <= 1:
+            action_penalty = -2.0  # Prevent scaling below minimum
+        elif not is_healthy:
+            action_penalty = -1.0  # Don't scale down unhealthy systems
+        elif is_healthy and is_low_resource:
+            action_penalty = +1.0  # Reward efficient scale-down
+    
+    elif action == "Scale Up":
+        if is_healthy and is_low_resource and current_replicas >= 5:
+            action_penalty = -1.0  # Don't over-provision when healthy and low resource
+        elif not is_healthy:
+            action_penalty = +0.5  # Slight reward for scaling up unhealthy systems
+    
+    # === FINAL REWARD CALCULATION ===
+    total_reward = (
+        performance_score * REWARD_PERFORMANCE_WEIGHT +
+        resource_score * REWARD_RESOURCE_WEIGHT +
+        health_score * REWARD_HEALTH_WEIGHT +
+        cost_score * REWARD_COST_WEIGHT +
+        lstm_bonus +
+        action_penalty
+    )
+    
+    # Clip to reasonable range
     total_reward = np.clip(total_reward, -10.0, 10.0)
     
-    # Additional logging for scaling decisions
-    scaling_status = ""
-    if action == "Scale Down" and current_replicas > 1:
-        is_underutilized = check_system_underutilized(current_state, next_state, current_replicas)
-        scaling_status = f" underutilized={'YES' if is_underutilized else 'NO'}"
-    elif action == "Scale Up":
-        is_overloaded = check_system_overloaded(current_state, next_state, current_replicas)
-        scaling_status = f" overloaded={'YES' if is_overloaded else 'NO'}"
+    # Enhanced logging
+    logger.info(f"REWARD_BREAKDOWN: performance={performance_score:.2f}({REWARD_PERFORMANCE_WEIGHT:.0%}) "
+               f"resource={resource_score:.2f}({REWARD_RESOURCE_WEIGHT:.0%}) health={health_score:.2f}({REWARD_HEALTH_WEIGHT:.0%}) "
+               f"cost={cost_score:.2f}({REWARD_COST_WEIGHT:.0%}) lstm_bonus={lstm_bonus:.2f} "
+               f"action_penalty={action_penalty:.2f} total={total_reward:.2f}")
     
-    logger.info(f"REWARD_BREAKDOWN: performance={performance_improvement:.2f}({REWARD_PERFORMANCE_WEIGHT:.0%}) "
-               f"resource={resource_efficiency:.2f}({REWARD_RESOURCE_WEIGHT:.0%}) health={health_score:.2f}({REWARD_HEALTH_WEIGHT:.0%}) "
-               f"cost={cost_efficiency:.2f}({REWARD_COST_WEIGHT:.0%}) proactive={proactive_bonus:.2f} "
-               f"action_penalty={action_penalty:.2f}{scaling_status} total={total_reward:.2f}")
+    logger.info(f"REWARD_STATE_ANALYSIS: curr_replicas={current_replicas} next_replicas={next_desired} "
+               f"readiness={curr_ready:.2f}→{next_ready:.2f} unavailable={curr_unavailable}→{next_unavailable} "
+               f"cpu_per_replica={curr_cpu_per_replica:.1f}→{next_cpu_per_replica:.1f} "
+               f"memory_per_replica={curr_memory_per_replica:.0f}→{next_memory_per_replica:.0f}")
+    
+    if lstm_predictions:
+        optimal = lstm_predictions.get('optimal_replicas_forecast', current_replicas)
+        logger.info(f"LSTM_ALIGNMENT: optimal={optimal:.1f} current={current_replicas} next={next_desired} "
+                   f"alignment_score={lstm_bonus:.2f}")
     
     return total_reward
 
@@ -1890,9 +1965,8 @@ def calculate_health_score(current_scrape, next_scrape, memory_mb, http_buckets)
 
 def calculate_proactive_bonus(action, lstm_predictions, current_state, next_state):
     """
-    ENHANCED: Reward DQN decisions that align with LSTM predictions AND load context.
-    Addresses: LSTM signal alignment + load context consideration.
-    FIXED: Uses actual selected features (gauges), not cumulative counters.
+    RESEARCH-BASED: Reward DQN decisions that align with LSTM predictions.
+    Uses ONLY the actual selected features that DQN sees as input.
     """
     if not lstm_predictions:
         return 0.0
@@ -1903,71 +1977,69 @@ def calculate_proactive_bonus(action, lstm_predictions, current_state, next_stat
     trend_velocity = lstm_predictions.get('trend_velocity', 0.0)
     optimal_replicas = lstm_predictions.get('optimal_replicas_forecast', 2.0)
     
-    # FIXED: Use actual available metrics from our selected feature set
-    # These are all current state gauges, not cumulative counters
+    # USE ONLY ACTUAL SELECTED FEATURES (gauges, not cumulative counters)
     unavailable_replicas = current_state.get('kube_deployment_status_replicas_unavailable', 0)
     pod_readiness = current_state.get('kube_pod_container_status_ready', 1.0)
     running_containers = current_state.get('kube_pod_container_status_running', 0)
     cpu_limits = current_state.get('kube_pod_container_resource_limits_cpu', 0)
     memory_limits = current_state.get('kube_pod_container_resource_limits_memory', 0)
+    current_replicas = current_state.get('kube_deployment_spec_replicas', 1)
     
-    # Determine load context based on actual system state (not cumulative metrics)
+    # Convert to interpretable units
     memory_mb = memory_limits / 1000000 if memory_limits > 0 else 0
+    cpu_per_replica = cpu_limits / max(1, current_replicas)
+    memory_per_replica = memory_mb / max(1, current_replicas)
     
     # Define load context using actual available metrics
     is_no_load = (
         unavailable_replicas == 0 and           # No failing pods
         pod_readiness >= 0.95 and               # High readiness
-        cpu_limits <= 1.0 and                   # Low CPU allocation
-        memory_mb <= 300                        # Low memory allocation
+        cpu_per_replica <= 1.0 and              # Low CPU per replica
+        memory_per_replica <= 300               # Low memory per replica
     )
     
     is_low_load = (
         unavailable_replicas == 0 and           # No failing pods
         pod_readiness >= 0.90 and               # Good readiness
-        cpu_limits <= 2.0 and                   # Moderate CPU
-        memory_mb <= 600                        # Moderate memory
+        cpu_per_replica <= 2.0 and              # Moderate CPU per replica
+        memory_per_replica <= 600               # Moderate memory per replica
     )
     
     bonus = 0.0
     
-    # MAJOR FIX: Reward appropriate scaling down when there's no/low load
+    # Calculate distance to LSTM optimal
+    current_distance = abs(current_replicas - optimal_replicas)
+    
+    # Reward appropriate scaling down when there's no/low load
     if action == "Scale Down":
         if is_no_load:
-            # Strong reward for scaling down with zero load - this was missing!
-            bonus = 3.0  # Big reward for cost optimization with no load
+            bonus = 3.0  # Strong reward for scaling down with zero load
         elif is_low_load:
-            # Good reward for scaling down with low load
-            bonus = 2.0  # Reward for efficient resource usage
+            bonus = 2.0  # Good reward for scaling down with low load
         elif predicted_30sec < 0.4:
-            # LSTM predicts low load - reward alignment
-            bonus = 1.5 * (0.5 - predicted_30sec)  # Stronger bonus for lower predictions
+            bonus = 1.5 * (0.5 - predicted_30sec)  # LSTM predicts low load
         elif trend_velocity < -0.1:
-            # LSTM shows decreasing trend - reward proactive scale-down
-            bonus = 1.0 + abs(trend_velocity)
+            bonus = 1.0 + abs(trend_velocity)  # LSTM shows decreasing trend
+        elif current_distance > 1 and current_replicas > optimal_replicas:
+            bonus = 1.0  # Moving toward LSTM optimal from above
     
     # Reward scaling up when load is actually high or LSTM predicts increase
     elif action == "Scale Up":
         if not is_no_load and not is_low_load:
             if predicted_30sec > 0.6:
-                # LSTM predicts high load and we have actual load
-                bonus = 2.0 * (predicted_30sec - 0.5)
+                bonus = 2.0 * (predicted_30sec - 0.5)  # LSTM predicts high load
             elif trend_velocity > 0.1:
-                # LSTM shows increasing trend
-                bonus = 1.0 + trend_velocity
-        # No bonus for scaling up with no load (wasteful)
+                bonus = 1.0 + trend_velocity  # LSTM shows increasing trend
+            elif current_distance > 1 and current_replicas < optimal_replicas:
+                bonus = 1.0  # Moving toward LSTM optimal from below
     
     # Reward keeping same when appropriate
     elif action == "Keep Same":
-        if is_no_load or is_low_load:
-            # Only reward "Keep Same" if we're already at reasonable replica count
-            current_replicas = current_state.get('current_replicas', 1)
+        if current_distance <= 1:
+            bonus = 0.5  # Reward staying near LSTM optimal
+        elif is_no_load or is_low_load:
             if current_replicas <= 2:
-                bonus = 1.0  # Good - staying minimal with low load
-            # No bonus for keeping high replicas with no load
-        elif 0.4 <= predicted_30sec <= 0.6:
-            # LSTM predicts stability and we have normal load
-            bonus = 1.0
+                bonus = 1.0  # Reward staying at low replica count with low load
     
     return bonus
 
