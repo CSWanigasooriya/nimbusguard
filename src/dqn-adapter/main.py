@@ -1261,7 +1261,7 @@ async def validate_with_llm(state: ScalingState) -> Dict[str, Any]:
 
 DQN RECOMMENDATION ANALYSIS:
 - Recommended Action: {action_name}
-- DQN Confidence: {dqn_confidence}
+- DQN Confidence: {dqn_confidence} 
 - Risk Assessment: {dqn_risk}
 - Current Deployment: {TARGET_DEPLOYMENT} in namespace {TARGET_NAMESPACE}
 - Current Replicas: {state['current_replicas']}
@@ -1939,6 +1939,11 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     # Configure Kopf to use a different port to avoid conflict with our metrics server
     settings.networking.health_listening_port = 8081  # Use port 8081 for Kopf health checks
     
+    # Use annotations storage to avoid K8s 1.16+ schema pruning issues
+    # This prevents "Patching failed with inconsistencies" errors
+    settings.persistence.progress_storage = kopf.AnnotationsProgressStorage()
+    settings.persistence.diffbase_storage = kopf.AnnotationsDiffBaseStorage()
+    
     # Production logging format - structured and regex-extractable
     logging.getLogger().handlers.clear()
     logging.basicConfig(
@@ -1948,6 +1953,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     )
     
     logger.info("STARTUP: NimbusGuard DQN Operator initializing components")
+    logger.info("KOPF: using_annotations_storage to_avoid_schema_pruning")
     logger.info(f"IMPROVEMENTS: stabilization_period={STABILIZATION_PERIOD_SECONDS}s improved_rewards={ENABLE_IMPROVED_REWARDS}")
     
     # Log all configurable hyperparameters for research transparency
@@ -2321,30 +2327,6 @@ async def cleanup(**kwargs):
         except Exception as e:
             logger.error(f"SHUTDOWN: metrics_server_error error={e}")
 
-# --- Timer-based DQN Decision Making ---
-@kopf.timer('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'}, interval=5)
-async def periodic_dqn_decision(spec, status, meta, **kwargs):
-    """Periodically run DQN scaling decisions for DQN-enabled ScaledObjects (every 5 seconds for real-time response)"""
-    logger.info(f"TIMER: triggered scaledobject={meta['name']}")
-    
-    # Only process our specific DQN ScaledObject
-    if meta['name'] != 'consumer-scaler-dqn':
-        return
-    
-    # Get current scaling status from KEDA
-    current_replicas = status.get('originalReplicaCount', 1)
-    is_active = any(condition.get('type') == 'Active' and condition.get('status') == 'True' 
-                   for condition in status.get('conditions', []))
-    
-    logger.info(f"KEDA_STATUS: replicas={current_replicas} active={is_active}")
-    
-    try:
-        # Run DQN decision making process
-        await run_intelligent_scaling_decision()
-        logger.info("TIMER: decision_completed")
-    except Exception as e:
-        logger.error(f"TIMER: decision_failed error={e}", exc_info=True)
-
 async def run_intelligent_scaling_decision():
     """Execute the intelligent scaling decision using DQN"""
     logger.info("DECISION: starting_intelligent_scaling")
@@ -2589,3 +2571,116 @@ class DecisionReasoning:
 
 # Initialize decision reasoning system
 decision_reasoning = DecisionReasoning()
+
+# --- Event-Driven DQN Decision Making (Learning from Timer Approach) ---
+
+# Convert the old timer to proper event-driven handlers targeting the SAME resource!
+# OLD: @kopf.timer('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'}, interval=5)
+# NEW: Event-driven reactions to the SAME ScaledObject
+
+@kopf.on.field('keda.sh', 'v1alpha1', 'scaledobjects', 
+               field='status.lastActiveTime', 
+               labels={'component': 'keda-dqn'})
+async def on_keda_evaluation(old, new, meta, spec, status, **kwargs):
+    """
+    React to KEDA external scaler evaluations (event-driven version of the old timer!)
+    
+    This targets the SAME resource as the old timer but reacts to actual changes
+    instead of polling every 5 seconds. Much more efficient and kubernetes-native.
+    """
+    logger.info(f"EVENT: keda_evaluation_triggered scaledobject={meta['name']} "
+               f"namespace={meta.get('namespace')} last_active_time={new}")
+    
+    # Only process our specific DQN ScaledObject (same filter as old timer)
+    if meta['name'] != 'consumer-scaler-dqn':
+        return
+    
+    # Get current scaling status from KEDA (same logic as old timer)
+    current_replicas = status.get('originalReplicaCount', 1)
+    is_active = any(condition.get('type') == 'Active' and condition.get('status') == 'True' 
+                   for condition in status.get('conditions', []))
+    
+    logger.info(f"KEDA_EVALUATION: replicas={current_replicas} active={is_active} "
+               f"triggered_by_field_change (was_timer_every_5s)")
+    
+    try:
+        # Run DQN decision making process (SAME function as old timer!)
+        await run_intelligent_scaling_decision()
+        logger.info("EVENT: decision_completed (was_timer_success)")
+    except Exception as e:
+        logger.error(f"EVENT: decision_failed error={e} (was_timer_error)", exc_info=True)
+
+@kopf.on.update('keda.sh', 'v1alpha1', 'scaledobjects', 
+                labels={'component': 'keda-dqn'})
+async def on_scaledobject_update(old, new, meta, **kwargs):
+    """
+    React to any changes in the ScaledObject configuration or status.
+    
+    This catches broader changes that might not trigger the field watcher.
+    """
+    # Only process our specific DQN ScaledObject
+    if meta['name'] != 'consumer-scaler-dqn':
+        return
+    
+    logger.info(f"EVENT: scaledobject_updated name={meta['name']} "
+               f"namespace={meta.get('namespace')} generation={meta.get('generation', 'unknown')}")
+    
+    # Check if this is a significant status change
+    old_replica_count = old.get('status', {}).get('originalReplicaCount', 0)
+    new_replica_count = new.get('status', {}).get('originalReplicaCount', 0)
+    
+    if old_replica_count != new_replica_count:
+        logger.info(f"EVENT: scaledobject_replica_change from={old_replica_count} to={new_replica_count}")
+        # Update our gauge immediately
+        CURRENT_REPLICAS_GAUGE.set(new_replica_count)
+
+@kopf.on.field('apps', 'v1', 'deployments', 
+               field='status.replicas')
+async def on_replica_count_change(old, new, meta, **kwargs):
+    """
+    React to actual replica count changes in our target deployment.
+    
+    This provides immediate feedback when scaling actions complete,
+    enabling faster reward calculation and experience generation.
+    """
+    # Only monitor our target deployment in the nimbusguard namespace
+    if meta.get('namespace') != 'nimbusguard' or meta.get('name') != TARGET_DEPLOYMENT:
+        return
+        
+    logger.info(f"EVENT: replica_change_detected deployment={meta['name']} "
+               f"namespace={meta.get('namespace')} replicas_changed={old}→{new}")
+    
+    # Update our current replicas gauge immediately  
+    CURRENT_REPLICAS_GAUGE.set(new or 0)
+    
+    # This could trigger additional learning if the change was significant
+    if old and abs((new or 0) - old) >= 2:
+        logger.info(f"EVENT: significant_scaling_detected trigger_additional_learning")
+        try:
+            await run_intelligent_scaling_decision()
+        except Exception as e:
+            logger.error(f"EVENT: additional_learning_failed error={e}")
+
+@kopf.on.create('keda.sh', 'v1alpha1', 'scaledobjects',
+                labels={'component': 'keda-dqn'})
+async def on_scaledobject_created(meta, spec, **kwargs):
+    """
+    React to DQN ScaledObject creation.
+    
+    Initializes DQN decision-making when our ScaledObject is first created.
+    """
+    logger.info(f"EVENT: scaledobject_created name={meta['name']} "
+               f"namespace={meta.get('namespace')} target={spec.get('scaleTargetRef', {}).get('name', 'unknown')}")
+    
+    if meta['name'] != 'consumer-scaler-dqn':
+        return
+    
+    # Run initial DQN decision for the new ScaledObject
+    try:
+        logger.info("EVENT: running_initial_dqn_decision")
+        await run_intelligent_scaling_decision()
+        logger.info("EVENT: initial_decision_completed")
+    except Exception as e:
+        logger.warning(f"EVENT: initial_decision_failed error={e}")
+
+# Event-driven architecture: Same resource targeting as timer but reactive instead of polling!

@@ -12,17 +12,19 @@ import asyncio
 import threading
 from concurrent import futures
 from typing import Dict, Any, Optional
+import os
 
 import externalscaler_pb2
 import externalscaler_pb2_grpc
 
+# No hysteresis - instantaneous DQN scaling
 
 class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
     """
-    KEDA External Scaler implementation for DQN-driven autoscaling.
+    KEDA External Scaler for DQN-based autoscaling.
     
-    This service provides truly dynamic scaling where the DQN directly controls
-    replica counts without artificial baselines or rule-based constraints.
+    This gRPC service bridges KEDA's scaling engine with our DQN decision system,
+    providing intelligent, machine learning-driven scaling decisions.
     """
     
     def __init__(self, dqn_desired_gauge, current_replicas_gauge, logger):
@@ -32,7 +34,7 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
         Args:
             dqn_desired_gauge: Prometheus gauge tracking DQN's desired replica count
             current_replicas_gauge: Prometheus gauge tracking current replica count
-            logger: Logger instance for monitoring and debugging
+            logger: Logger instance for debugging and monitoring
         """
         self.dqn_desired_gauge = dqn_desired_gauge
         self.current_replicas_gauge = current_replicas_gauge
@@ -74,35 +76,31 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
     
     def GetMetricSpec(self, request, context):
         """
-        Returns the metric specification for the HPA.
+        Returns metric specification for HPA.
         
-        This defines what metrics KEDA should expect and how to interpret them.
-        For DQN, we use a 1:1 mapping - N units of need = N replicas.
+        The target should be 1.0 since we return the absolute desired replica count.
+        HPA will calculate: desired = current * (metric_value / target_value)
         
         Args:
             request: ScaledObjectRef containing scaler metadata
             context: gRPC context
             
         Returns:
-            GetMetricSpecResponse: Metric specification for "dqn-replica-need"
+            GetMetricSpecResponse: Metric specification for HPA
         """
         try:
-            # Log the incoming request details for debugging
             self.logger.info(f"DQN_GRPC: GetMetricSpec_called name={request.name} namespace={request.namespace}")
-            self.logger.info(f"DQN_GRPC: GetMetricSpec_metadata={dict(request.scalerMetadata)}")
             
-            # Define metric spec: 1:1 mapping (no artificial baselines!)
             metric_spec = externalscaler_pb2.MetricSpec(
                 metricName="dqn-replica-need",
-                targetSize=1,  # 1:1 mapping - 5 units of need = 5 replicas
-                targetSizeFloat=1.0
+                targetSize=1000  # 1.0 in milli-units - we return absolute replica counts
             )
             
             response = externalscaler_pb2.GetMetricSpecResponse(
                 metricSpecs=[metric_spec]
             )
             
-            self.logger.info(f"DQN_GRPC: GetMetricSpec_success metric=dqn-replica-need target=1.0 specs_count={len(response.metricSpecs)}")
+            self.logger.info(f"DQN_GRPC: GetMetricSpec_success target=1.0 metric_name=dqn-replica-need")
             return response
             
         except Exception as e:
@@ -111,35 +109,42 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             self.logger.error(f"DQN_GRPC: GetMetricSpec_traceback {traceback.format_exc()}")
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
-            return externalscaler_pb2.GetMetricSpecResponse(metricSpecs=[])
+            
+            # Return safe fallback
+            fallback_spec = externalscaler_pb2.MetricSpec(
+                metricName="dqn-replica-need",
+                targetSize=1000  # 1.0
+            )
+            return externalscaler_pb2.GetMetricSpecResponse(metricSpecs=[fallback_spec])
     
     def GetMetrics(self, request, context):
         """
-        Returns current metric values - THE CORE DQN DECISION!
+        Returns current metric values - DQN desired replica count as absolute value.
         
-        This is where the magic happens - DQN's decision is returned directly
-        to KEDA without any artificial baselines or rule-based constraints.
+        FIXED: Return absolute DQN desired replica count, not ratios.
+        HPA will calculate: desired = current * (dqn_desired / 1.0) = dqn_desired
         
         Args:
             request: GetMetricsRequest containing metric name and scaler metadata
             context: gRPC context
             
         Returns:
-            GetMetricsResponse: Current replica need based on DQN decision
+            GetMetricsResponse: Current replica need based on DQN decision (absolute value)
         """
         try:
             # Log the incoming request for debugging
             self.logger.info(f"DQN_GRPC: GetMetrics_called metric={request.metricName} "
                            f"name={request.scaledObjectRef.name} namespace={request.scaledObjectRef.namespace}")
             
-            # Get DQN's desired replica count directly (NO ARTIFICIAL BASELINES!)
+            # Get DQN's desired replica count directly
             dqn_desired_replicas = int(self.dqn_desired_gauge._value._value)
             current_replicas = int(self.current_replicas_gauge._value._value)
             
-            # Return DQN decision directly - truly dynamic scaling
+            # Return the absolute DQN desired replica count
+            # HPA will calculate: desired = current * (dqn_desired / 1.0) = dqn_desired
             metric_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
-                metricValue=dqn_desired_replicas,  # Direct DQN decision
+                metricValue=dqn_desired_replicas * 1000,  # Convert to milli-units
                 metricValueFloat=float(dqn_desired_replicas)
             )
             
@@ -148,7 +153,9 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             )
             
             self.logger.info(f"DQN_GRPC: GetMetrics_success dqn_wants={dqn_desired_replicas} "
-                           f"current={current_replicas} returned_value={dqn_desired_replicas} direct_control=True")
+                           f"current={current_replicas} "
+                           f"returning_absolute_value={dqn_desired_replicas} "
+                           f"hpa_will_calculate=current*({dqn_desired_replicas}/1.0)={dqn_desired_replicas}")
             return response
             
         except Exception as e:
@@ -158,20 +165,21 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             
-            # Return safe fallback (current replicas)
+            # Return safe fallback (current replica count to maintain status quo)
+            current_replicas = int(self.current_replicas_gauge._value._value) if self.current_replicas_gauge else 2
             fallback_value = externalscaler_pb2.MetricValue(
                 metricName="dqn-replica-need",
-                metricValue=1,
-                metricValueFloat=1.0
+                metricValue=current_replicas * 1000,  # Maintain current state
+                metricValueFloat=float(current_replicas)
             )
             return externalscaler_pb2.GetMetricsResponse(metricValues=[fallback_value])
     
     def StreamIsActive(self, request, response_iterator):
         """
-        Push-based scaling - sends immediate scaling signals when DQN decision changes.
+        REAL-TIME Push-based scaling - sends immediate scaling signals when DQN decision changes.
         
-        This enables instant scaling reactions rather than waiting for polling intervals.
-        The stream remains open and pushes IsActiveResponse when conditions change.
+        This enables truly instantaneous scaling reactions with sub-second detection of DQN changes.
+        The stream remains open and pushes IsActiveResponse immediately when conditions change.
         
         Args:
             request: ScaledObjectRef containing scaler metadata
@@ -181,44 +189,59 @@ class DQNExternalScaler(externalscaler_pb2_grpc.ExternalScalerServicer):
             IsActiveResponse: Immediate scaling signals
         """
         try:
-            self.logger.info("DQN_GRPC: StreamIsActive_started push_based_scaling=True")
+            self.logger.info(f"DQN_GRPC: StreamIsActive_started push_based_scaling=True "
+                           f"name={request.name} namespace={request.namespace}")
             self._stream_active = True
             
             last_dqn_decision = None
+            last_current_replicas = None
             last_signal_time = time.time()
             
             while self._stream_active:
                 try:
-                    # Get current DQN decision
+                    # Get current DQN decision and replica state
                     current_dqn_decision = int(self.dqn_desired_gauge._value._value)
+                    current_replicas = int(self.current_replicas_gauge._value._value)
                     current_time = time.time()
                     
-                    # Send signal when DQN decision changes OR every 30 seconds for health
+                    # Send signal when DQN decision changes OR replica count changes OR heartbeat
                     decision_changed = current_dqn_decision != last_dqn_decision
-                    time_for_heartbeat = (current_time - last_signal_time) > 30
+                    replicas_changed = current_replicas != last_current_replicas
+                    time_for_heartbeat = (current_time - last_signal_time) > 10  # Faster heartbeat
                     
-                    if decision_changed or time_for_heartbeat:
-                        # Send active signal
+                    if decision_changed or replicas_changed or time_for_heartbeat:
+                        # Send active signal to trigger immediate scaling evaluation
                         yield externalscaler_pb2.IsActiveResponse(result=True)
                         
                         if decision_changed:
-                            self.logger.info(f"DQN_GRPC: StreamIsActive_signal dqn_decision_changed "
-                                           f"from={last_dqn_decision} to={current_dqn_decision}")
+                            self.logger.info(f"DQN_GRPC: StreamIsActive_DQN_CHANGE "
+                                           f"from={last_dqn_decision} to={current_dqn_decision} "
+                                           f"current_replicas={current_replicas} PUSH_SIGNAL_SENT")
+                        elif replicas_changed:
+                            self.logger.info(f"DQN_GRPC: StreamIsActive_REPLICA_CHANGE "
+                                           f"from={last_current_replicas} to={current_replicas} "
+                                           f"dqn_wants={current_dqn_decision} PUSH_SIGNAL_SENT")
+                        elif time_for_heartbeat:
+                            self.logger.debug(f"DQN_GRPC: StreamIsActive_HEARTBEAT "
+                                            f"dqn={current_dqn_decision} replicas={current_replicas}")
                         
                         last_dqn_decision = current_dqn_decision
+                        last_current_replicas = current_replicas
                         last_signal_time = current_time
                     
-                    # Check every 5 seconds for changes
-                    time.sleep(5)
+                    # Ultra-fast checking for real-time DQN decision detection
+                    time.sleep(0.5)  # Check every 500ms for sub-second responsiveness
                     
                 except Exception as e:
                     self.logger.error(f"DQN_GRPC: StreamIsActive_loop_error error={e}")
-                    time.sleep(5)
+                    time.sleep(1)  # Shorter sleep on error
             
             self.logger.info("DQN_GRPC: StreamIsActive_ended")
             
         except Exception as e:
             self.logger.error(f"DQN_GRPC: StreamIsActive_error error={e}")
+            import traceback
+            self.logger.error(f"DQN_GRPC: StreamIsActive_traceback {traceback.format_exc()}")
             return
     
     def stop_streaming(self):
