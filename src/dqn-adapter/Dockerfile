@@ -18,8 +18,8 @@ COPY . .
 COPY feature_scaler.gz /app/feature_scaler.gz
 COPY dqn_features.parquet /app/dqn_features.parquet
 
-# Expose the port the app runs on
-EXPOSE 8080
+# Expose the ports the app runs on
+EXPOSE 8080 9090
 
 # Command to run the application using Kopf with liveness probe
 CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8081/healthz", "/app/main.py"] 

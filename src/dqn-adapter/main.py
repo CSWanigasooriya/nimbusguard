@@ -67,32 +67,9 @@ async def metrics_handler(request):
     metrics_data = generate_latest()
     return web.Response(text=metrics_data.decode('utf-8'), content_type='text/plain; version=0.0.4')
 
-async def metrics_api_handler(request):
-    """KEDA Metrics API endpoint - returns current DQN desired replicas (updated by timer)"""
-    try:
-        # Simply return the current gauge value - no decision making here
-        current_value = float(DESIRED_REPLICAS_GAUGE._value._value)
-        
-        response = {
-            "dqn": {
-                "desired_replicas": current_value,
-                "status": "active",
-                "timestamp": int(time.time())
-            }
-        }
-        return web.json_response(response)
-    except Exception as e:
-        logger.error(f"Error in metrics API handler: {e}")
-        # Return default value on error
-        response = {
-            "dqn": {
-                "desired_replicas": 1.0,
-                "status": "error",
-                "error": str(e),
-                "timestamp": int(time.time())
-            }
-        }
-        return web.json_response(response)
+# OLD HTTP-based KEDA endpoints removed - now using gRPC External Scaler
+# These fake HTTP endpoints never worked with KEDA external scaler anyway!
+# gRPC External Scaler provides truly dynamic DQN control without artificial baselines.
 
 class HTTP2ErrorFilter(logging.Filter):
     """Filter to suppress HTTP/2 protocol error logs"""
@@ -1252,8 +1229,13 @@ async def validate_with_llm(state: ScalingState) -> Dict[str, Any]:
         return {"llm_validation_response": {"approved": True, "reason": "LLM validation disabled by configuration.", "confidence": "medium"}}
     
     if not validator_agent:
-        logger.warning("LLM_VALIDATION: agent_not_initialized skipping")
-        return {"llm_validation_response": {"approved": True, "reason": "Agent not available.", "confidence": "low"}}
+        if ENABLE_LLM_VALIDATION:
+            logger.warning("LLM_VALIDATION: agent_not_initialized skipping")
+            return {"llm_validation_response": {"approved": True, "reason": "LLM validation enabled but agent not available.", "confidence": "low"}}
+        else:
+            # This case should not happen since we check ENABLE_LLM_VALIDATION earlier, but adding for safety
+            logger.debug("LLM_VALIDATION: agent_not_initialized validation_disabled")
+            return {"llm_validation_response": {"approved": True, "reason": "LLM validation disabled by configuration.", "confidence": "medium"}}
 
     # Handle missing dqn_prediction gracefully
     dqn_prediction = state.get('dqn_prediction', {'action_name': 'Keep Same'})
@@ -1360,7 +1342,8 @@ Your JSON response:"""
             logger.info(f"LLM_DETAILS: approved={validation_result['approved']} "
                        f"confidence={validation_result['confidence']} "
                        f"score={validation_result.get('validation_score', 'N/A')}")
-            logger.info(f"LLM_REASONING_TEXT: {validation_result['reasoning'][:200]}...")
+            
+            logger.info(f"LLM_REASONING_TEXT: {validation_result['reasoning']}")
             
             if validation_result.get('risk_factors'):
                 logger.info(f"LLM_RISKS: count={len(validation_result['risk_factors'])}")
@@ -1373,7 +1356,7 @@ Your JSON response:"""
                     logger.info(f"LLM_BENEFIT_{i+1}: {benefit}")
         
         if not validation_result['approved']:
-            logger.warning(f"LLM_REJECTION: reason={validation_result['reasoning'][:100]}...")
+            logger.warning(f"LLM_REJECTION: reason={validation_result['reasoning']}")
             if validation_result.get('alternative_actions'):
                 alternatives = ','.join(validation_result['alternative_actions'])
                 logger.info(f"LLM_ALTERNATIVES: {alternatives}")
@@ -1552,7 +1535,7 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
             'llm_validation': {
                 'approved': llm_approved,
                 'confidence': llm_confidence,
-                'reasoning_summary': llm_reasoning[:100] + '...' if len(llm_reasoning) > 100 else llm_reasoning
+                'reasoning_summary': llm_reasoning
             },
             'final_decision': {
                 'from_replicas': current_replicas,
@@ -1638,7 +1621,7 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     # Warning for LLM rejection but proceeding anyway
     if not llm_approved:
         logger.warning("LLM_OVERRIDE: proceeding_despite_concerns")
-        logger.warning(f"LLM_REASONING: {llm_reasoning[:150]}...")
+        logger.warning(f"LLM_REASONING: {llm_reasoning}")
     
     logger.info("=" * 60)
     logger.info("NODE_END: plan_final_action")
@@ -1980,7 +1963,19 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     global prometheus_client, llm, scaler, dqn_model, validator_agent, redis_client, minio_client, metrics_server, dqn_trainer, evaluator, lstm_predictor
     
     prometheus_client = PrometheusClient()
-    llm = ChatOpenAI(model=AI_MODEL, temperature=AI_TEMPERATURE)
+    
+    # Only initialize LLM if validation is enabled
+    if ENABLE_LLM_VALIDATION:
+        try:
+            llm = ChatOpenAI(model=AI_MODEL, temperature=AI_TEMPERATURE)
+            logger.info(f"LLM: initialized_successfully model={AI_MODEL}")
+        except Exception as e:
+            logger.error(f"LLM: initialization_failed error={e}")
+            logger.warning("LLM: consider_disabling_validation ENABLE_LLM_VALIDATION=false")
+            raise kopf.PermanentError(f"LLM initialization failed but validation is enabled: {e}")
+    else:
+        llm = None
+        logger.info("LLM: skipped_initialization validation_disabled")
 
     # Initialize MinIO client
     try:
@@ -2140,27 +2135,31 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         logger.error(f"REDIS: connection_failed error={e}")
         # Not raising a permanent error, as the operator might still function for decision-making
         
-    # Initialize MCP validation with LLM supervisor
-    if MCP_SERVER_URL:
-        try:
-            logger.info(f"MCP: connecting url={MCP_SERVER_URL}")
-            mcp_client = MultiServerMCPClient({
-                "kubernetes": {
-                    "url": f"{MCP_SERVER_URL}/sse/",
-                    "transport": "sse"  # Use SSE transport instead of streamable_http
-                }
-            })
-            tools = await mcp_client.get_tools()
-            validator_agent = create_react_agent(llm, tools=tools)
-            logger.info(f"MCP: validator_initialized tools_count={len(tools)}")
-            logger.info(f"MCP: available_tools=[{','.join(tool.name for tool in tools)}]")
-        except Exception as e:
-            logger.error(f"MCP: initialization_failed error={e}")
-            logger.info("MCP: fallback_to_llm_only")
+    # Initialize MCP validation with LLM supervisor (only if LLM validation is enabled)
+    if ENABLE_LLM_VALIDATION and llm is not None:
+        if MCP_SERVER_URL:
+            try:
+                logger.info(f"MCP: connecting url={MCP_SERVER_URL}")
+                mcp_client = MultiServerMCPClient({
+                    "kubernetes": {
+                        "url": f"{MCP_SERVER_URL}/sse/",
+                        "transport": "sse"  # Use SSE transport instead of streamable_http
+                    }
+                })
+                tools = await mcp_client.get_tools()
+                validator_agent = create_react_agent(llm, tools=tools)
+                logger.info(f"MCP: validator_initialized tools_count={len(tools)}")
+                logger.info(f"MCP: available_tools=[{','.join(tool.name for tool in tools)}]")
+            except Exception as e:
+                logger.error(f"MCP: initialization_failed error={e}")
+                logger.info("MCP: fallback_to_llm_only")
+                validator_agent = create_react_agent(llm, tools=[])
+        else:
+            logger.info("MCP: url_not_set using_llm_only")
             validator_agent = create_react_agent(llm, tools=[])
     else:
-        logger.info("MCP: url_not_set using_llm_only")
-        validator_agent = create_react_agent(llm, tools=[])
+        validator_agent = None
+        logger.info("VALIDATOR: skipped_initialization llm_validation_disabled")
     
     # Initialize evaluator
     if ENABLE_EVALUATION_OUTPUTS:
@@ -2224,14 +2223,20 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     aiohttp_server_logger = logging.getLogger("aiohttp.server")
     aiohttp_server_logger.addFilter(HTTP2ErrorFilter())
     
-    # Start metrics server for KEDA
+    # Start HTTP server for essential endpoints only
     app = web.Application()
-    app.router.add_get('/metrics', metrics_handler)
-    app.router.add_get('/api/v1/dqn-metrics', metrics_api_handler)
+    app.router.add_get('/metrics', metrics_handler)  # Essential: Prometheus scraping
     
     # Add a root handler
     async def root_handler(request):
-        return web.json_response({"message": "NimbusGuard DQN Adapter Metrics Server", "status": "running"})
+        return web.json_response({
+            "message": "NimbusGuard DQN Adapter", 
+            "status": "running",
+            "services": {
+                "http": "health+metrics",
+                "grpc": "keda_external_scaler"
+            }
+        })
     
     # Add health check endpoint
     async def health_handler(request):
@@ -2281,11 +2286,22 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     app.router.add_get('/healthz', health_handler)
     app.router.add_post('/evaluate', evaluation_trigger_handler)
     
+    # Start HTTP server
     metrics_server = web.AppRunner(app)
     await metrics_server.setup()
     site = web.TCPSite(metrics_server, '0.0.0.0', 8080)
     await site.start()
-    logger.info("METRICS_SERVER: started port=8080 keda_api_enabled")
+    logger.info("HTTP_SERVER: started port=8080 endpoints=[metrics,health,evaluate]")
+    
+    # Start gRPC server for KEDA External Scaler (TRULY DYNAMIC!)
+    from grpc_scaler import start_grpc_server_async
+    grpc_thread = start_grpc_server_async(
+        dqn_desired_gauge=DESIRED_REPLICAS_GAUGE,
+        current_replicas_gauge=CURRENT_REPLICAS_GAUGE,
+        logger=logger,
+        port=9091
+    )
+    logger.info("GRPC_SERVER: started port=9091 for_keda_external_scaler")
         
     logger.info("STARTUP: complete watching_scaledobject_events")
 
