@@ -1539,7 +1539,60 @@ def parse_llm_json_response(response_text: str, action_name: str) -> Dict[str, A
         'fallback_mode': True
         }
 
-def plan_final_action(state: ScalingState) -> Dict[str, Any]:
+async def direct_scale_deployment(desired_replicas: int) -> bool:
+    """
+    🎯 SIMPLE SCALING: Directly scale the deployment without KEDA/HPA complexity
+    """
+    try:
+        # Import kubernetes client
+        import kubernetes.client
+        import kubernetes.config
+        from kubernetes.client.rest import ApiException
+        
+    except ImportError as e:
+        logger.error(f"DIRECT_SCALING: IMPORT_ERROR kubernetes_client_not_available error={e}")
+        logger.error("DIRECT_SCALING: install_kubernetes_client: pip install kubernetes")
+        return False
+    
+    try:
+        # Create k8s API client
+        kubernetes.config.load_incluster_config()  # We're running inside the cluster
+        apps_v1 = kubernetes.client.AppsV1Api()
+        
+        # Get current deployment
+        deployment = apps_v1.read_namespaced_deployment(
+            name=TARGET_DEPLOYMENT, 
+            namespace=TARGET_NAMESPACE
+        )
+        
+        current_replicas = deployment.spec.replicas
+        
+        # Only scale if there's a difference
+        if current_replicas != desired_replicas:
+            # Update replica count
+            deployment.spec.replicas = desired_replicas
+            
+            # Patch the deployment
+            apps_v1.patch_namespaced_deployment(
+                name=TARGET_DEPLOYMENT,
+                namespace=TARGET_NAMESPACE,
+                body=deployment
+            )
+            
+            logger.info(f"DIRECT_SCALING: SUCCESS {current_replicas}→{desired_replicas} replicas")
+            return True
+        else:
+            logger.info(f"DIRECT_SCALING: NO_CHANGE replicas={current_replicas}")
+            return True
+            
+    except ApiException as e:
+        logger.error(f"DIRECT_SCALING: API_ERROR {e.status}:{e.reason}")
+        return False
+    except Exception as e:
+        logger.error(f"DIRECT_SCALING: FAILED error={e}")
+        return False
+
+async def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     logger.info("NODE_START: plan_final_action")
     logger.info("=" * 60)
     current_replicas = state['current_replicas']
@@ -1567,15 +1620,13 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     if not llm_approved:
         logger.warning(f"SAFETY_OVERRIDE: blocking_{action_name} maintaining_current_replicas={current_replicas}")
         final_decision = current_replicas  # KEEP CURRENT - NO SCALING
-        decision_explanation['decision_factors'].append("SAFETY OVERRIDE: Extreme scaling decision blocked - maintaining current replica count")
-        decision_explanation['risk_mitigation'].append("CRITICAL: Dangerous scaling prevented by safety monitor")
     else:
         final_decision = max(1, min(20, new_replicas))  # Normal decision with safety constraints
     
     # Ensure we never go below 1 replica regardless of safety decisions
     final_decision = max(1, final_decision)
     
-    # Create comprehensive decision explanation
+    # Create comprehensive decision explanation AFTER final_decision is known
     decision_explanation = {
         'timestamp': datetime.now().isoformat(),
         'decision_pipeline': {
@@ -1600,12 +1651,12 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
         'expected_outcomes': []
     }
     
-    # Add decision factors
-    if llm_approved:
-        decision_explanation['decision_factors'].append("Safety monitor found no extreme risks - DQN decision approved")
+    # Add decision factors based on safety override result
+    if not llm_approved:
+        decision_explanation['decision_factors'].append("SAFETY OVERRIDE: Extreme scaling decision blocked - maintaining current replica count")
+        decision_explanation['risk_mitigation'].append("CRITICAL: Dangerous scaling prevented by safety monitor")
     else:
-        decision_explanation['decision_factors'].append("SAFETY ALERT: Decision blocked due to extreme risk factors")
-        decision_explanation['risk_mitigation'].append("CRITICAL: Extreme scaling decision prevented by safety monitor")
+        decision_explanation['decision_factors'].append("Safety monitor found no extreme risks - DQN decision approved")
     
     # Add confidence assessment
     overall_confidence = 'high'
@@ -1634,8 +1685,26 @@ def plan_final_action(state: ScalingState) -> Dict[str, Any]:
     else:
         decision_explanation['expected_outcomes'].append("Maintained current performance and cost balance")
     
-    # Update the Prometheus gauge
-    DESIRED_REPLICAS_GAUGE.set(final_decision)
+    # 🎯 EXECUTE DIRECT SCALING - Skip KEDA/HPA entirely
+    logger.info(f"DIRECT_SCALING: DQN_action={action_name} new_replicas={new_replicas} final_decision={final_decision}")
+    
+    # Check if there's actually a change to make
+    if final_decision == current_replicas:
+        logger.info(f"DIRECT_SCALING: NO_CHANGE replicas={current_replicas}")
+        scaling_success = True  # No change needed, so it's successful
+    else:
+        logger.info(f"DIRECT_SCALING: CHANGE_REQUIRED from={current_replicas} to={final_decision}")
+        scaling_success = await direct_scale_deployment(final_decision)
+    
+    if scaling_success:
+        logger.info(f"🎯 DIRECT_SCALING_SUCCESS: DQN_decided={final_decision} ✓")
+        # Update Prometheus gauge to reflect successful scaling
+        DESIRED_REPLICAS_GAUGE.set(final_decision)
+    else:
+        logger.error(f"🎯 DIRECT_SCALING_FAILED: keeping_current={current_replicas}")
+        # Keep current replicas in metrics if scaling failed
+        DESIRED_REPLICAS_GAUGE.set(current_replicas)
+        final_decision = current_replicas
     
     # Create comprehensive audit trail
     if 'dqn_prediction' in state and 'explanation' in dqn_prediction:
@@ -1843,36 +1912,22 @@ def calculate_stable_reward(current_state, next_state, action, current_replicas,
     health_score = network_health + deployment_stability
     
     # === COST OPTIMIZATION COMPONENT (10%) ===
-    # Reward efficient replica management
+    # Reward efficient replica management (FIXED: Proper over-provisioning penalty)
     
-    replica_efficiency = max(0, 5.0 - next_desired * 0.2)  # Linear cost with replicas
-    cost_score = replica_efficiency
+    # FIXED: Penalize over-provisioning properly with negative rewards
+    if next_desired <= 5:
+        cost_score = 2.0  # Reward efficient sizing
+    elif next_desired <= 10:
+        cost_score = 1.0  # Moderate sizing
+    elif next_desired <= 15:
+        cost_score = 0.0  # Neutral
+    else:
+        cost_score = -1.0 * (next_desired - 15) * 0.2  # PENALTY for over-provisioning
     
-    # === LSTM ALIGNMENT BONUS (CRITICAL FIX) ===
-    # Strong rewards for following LSTM guidance
+    # === LSTM ALIGNMENT BONUS (FIXED) ===
+    # Use the enhanced proactive bonus function
     
-    lstm_bonus = 0.0
-    if lstm_predictions:
-        optimal_replicas = lstm_predictions.get('optimal_replicas_forecast', current_replicas)
-        next_30sec_pressure = lstm_predictions.get('next_30sec_pressure', 0.5)
-        next_60sec_pressure = lstm_predictions.get('next_60sec_pressure', 0.5)
-        
-        # Calculate how close the action gets us to LSTM optimal
-        current_distance = abs(current_replicas - optimal_replicas)
-        next_distance = abs(next_desired - optimal_replicas)
-        lstm_alignment = current_distance - next_distance  # Positive = moving toward optimal
-        
-        # Strong bonus for following LSTM guidance
-        if lstm_alignment > 0:
-            lstm_bonus = lstm_alignment * 2.0  # Strong reward for LSTM alignment
-        elif lstm_alignment < 0:
-            lstm_bonus = lstm_alignment * 1.0  # Moderate penalty for moving away
-        
-        # Additional bonus for pressure-aware decisions
-        if action == "Scale Up" and max(next_30sec_pressure, next_60sec_pressure) > 0.6:
-            lstm_bonus += 1.5  # Reward scaling up when LSTM predicts high pressure
-        elif action == "Scale Down" and max(next_30sec_pressure, next_60sec_pressure) < 0.4:
-            lstm_bonus += 1.5  # Reward scaling down when LSTM predicts low pressure
+    lstm_bonus = calculate_proactive_bonus(action, lstm_predictions, current_state, next_state)
     
     # === ACTION APPROPRIATENESS PENALTY ===
     # Light penalties for inappropriate actions
@@ -1922,9 +1977,13 @@ def calculate_stable_reward(current_state, next_state, action, current_replicas,
                f"memory_per_replica={curr_memory_per_replica:.0f}→{next_memory_per_replica:.0f}")
     
     if lstm_predictions:
-        optimal = lstm_predictions.get('optimal_replicas_forecast', current_replicas)
-        logger.info(f"LSTM_ALIGNMENT: optimal={optimal:.1f} current={current_replicas} next={next_desired} "
-                   f"alignment_score={lstm_bonus:.2f}")
+        optimal = lstm_predictions.get('optimal_replicas_forecast', None)
+        if optimal is not None:
+            logger.info(f"LSTM_ALIGNMENT: optimal={optimal:.1f} current={current_replicas} next={next_desired} "
+                       f"alignment_score={lstm_bonus:.2f}")
+        else:
+            logger.info(f"LSTM_ALIGNMENT: optimal=N/A current={current_replicas} next={next_desired} "
+                       f"alignment_score={lstm_bonus:.2f}")
     
     return total_reward
 
@@ -1975,7 +2034,11 @@ def calculate_proactive_bonus(action, lstm_predictions, current_state, next_stat
     predicted_30sec = lstm_predictions.get('next_30sec_pressure', 0.5)
     predicted_60sec = lstm_predictions.get('next_60sec_pressure', 0.5)
     trend_velocity = lstm_predictions.get('trend_velocity', 0.0)
-    optimal_replicas = lstm_predictions.get('optimal_replicas_forecast', 2.0)
+    optimal_replicas = lstm_predictions.get('optimal_replicas_forecast', None)
+    
+    # If LSTM doesn't have valid prediction, use conservative defaults
+    if optimal_replicas is None:
+        optimal_replicas = 2.0  # Conservative baseline
     
     # USE ONLY ACTUAL SELECTED FEATURES (gauges, not cumulative counters)
     unavailable_replicas = current_state.get('kube_deployment_status_replicas_unavailable', 0)
@@ -2033,10 +2096,16 @@ def calculate_proactive_bonus(action, lstm_predictions, current_state, next_stat
             elif current_distance > 1 and current_replicas < optimal_replicas:
                 bonus = 1.0  # Moving toward LSTM optimal from below
     
-    # Reward keeping same when appropriate
+    # Reward keeping same when appropriate, PENALIZE ignoring LSTM
     elif action == "Keep Same":
         if current_distance <= 1:
             bonus = 0.5  # Reward staying near LSTM optimal
+        elif current_distance >= 2:
+            # PENALTY for ignoring LSTM when significantly off optimal
+            if current_replicas < optimal_replicas:
+                bonus = -1.5  # Penalty for under-provisioning when LSTM says scale up
+            else:
+                bonus = -1.0  # Penalty for over-provisioning when LSTM says scale down
         elif is_no_load or is_low_load:
             if current_replicas <= 2:
                 bonus = 1.0  # Reward staying at low replica count with low load
@@ -2579,9 +2648,16 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         return web.json_response({
             "message": "NimbusGuard DQN Adapter", 
             "status": "running",
+            "architecture": "direct_scaling",
             "services": {
-                "http": "health+metrics",
-                "grpc": "keda_external_scaler"
+                "http": "health+metrics+decision_triggers"
+            },
+            "endpoints": {
+                "GET /": "Service info",
+                "GET /healthz": "Health check",
+                "GET /metrics": "Prometheus metrics",
+                "POST /evaluate": "Trigger evaluation",
+                "POST /decide": "Trigger DQN decision"
             }
         })
     
@@ -2629,26 +2705,47 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
             logger.error(f"Evaluation trigger failed: {e}")
             return web.json_response({"error": str(e)}, status=500)
     
+    async def decision_trigger_handler(request):
+        """Manual trigger for DQN scaling decision."""
+        try:
+            logger.info("HTTP_TRIGGER: manual_decision_requested")
+            
+            # Run intelligent scaling decision
+            await run_intelligent_scaling_decision()
+            
+            # Get current metrics for response
+            current_replicas = int(CURRENT_REPLICAS_GAUGE._value._value)
+            desired_replicas = int(DESIRED_REPLICAS_GAUGE._value._value)
+            decisions_total = int(DQN_DECISIONS_COUNTER._value._value)
+            
+            return web.json_response({
+                "message": "DQN decision triggered successfully",
+                "timestamp": datetime.now().isoformat(),
+                "current_replicas": current_replicas,
+                "desired_replicas": desired_replicas,
+                "decisions_total": decisions_total,
+                "epsilon": float(DQN_EPSILON_GAUGE._value._value)
+            })
+            
+        except Exception as e:
+            logger.error(f"Decision trigger failed: {e}")
+            return web.json_response({"error": str(e)}, status=500)
+    
     app.router.add_get('/', root_handler)
     app.router.add_get('/healthz', health_handler)
     app.router.add_post('/evaluate', evaluation_trigger_handler)
+    app.router.add_post('/decide', decision_trigger_handler)
     
     # Start HTTP server
     metrics_server = web.AppRunner(app)
     await metrics_server.setup()
     site = web.TCPSite(metrics_server, '0.0.0.0', 8080)
     await site.start()
-    logger.info("HTTP_SERVER: started port=8080 endpoints=[metrics,health,evaluate]")
+    logger.info("HTTP_SERVER: started port=8080 endpoints=[metrics,health,evaluate,decide]")
     
-    # Start gRPC server for KEDA External Scaler (TRULY DYNAMIC!)
-    from grpc_scaler import start_grpc_server_async
-    grpc_thread = start_grpc_server_async(
-        dqn_desired_gauge=DESIRED_REPLICAS_GAUGE,
-        current_replicas_gauge=CURRENT_REPLICAS_GAUGE,
-        logger=logger,
-        port=9091
-    )
-    logger.info("GRPC_SERVER: started port=9091 for_keda_external_scaler")
+    # Prometheus trigger approach - no gRPC server needed
+    # DQN decisions are exposed via nimbusguard_dqn_desired_replicas metric
+    # KEDA reads this metric directly via Prometheus trigger
         
     logger.info("STARTUP: complete watching_scaledobject_events")
 
@@ -2913,67 +3010,30 @@ class DecisionReasoning:
 # Initialize decision reasoning system
 decision_reasoning = DecisionReasoning()
 
-# --- Event-Driven DQN Decision Making (Learning from Timer Approach) ---
+# --- Event-Driven DQN Decision Making (Direct Scaling) ---
 
-# Convert the old timer to proper event-driven handlers targeting the SAME resource!
-# OLD: @kopf.timer('keda.sh', 'v1alpha1', 'scaledobjects', labels={'component': 'keda-dqn'}, interval=5)
-# NEW: Event-driven reactions to the SAME ScaledObject
+# Since we're using direct scaling (bypassing KEDA/HPA), we only need to monitor
+# the actual deployment replica changes to trigger additional learning
 
-@kopf.on.field('keda.sh', 'v1alpha1', 'scaledobjects', 
-               field='status.lastActiveTime', 
-               labels={'component': 'keda-dqn'})
-async def on_keda_evaluation(old, new, meta, spec, status, **kwargs):
+@kopf.timer('apps', 'v1', 'deployments', 
+           when=lambda name, namespace, **_: name == TARGET_DEPLOYMENT and namespace == TARGET_NAMESPACE,
+           interval=STABILIZATION_PERIOD_SECONDS)  # Configurable interval (default: 30s)
+async def continuous_dqn_monitoring(name, namespace, **kwargs):
     """
-    React to KEDA external scaler evaluations (event-driven version of the old timer!)
+    🎯 CONTINUOUS DQN MONITORING: Proactive decision-making every STABILIZATION_PERIOD_SECONDS
     
-    This targets the SAME resource as the old timer but reacts to actual changes
-    instead of polling every 5 seconds. Much more efficient and kubernetes-native.
+    This replaces the old ScaledObject timer with direct deployment monitoring.
+    The DQN continuously monitors metrics and makes intelligent scaling decisions.
+    Interval is configurable via STABILIZATION_PERIOD_SECONDS env var (default: 30s).
     """
-    logger.info(f"EVENT: keda_evaluation_triggered scaledobject={meta['name']} "
-               f"namespace={meta.get('namespace')} last_active_time={new}")
-    
-    # Only process our specific DQN ScaledObject (same filter as old timer)
-    if meta['name'] != 'consumer-scaler-dqn':
-        return
-    
-    # Get current scaling status from KEDA (same logic as old timer)
-    current_replicas = status.get('originalReplicaCount', 1)
-    is_active = any(condition.get('type') == 'Active' and condition.get('status') == 'True' 
-                   for condition in status.get('conditions', []))
-    
-    logger.info(f"KEDA_EVALUATION: replicas={current_replicas} active={is_active} "
-               f"triggered_by_field_change (was_timer_every_5s)")
+    logger.info(f"TIMER: continuous_monitoring_triggered deployment={name} namespace={namespace} interval={STABILIZATION_PERIOD_SECONDS}s")
     
     try:
-        # Run DQN decision making process (SAME function as old timer!)
+        # Run intelligent scaling decision - this is our core DQN loop
         await run_intelligent_scaling_decision()
-        logger.info("EVENT: decision_completed (was_timer_success)")
+        logger.info("TIMER: decision_completed")
     except Exception as e:
-        logger.error(f"EVENT: decision_failed error={e} (was_timer_error)", exc_info=True)
-
-@kopf.on.update('keda.sh', 'v1alpha1', 'scaledobjects', 
-                labels={'component': 'keda-dqn'})
-async def on_scaledobject_update(old, new, meta, **kwargs):
-    """
-    React to any changes in the ScaledObject configuration or status.
-    
-    This catches broader changes that might not trigger the field watcher.
-    """
-    # Only process our specific DQN ScaledObject
-    if meta['name'] != 'consumer-scaler-dqn':
-        return
-    
-    logger.info(f"EVENT: scaledobject_updated name={meta['name']} "
-               f"namespace={meta.get('namespace')} generation={meta.get('generation', 'unknown')}")
-    
-    # Check if this is a significant status change
-    old_replica_count = old.get('status', {}).get('originalReplicaCount', 0)
-    new_replica_count = new.get('status', {}).get('originalReplicaCount', 0)
-    
-    if old_replica_count != new_replica_count:
-        logger.info(f"EVENT: scaledobject_replica_change from={old_replica_count} to={new_replica_count}")
-        # Update our gauge immediately
-        CURRENT_REPLICAS_GAUGE.set(new_replica_count)
+        logger.error(f"TIMER: decision_failed error={e}", exc_info=True)
 
 @kopf.on.field('apps', 'v1', 'deployments', 
                field='status.replicas')
@@ -3002,26 +3062,4 @@ async def on_replica_count_change(old, new, meta, **kwargs):
         except Exception as e:
             logger.error(f"EVENT: additional_learning_failed error={e}")
 
-@kopf.on.create('keda.sh', 'v1alpha1', 'scaledobjects',
-                labels={'component': 'keda-dqn'})
-async def on_scaledobject_created(meta, spec, **kwargs):
-    """
-    React to DQN ScaledObject creation.
-    
-    Initializes DQN decision-making when our ScaledObject is first created.
-    """
-    logger.info(f"EVENT: scaledobject_created name={meta['name']} "
-               f"namespace={meta.get('namespace')} target={spec.get('scaleTargetRef', {}).get('name', 'unknown')}")
-    
-    if meta['name'] != 'consumer-scaler-dqn':
-        return
-    
-    # Run initial DQN decision for the new ScaledObject
-    try:
-        logger.info("EVENT: running_initial_dqn_decision")
-        await run_intelligent_scaling_decision()
-        logger.info("EVENT: initial_decision_completed")
-    except Exception as e:
-        logger.warning(f"EVENT: initial_decision_failed error={e}")
-
-# Event-driven architecture: Same resource targeting as timer but reactive instead of polling!
+# Direct scaling architecture: DQN → Kubernetes API (no KEDA/HPA middleware)

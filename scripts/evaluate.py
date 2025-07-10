@@ -129,15 +129,56 @@ class KubernetesStateFocusedShowcase:
             return []
     
     def create_kubernetes_feature_analysis(self):
-        """Create analysis of the 9 selected Kubernetes state features."""
+        """Create compact IEEE paper-style analysis of the 9 selected Kubernetes state features with color-coded categories."""
         selected_features = self.get_selected_features()
         feature_analysis = self.metadata.get('feature_analysis', {})
         
-        # Create subplot layout with better spacing
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(18, 14))
-        fig.suptitle(f'Kubernetes State-Focused DQN Analysis ({len(selected_features)} Features)', fontsize=20, fontweight='bold', y=0.96)
+        # Create compact IEEE paper layout
+        fig = plt.figure(figsize=(10, 5))  # Even more compact
+        gs = fig.add_gridspec(2, 2, height_ratios=[3, 1], width_ratios=[2, 1], 
+                             hspace=0.2, wspace=0.2)  # Tighter spacing
         
-        # 1. Selected Kubernetes State Features Ranking
+        fig.suptitle('Kubernetes Feature Analysis for DQN-based Autoscaling', 
+                    fontsize=11, fontweight='bold', y=0.98)  # Smaller title
+        
+        # Define IEEE-appropriate color scheme for categories
+        category_colors = {
+            'Deployment State': '#1f77b4',      # IEEE Blue
+            'Pod & Container': '#ff7f0e',       # IEEE Orange
+            'Resource Management': '#2ca02c',   # IEEE Green
+            'Network & Health': '#9467bd',      # IEEE Purple
+            'Other': '#d62728'                  # IEEE Red
+        }
+        
+        def categorize_kubernetes_feature(feature_name):
+            if 'deployment' in feature_name.lower():
+                return 'Deployment State'
+            elif 'pod' in feature_name.lower() and 'container' in feature_name.lower():
+                return 'Pod & Container'
+            elif 'resource' in feature_name.lower():
+                return 'Resource Management'
+            elif 'network' in feature_name.lower():
+                return 'Network & Health'
+            else:
+                return 'Other'
+        
+        def create_kubernetes_label(name):
+            labels = {
+                'kube_deployment_status_replicas_unavailable': 'Unavailable Replicas',
+                'kube_pod_container_status_ready': 'Pod Readiness',
+                'kube_deployment_spec_replicas': 'Desired Replicas',
+                'kube_pod_container_resource_limits_cpu': 'CPU Limits',
+                'kube_pod_container_resource_limits_memory': 'Memory Limits',
+                'kube_pod_container_status_running': 'Running Containers',
+                'kube_deployment_status_observed_generation': 'Deployment Generation',
+                'node_network_up': 'Network Status',
+                'kube_pod_container_status_last_terminated_exitcode': 'Container Exit Code'
+            }
+            return labels.get(name, name.replace('_', ' ').replace('kube ', '').title())
+        
+        # 1. Main Feature Importance Chart with Category Colors (spans both rows on left)
+        ax_main = fig.add_subplot(gs[:, 0])
+        
         if 'final_scores' in feature_analysis:
             final_scores = feature_analysis['final_scores']
         else:
@@ -168,175 +209,117 @@ class KubernetesStateFocusedShowcase:
         features = list(final_scores.keys())
         scores = list(final_scores.values())
         
-        # Create horizontal bar chart with Kubernetes-specific colors
-        y_pos = np.arange(len(features))
-        
-        # Use professional IEEE color scheme with Kubernetes context
+        # Assign colors based on categories
         bar_colors = []
+        categories = []
         for feature in features:
-            if 'deployment' in feature.lower():
-                bar_colors.append(self.colors['primary'])  # IEEE blue for deployment
-            elif 'pod' in feature.lower() or 'container' in feature.lower():
-                bar_colors.append(self.colors['secondary'])  # IEEE orange for pods/containers
-            elif 'resource' in feature.lower():
-                bar_colors.append(self.colors['accent'])  # IEEE green for resources
-            elif 'network' in feature.lower():
-                bar_colors.append(self.colors['info'])  # IEEE purple for network
-            else:
-                bar_colors.append(self.colors['success'])  # IEEE red for other
-        
-        bars = ax1.barh(y_pos, scores, color=bar_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
-        ax1.set_yticks(y_pos)
-        
-        # Create Kubernetes-friendly feature labels
-        def create_kubernetes_label(name):
-            labels = {
-                'kube_deployment_status_replicas_unavailable': 'Unavailable Replicas',
-                'kube_pod_container_status_ready': 'Pod Readiness Status',
-                'kube_deployment_spec_replicas': 'Desired Replica Count',
-                'kube_pod_container_resource_limits_cpu': 'CPU Resource Limits',
-                'kube_pod_container_resource_limits_memory': 'Memory Resource Limits',
-                'kube_pod_container_status_running': 'Running Containers',
-                'kube_deployment_status_observed_generation': 'Deployment Generation',
-                'node_network_up': 'Network Status',
-                'kube_pod_container_status_last_terminated_exitcode': 'Container Exit Code'
-            }
-            return labels.get(name, name.replace('_', ' ').replace('kube ', '').title())
-        
-        ax1.set_yticklabels([create_kubernetes_label(f) for f in features])
-        ax1.set_xlabel('Statistical Ensemble Score')
-        ax1.set_title(f'{len(selected_features)} Selected Kubernetes State Features', fontsize=14, fontweight='bold')
-        ax1.grid(axis='x', alpha=0.3)
-        
-        # Add score labels
-        for i, (bar, score) in enumerate(zip(bars, scores)):
-            ax1.text(score + 1, i, f'{score:.1f}', va='center', fontweight='bold')
-        
-        # 2. Kubernetes Feature Category Distribution
-        def categorize_kubernetes_feature(feature_name):
-            if 'deployment' in feature_name.lower():
-                return 'Deployment State'
-            elif 'pod' in feature_name.lower() and 'container' in feature_name.lower():
-                return 'Pod & Container'
-            elif 'resource' in feature_name.lower():
-                return 'Resource Management'
-            elif 'network' in feature_name.lower():
-                return 'Network & Health'
-            else:
-                return 'Other'
-        
-        # Categorize selected features
-        selected_categories = {}
-        for feature in selected_features:
             category = categorize_kubernetes_feature(feature)
-            selected_categories[category] = selected_categories.get(category, 0) + 1
+            categories.append(category)
+            bar_colors.append(category_colors[category])
         
-        if selected_categories:
-            categories = list(selected_categories.keys())
-            counts = list(selected_categories.values())
+        # Create horizontal bar chart with thinner bars
+        y_pos = np.arange(len(features))
+        bars = ax_main.barh(y_pos, scores, height=0.6, color=bar_colors, alpha=0.8, 
+                           edgecolor='black', linewidth=0.5)
+        
+        ax_main.set_yticks(y_pos)
+        ax_main.set_yticklabels([create_kubernetes_label(f) for f in features], fontsize=8)
+        ax_main.set_xlabel('Feature Importance Score', fontsize=9, fontweight='bold')
+        ax_main.set_title(f'{len(selected_features)} Selected Features (Color-coded by Category)', 
+                         fontsize=9, fontweight='bold', pad=5)
+        ax_main.grid(axis='x', alpha=0.3)
+        
+        # Set x-axis limits to accommodate score labels
+        max_score = max(scores) if scores else 140
+        ax_main.set_xlim(0, max_score + 15)
+        
+        # Add score labels with compact positioning
+        for i, (bar, score) in enumerate(zip(bars, scores)):
+            ax_main.text(score + 2, i, f'{score:.0f}', va='center', 
+                        fontweight='bold', fontsize=7)  # Smaller score labels
+        
+        # Create compact legend for categories
+        legend_elements = []
+        unique_categories = list(set(categories))
+        for category in sorted(unique_categories):
+            legend_elements.append(plt.Rectangle((0,0),1,1, facecolor=category_colors[category], 
+                                               alpha=0.8, edgecolor='black', label=category))
+        
+        # Position legend at top right corner to save space
+        ax_main.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(0.98, 0.98), 
+                      fontsize=7, title='Categories', title_fontsize=7, framealpha=0.9)
+        
+        # 2. Combined Statistics and Performance (top right)
+        ax_stats = fig.add_subplot(gs[0, 1])
+        
+        # Category distribution as stacked info
+        category_counts = {}
+        for category in categories:
+            category_counts[category] = category_counts.get(category, 0) + 1
+        
+        # Create compact summary with both stats and performance
+        total_samples = len(self.df)
+        action_counts = [
+            (self.df['scaling_action'] == 0).sum(),
+            (self.df['scaling_action'] == 1).sum(),
+            (self.df['scaling_action'] == 2).sum()
+        ]
+        
+        # Compact text summary
+        stats_text = f"""SUMMARY STATISTICS
+
+Features: {len(selected_features)} total
+• Deployment: {category_counts.get('Deployment State', 0)}
+• Pod/Container: {category_counts.get('Pod & Container', 0)}
+• Resources: {category_counts.get('Resource Management', 0)}
+• Network: {category_counts.get('Network & Health', 0)}
+
+Dataset: {total_samples:,} samples
+• Scale Down: {action_counts[0]} ({action_counts[0]/total_samples*100:.1f}%)
+• Keep Same: {action_counts[1]} ({action_counts[1]/total_samples*100:.1f}%)
+• Scale Up: {action_counts[2]} ({action_counts[2]/total_samples*100:.1f}%)
+
+Top Score: {max(scores):.0f}
+Score Range: {max(scores)-min(scores):.0f}"""
+        
+        ax_stats.text(0.05, 0.95, stats_text, transform=ax_stats.transAxes, 
+                     fontsize=7, fontweight='normal', fontfamily='monospace',
+                     verticalalignment='top', 
+                     bbox=dict(boxstyle="round,pad=0.2", facecolor="lightgray", alpha=0.8))
+        ax_stats.axis('off')
+        ax_stats.set_title('Key Statistics', fontsize=9, fontweight='bold', pad=5)
+        
+        # 3. Category Distribution Pie Chart (bottom right)
+        ax_pie = fig.add_subplot(gs[1, 1])
+        
+        if category_counts:
+            cat_names = list(category_counts.keys())
+            cat_counts = list(category_counts.values())
+            cat_colors = [category_colors[cat] for cat in cat_names]
             
-            # Use different colors for each Kubernetes category
-            category_colors = {
-                'Deployment State': self.colors['primary'],        # Blue
-                'Pod & Container': self.colors['secondary'],       # Orange
-                'Resource Management': self.colors['accent'],      # Green
-                'Network & Health': self.colors['info'],           # Purple
-                'Other': self.colors['success']                    # Red
-            }
-            colors = [category_colors.get(cat, self.colors['primary']) for cat in categories]
+            # Create compact pie chart
+            wedges, texts, autotexts = ax_pie.pie(cat_counts, labels=None, colors=cat_colors,
+                                                 autopct='%1.0f', startangle=90,
+                                                 wedgeprops={'edgecolor': 'black', 'linewidth': 0.5})
             
-            bars = ax2.bar(categories, counts, color=colors, alpha=0.8, edgecolor='black', linewidth=0.5)
-            ax2.set_ylabel('Number of Features')
-            ax2.set_title('Kubernetes Feature Categories', fontsize=14, fontweight='bold')
-            ax2.set_ylim(0, max(counts) + 0.5)
+            # Enhance text appearance
+            for autotext in autotexts:
+                autotext.set_color('white')
+                autotext.set_fontweight('bold')
+                autotext.set_fontsize(7)  # Smaller font
             
-            # Rotate x-axis labels to prevent cutoff
-            ax2.tick_params(axis='x', rotation=45, labelsize=10)
+            ax_pie.set_title('Category Distribution', fontsize=9, fontweight='bold')  # Smaller title
             
-            # Add value labels
-            for bar, count in zip(bars, counts):
-                height = bar.get_height()
-                ax2.text(bar.get_x() + bar.get_width()/2., height + 0.05,
-                        f'{count}', ha='center', va='bottom', fontweight='bold')
-        else:
-            ax2.text(0.5, 0.5, 'No features\navailable', 
-                    ha='center', va='center', transform=ax2.transAxes,
-                    fontsize=12, color=self.colors['dark'])
-            ax2.set_title('Kubernetes Feature Categories', fontweight='bold')
+            # Add compact legend below pie
+            legend_labels = [f"{name.split()[0]}: {count}" for name, count in zip(cat_names, cat_counts)]
+            ax_pie.legend(legend_labels, loc='center', bbox_to_anchor=(0.5, -0.1), 
+                         fontsize=6, ncol=2)  # Even smaller legend
         
-        # 3. Scaling Action Distribution with Kubernetes Context
-        # Always show all 3 scaling actions, even if some have 0 samples
-        all_actions = [0, 1, 2]
-        action_name_map = {0: 'Scale Down\n(Reduce Pods)', 1: 'Keep Same\n(Stable)', 2: 'Scale Up\n(Add Pods)'}
-        action_color_map = {0: self.colors['info'], 1: self.colors['accent'], 2: self.colors['success']}
-        
-        # Get counts for all actions, filling missing ones with 0
-        action_counts = []
-        action_labels = []
-        action_colors = []
-        
-        for action in all_actions:
-            count = (self.df['scaling_action'] == action).sum()
-            action_counts.append(count)
-            action_labels.append(action_name_map[action])
-            action_colors.append(action_color_map[action])
-        
-        bars = ax3.bar(action_labels, action_counts, 
-                      color=action_colors,
-                      alpha=0.8, edgecolor='black', linewidth=0.5)
-        ax3.set_title('Kubernetes-Based Scaling Decisions', fontsize=14, fontweight='bold')
-        ax3.set_ylabel('Number of Samples')
-        
-        # Set proper y-axis limits to accommodate text labels
-        max_count = max(action_counts) if action_counts else 1
-        ax3.set_ylim(0, max_count * 1.15)  # Add 15% space above bars for text
-        
-        # Add percentage labels on bars with better positioning
-        total = sum(action_counts)
-        for bar, count in zip(bars, action_counts):
-            height = bar.get_height()
-            # Position text slightly above the bar
-            percentage = (count/total*100) if total > 0 else 0
-            ax3.text(bar.get_x() + bar.get_width()/2., height + max_count * 0.02,
-                    f'{count}\n({percentage:.1f}%)',
-                    ha='center', va='bottom', fontweight='bold', fontsize=10)
-        
-        # Improve x-axis labels
-        ax3.tick_params(axis='x', labelsize=9)
-        
-        # 4. Pod Readiness Pattern Analysis (using our actual Kubernetes metrics)
-        kubernetes_metrics = [col for col in self.df.columns if 'kube_pod_container_status_ready' in col.lower()]
-        if kubernetes_metrics:
-            # Use the pod readiness metric
-            k8s_metric = kubernetes_metrics[0]
-            
-            # Create histogram of pod readiness patterns
-            ax4.hist(self.df[k8s_metric], bins=30, color=self.colors['primary'], 
-                    alpha=0.8, edgecolor='black', linewidth=0.8)
-            ax4.set_xlabel('Pod Readiness Ratio')
-            ax4.set_ylabel('Frequency')
-            ax4.set_title('Pod Readiness State Patterns', fontweight='bold')
-            ax4.grid(alpha=0.3)
-            
-            # Add statistics
-            mean_val = self.df[k8s_metric].mean()
-            std_val = self.df[k8s_metric].std()
-            ax4.axvline(mean_val, color='red', linestyle='--', linewidth=2, 
-                       label=f'Mean: {mean_val:.3f}')
-            ax4.axvline(mean_val - std_val, color='orange', linestyle=':', linewidth=2, 
-                       label=f'Mean - σ: {mean_val - std_val:.3f}')
-            ax4.legend()
-        else:
-            ax4.text(0.5, 0.5, 'Pod readiness data\nnot available', 
-                    ha='center', va='center', transform=ax4.transAxes,
-                    fontsize=12, color=self.colors['dark'])
-            ax4.set_title('Pod Readiness State Patterns', fontweight='bold')
-        
-        plt.tight_layout(rect=[0, 0.05, 1, 0.93])
-        plt.subplots_adjust(hspace=0.3, wspace=0.3)  # Add more space between subplots
+        # Overall layout adjustment for IEEE paper standards
+        plt.tight_layout()
         plt.savefig(self.output_dir / "feature_analysis.png", dpi=300, bbox_inches='tight')
         plt.close()
-        print("✅ Created Kubernetes state feature analysis")
+        print("✅ Created compact IEEE-style Kubernetes state feature analysis")
     
     def create_kubernetes_correlation_heatmap(self):
         """Create correlation heatmap of selected Kubernetes state features."""
@@ -463,7 +446,7 @@ class KubernetesStateFocusedShowcase:
             # Scatter plot of CPU vs Memory limits colored by scaling action
             for i, action in enumerate(all_actions):
                 mask = self.df['scaling_action'] == action
-                    if mask.sum() > 0:
+                if mask.sum() > 0:
                     axes[1].scatter(self.df[mask][cpu_metric], 
                                   self.df[mask][memory_metric],
                                   alpha=0.6, label=action_labels[i], 
@@ -476,8 +459,8 @@ class KubernetesStateFocusedShowcase:
             axes[1].set_xlabel('CPU Resource Limits (cores)')
             axes[1].set_ylabel('Memory Resource Limits (bytes)')
             axes[1].set_title('Resource Limits vs Scaling Decisions', fontweight='bold')
-                axes[1].legend()
-                axes[1].grid(True, alpha=0.3)
+            axes[1].legend()
+            axes[1].grid(True, alpha=0.3)
             
             # Add resource efficiency insight
             high_cpu_mask = self.df[cpu_metric] > self.df[cpu_metric].median()
@@ -494,22 +477,22 @@ class KubernetesStateFocusedShowcase:
             # Just CPU data available
             cpu_metric = cpu_limits[0]
             cpu_data = self.df[cpu_metric]
-                axes[1].hist(cpu_data, bins=30, 
-                       color=self.colors['accent'], alpha=0.7, edgecolor='black')
+            axes[1].hist(cpu_data, bins=30, 
+                   color=self.colors['accent'], alpha=0.7, edgecolor='black')
             axes[1].set_xlabel('CPU Resource Limits (cores)')
-                axes[1].set_ylabel('Frequency')
+            axes[1].set_ylabel('Frequency')
             axes[1].set_title('CPU Resource Limits Distribution', fontweight='bold')
-                axes[1].grid(alpha=0.3)
-                
-                # Add mean and median lines
-                mean_val = cpu_data.mean()
-                median_val = cpu_data.median()
-                
-                axes[1].axvline(mean_val, color='red', linestyle='--', linewidth=2, 
-                           label=f'Mean: {mean_val:.3f}')
-                axes[1].axvline(median_val, color='orange', linestyle='-', linewidth=2, 
-                           label=f'Median: {median_val:.3f}')
-                axes[1].legend()
+            axes[1].grid(alpha=0.3)
+            
+            # Add mean and median lines
+            mean_val = cpu_data.mean()
+            median_val = cpu_data.median()
+            
+            axes[1].axvline(mean_val, color='red', linestyle='--', linewidth=2, 
+                       label=f'Mean: {mean_val:.3f}')
+            axes[1].axvline(median_val, color='orange', linestyle='-', linewidth=2, 
+                       label=f'Median: {median_val:.3f}')
+            axes[1].legend()
         else:
             axes[1].text(0.5, 0.5, 'Resource limits data\nnot available', 
                         ha='center', va='center', transform=axes[1].transAxes,
@@ -565,20 +548,20 @@ class KubernetesStateFocusedShowcase:
                                           startangle=90,
                                                   explode=pie_explode,
                                           wedgeprops={'edgecolor': 'black', 'linewidth': 0.8})
-        
-        # Enhance text appearance
-        for autotext in autotexts:
-            autotext.set_color('white')
-            autotext.set_fontweight('bold')
-            autotext.set_fontsize(12)
-        
-        for text in texts:
-            text.set_fontweight('bold')
-            text.set_fontsize(10)
-            else:
-                ax1.text(0.5, 0.5, 'No scaling data\navailable', 
-                        ha='center', va='center', transform=ax1.transAxes,
-                        fontsize=12, color=self.colors['dark'])
+                
+                # Enhance text appearance
+                for autotext in autotexts:
+                    autotext.set_color('white')
+                    autotext.set_fontweight('bold')
+                    autotext.set_fontsize(12)
+                
+                for text in texts:
+                    text.set_fontweight('bold')
+                    text.set_fontsize(10)
+        else:
+            ax1.text(0.5, 0.5, 'No scaling data\navailable', 
+                    ha='center', va='center', transform=ax1.transAxes,
+                    fontsize=12, color=self.colors['dark'])
         
         ax1.set_title('Scaling Opportunities', fontweight='bold', fontsize=14)
         
@@ -679,9 +662,9 @@ class KubernetesStateFocusedShowcase:
         if 'final_scores' in feature_analysis:
             available_scores = {}
             for feature, score in feature_analysis['final_scores'].items():
-                    if feature in selected_features and feature in self.df.columns:
+                if feature in selected_features and feature in self.df.columns:
                     display_name = self.create_display_name(feature)
-                        available_scores[display_name] = score
+                    available_scores[display_name] = score
         else:
             # Fallback: create default scores for selected features
             available_scores = {}
@@ -711,20 +694,26 @@ class KubernetesStateFocusedShowcase:
                 ax4.set_yticks(range(len(features)))
                 ax4.set_yticklabels(features)
                 ax4.set_xlabel('Feature Importance Score')
-            ax4.set_title('Kubernetes Features for Scaling Decisions', fontweight='bold')
+                ax4.set_title('Kubernetes Features for Scaling Decisions', fontweight='bold')
                 ax4.grid(axis='x', alpha=0.3)
                 
-                # Add score labels
+                # Set x-axis limits to accommodate score labels
+                max_score = max(scores) if scores else 140
+                ax4.set_xlim(0, max_score + 15)  # Add 15 units of padding for text labels
+                
+                # Add score labels with better positioning
                 for i, (bar, score) in enumerate(zip(bars, scores)):
-                    ax4.text(score + 0.5, i, f'{score:.1f}', va='center', fontweight='bold')
+                    ax4.text(score + 2, i, f'{score:.1f}', va='center', fontweight='bold', fontsize=9)
             else:
                 ax4.text(0.5, 0.5, 'Feature importance\ndata not available', 
                         ha='center', va='center', transform=ax4.transAxes,
                         fontsize=12, color=self.colors['dark'])
-            ax4.set_title('Kubernetes Features for Scaling Decisions', fontweight='bold')
+                ax4.set_title('Kubernetes Features for Scaling Decisions', fontweight='bold')
         
-        plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-        plt.savefig(self.output_dir / "data_quality_report.png", dpi=300, bbox_inches='tight')
+        # Fix layout to prevent y-axis labels from being cut off
+        plt.tight_layout()
+        plt.subplots_adjust(left=0.35, right=0.95, top=0.93, bottom=0.08, hspace=0.3, wspace=0.3)
+        plt.savefig(self.output_dir / "data_quality_report.png", dpi=300)
         plt.close()
         print("✅ Created Kubernetes state health analysis")
     

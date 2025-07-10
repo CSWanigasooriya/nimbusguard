@@ -152,10 +152,20 @@ class TimeSeriesBuffer:
         if timestamp is None:
             timestamp = datetime.now()
         
+        # VALIDATION: Check data quality before processing
+        if not self._validate_input_data(metrics):
+            logger.warning(f"LSTM_BUFFER: invalid_data_detected, skipping observation")
+            return
+        
         # Extract relevant features and normalize
         observation = []
         for feature_name in self.feature_names:
             value = metrics.get(feature_name, 0.0)
+            
+            # VALIDATION: Check for NaN/Inf values
+            if not np.isfinite(value):
+                logger.warning(f"LSTM_BUFFER: invalid_value feature={feature_name} value={value}, using default")
+                value = 0.0
             
             # Update statistics
             stats = self.feature_stats[feature_name]
@@ -221,12 +231,118 @@ class TimeSeriesBuffer:
             for key in self.daily_patterns[hour_key].keys():
                 self.daily_patterns[hour_key][key].pop(0)
     
+    def _validate_input_data(self, metrics: Dict[str, float]) -> bool:
+        """Validate input data quality to prevent learning garbage."""
+        if not metrics:
+            logger.warning("LSTM_VALIDATION: empty_metrics_dict")
+            return False
+        
+        # Check for reasonable data ranges
+        validation_rules = {
+            'kube_deployment_status_replicas_unavailable': (0, 100),  # 0-100 unavailable replicas
+            'kube_pod_container_status_ready': (0, 100),              # 0-100 ready containers
+            'kube_deployment_spec_replicas': (0, 100),                # 0-100 desired replicas
+            'kube_pod_container_resource_limits_cpu': (0, 100),       # 0-100 CPU cores
+            'kube_pod_container_resource_limits_memory': (0, 1e12),   # 0-1TB memory
+            'kube_pod_container_status_running': (0, 100),            # 0-100 running containers
+            'kube_deployment_status_observed_generation': (0, 1e6),   # 0-1M generation
+            'node_network_up': (0, 1),                               # 0-1 network status
+            'kube_pod_container_status_last_terminated_exitcode': (0, 255)  # 0-255 exit code
+        }
+        
+        invalid_count = 0
+        for feature_name in self.feature_names:
+            value = metrics.get(feature_name, 0.0)
+            
+            if not np.isfinite(value):
+                invalid_count += 1
+                logger.warning(f"LSTM_VALIDATION: non_finite_value feature={feature_name} value={value}")
+                continue
+            
+            if feature_name in validation_rules:
+                min_val, max_val = validation_rules[feature_name]
+                if not (min_val <= value <= max_val):
+                    invalid_count += 1
+                    logger.warning(f"LSTM_VALIDATION: out_of_range feature={feature_name} value={value} expected=[{min_val},{max_val}]")
+        
+        # Allow up to 20% invalid features
+        invalid_ratio = invalid_count / len(self.feature_names)
+        if invalid_ratio > 0.2:
+            logger.warning(f"LSTM_VALIDATION: too_many_invalid_features {invalid_count}/{len(self.feature_names)} ({invalid_ratio:.1%})")
+            return False
+        
+        return True
+    
     def get_sequence(self) -> Optional[np.ndarray]:
-        """Get the current sequence as numpy array."""
+        """Get the current sequence as numpy array with quality validation."""
         if len(self.buffer) < 2:  # Need at least 2 points
             return None
         
-        return np.array(list(self.buffer), dtype=np.float32)
+        sequence = np.array(list(self.buffer), dtype=np.float32)
+        
+        # VALIDATION: Check sequence quality
+        if not self._validate_sequence_quality(sequence):
+            logger.warning("LSTM_SEQUENCE: poor_quality_detected, may produce garbage predictions")
+            # Still return the sequence but with warning
+        
+        return sequence
+    
+    def _validate_sequence_quality(self, sequence: np.ndarray) -> bool:
+        """Validate sequence quality to detect meaningless data."""
+        try:
+            # Check for all zeros (dead system)
+            if np.all(sequence == 0):
+                logger.warning("LSTM_SEQUENCE_VALIDATION: all_zero_sequence detected")
+                return False
+            
+            # Check for constant values (no variation = no learning signal)
+            constant_features = 0
+            for feature_idx in range(sequence.shape[1]):
+                feature_values = sequence[:, feature_idx]
+                if np.std(feature_values) < 1e-6:  # Essentially constant
+                    constant_features += 1
+            
+            constant_ratio = constant_features / sequence.shape[1]
+            if constant_ratio > 0.8:  # More than 80% features are constant
+                logger.warning(f"LSTM_SEQUENCE_VALIDATION: too_many_constant_features {constant_features}/{sequence.shape[1]} ({constant_ratio:.1%})")
+                return False
+            
+            # Check for reasonable temporal variation
+            # Good sequences should have some temporal structure
+            temporal_variance = np.mean([np.var(sequence[:, i]) for i in range(sequence.shape[1])])
+            if temporal_variance < 1e-8:
+                logger.warning(f"LSTM_SEQUENCE_VALIDATION: no_temporal_variance variance={temporal_variance}")
+                return False
+            
+            # Check for NaN/Inf values
+            if not np.all(np.isfinite(sequence)):
+                logger.warning("LSTM_SEQUENCE_VALIDATION: non_finite_values detected")
+                return False
+            
+            # Check for extreme outliers (could indicate bad data)
+            outlier_threshold = 3.0  # 3 standard deviations
+            outliers = 0
+            total_values = sequence.size
+            
+            for feature_idx in range(sequence.shape[1]):
+                feature_values = sequence[:, feature_idx]
+                if len(feature_values) > 3:  # Need enough data for std calculation
+                    mean_val = np.mean(feature_values)
+                    std_val = np.std(feature_values)
+                    if std_val > 0:
+                        z_scores = np.abs((feature_values - mean_val) / std_val)
+                        outliers += np.sum(z_scores > outlier_threshold)
+            
+            outlier_ratio = outliers / total_values
+            if outlier_ratio > 0.1:  # More than 10% outliers
+                logger.warning(f"LSTM_SEQUENCE_VALIDATION: too_many_outliers {outliers}/{total_values} ({outlier_ratio:.1%})")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"LSTM_SEQUENCE_VALIDATION: validation_failed error={e}")
+            return False
     
     def has_sufficient_data(self, min_length: int = 12) -> bool:
         """Check if we have sufficient data for predictions (default: 1 minute)."""
@@ -271,9 +387,10 @@ class TimeSeriesBuffer:
                 cpu_trend = cpu_slope * 10  # Scale CPU trend (cores to comparable scale)
             else:
                 cpu_trend = 0.0
-                # Combine trends with weights: unavailable replicas (60%), readiness (25%), CPU (15%)
-                combined_trend = (unavailable_slope * 0.6 + readiness_trend * 0.25 + cpu_trend * 0.15) * 100
-                trend_direction = np.clip(combined_trend, -1, 1)  # Scale and clip
+            
+            # FIXED: Combine trends with weights: unavailable replicas (60%), readiness (25%), CPU (15%)
+            combined_trend = (unavailable_slope * 0.6 + readiness_trend * 0.25 + cpu_trend * 0.15) * 100
+            trend_direction = np.clip(combined_trend, -1, 1)  # Scale and clip
             
         # Daily pattern strength (comprehensive Kubernetes state analysis)
         current_hour = datetime.now().hour
@@ -459,6 +576,11 @@ class LSTMWorkloadPredictor:
                 'optimal_replicas_forecast': float(optimal_replicas)         # LSTM's replica recommendation
             }
             
+            # VALIDATION: Check prediction sanity
+            if not self._validate_predictions(features):
+                logger.warning("LSTM_PREDICTION: invalid_predictions detected, using defaults")
+                return default_features
+            
             # Cache the prediction
             self.last_prediction = features
             self.last_prediction_time = now
@@ -475,6 +597,64 @@ class LSTMWorkloadPredictor:
         except Exception as e:
             logger.error(f"LSTM_PREDICTION: failed error={e}")
             return default_features
+    
+    def _validate_predictions(self, features: Dict[str, float]) -> bool:
+        """Validate LSTM predictions to prevent learning garbage."""
+        validation_rules = {
+            'next_30sec_pressure': (0.0, 1.0),           # Pressure should be 0-1
+            'next_60sec_pressure': (0.0, 1.0),           # Pressure should be 0-1
+            'trend_velocity': (-1.0, 1.0),               # Velocity should be -1 to 1
+            'pattern_type_spike': (0.0, 1.0),            # Probability 0-1
+            'pattern_type_gradual': (0.0, 1.0),          # Probability 0-1
+            'pattern_type_cyclical': (0.0, 1.0),         # Probability 0-1
+            'pattern_type_random': (0.0, 1.0),           # Probability 0-1
+            'time_to_peak': (0.0, 300.0),                # 0-300 seconds
+            'optimal_replicas_forecast': (1.0, 50.0)     # 1-50 replicas
+        }
+        
+        invalid_count = 0
+        for feature_name, value in features.items():
+            if not np.isfinite(value):
+                invalid_count += 1
+                logger.warning(f"LSTM_PREDICTION_VALIDATION: non_finite feature={feature_name} value={value}")
+                continue
+            
+            if feature_name in validation_rules:
+                min_val, max_val = validation_rules[feature_name]
+                if not (min_val <= value <= max_val):
+                    invalid_count += 1
+                    logger.warning(f"LSTM_PREDICTION_VALIDATION: out_of_range feature={feature_name} value={value} expected=[{min_val},{max_val}]")
+        
+        # Pattern probabilities should roughly sum to 1.0
+        pattern_sum = (features.get('pattern_type_spike', 0) + 
+                      features.get('pattern_type_gradual', 0) + 
+                      features.get('pattern_type_cyclical', 0) + 
+                      features.get('pattern_type_random', 0))
+        
+        if not (0.8 <= pattern_sum <= 1.2):  # Allow some tolerance for softmax
+            invalid_count += 1
+            logger.warning(f"LSTM_PREDICTION_VALIDATION: pattern_probabilities_invalid sum={pattern_sum:.2f}")
+        
+        # Pressure predictions should be reasonable
+        pressure_30 = features.get('next_30sec_pressure', 0.5)
+        pressure_60 = features.get('next_60sec_pressure', 0.5)
+        
+        # 60sec pressure shouldn't be dramatically different from 30sec without strong trend
+        pressure_diff = abs(pressure_60 - pressure_30)
+        trend_strength = abs(features.get('trend_velocity', 0))
+        
+        if pressure_diff > 0.5 and trend_strength < 0.1:
+            invalid_count += 1
+            logger.warning(f"LSTM_PREDICTION_VALIDATION: inconsistent_pressure_forecast "
+                          f"30sec={pressure_30:.2f} 60sec={pressure_60:.2f} trend={trend_strength:.2f}")
+        
+        # Allow up to 20% invalid predictions
+        invalid_ratio = invalid_count / len(features) if features else 1.0
+        if invalid_ratio > 0.2:
+            logger.warning(f"LSTM_PREDICTION_VALIDATION: too_many_invalid_predictions {invalid_count}/{len(features)} ({invalid_ratio:.1%})")
+            return False
+        
+        return True
     
     def save_model(self, path: str) -> None:
         """Save LSTM model to disk."""
