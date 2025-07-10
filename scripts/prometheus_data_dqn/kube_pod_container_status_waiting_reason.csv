@@ -1,0 +1,3 @@
+timestamp,value,metric_name,container,instance,job,namespace,pod,reason,uid
+2025-07-07 10:54:11,1,kube_pod_container_status_waiting_reason,consumer,10.244.2.7:8080,prometheus.scrape.annotated_pods,nimbusguard,consumer-789d764dc7-bfgnl,CrashLoopBackOff,b977bee1-88ca-4d2c-9e1f-d0f93f57bafc
+2025-07-07 10:54:11,1,kube_pod_container_status_waiting_reason,consumer,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-bfgnl,CrashLoopBackOff,b977bee1-88ca-4d2c-9e1f-d0f93f57bafc
