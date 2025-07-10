@@ -1,0 +1,7 @@
+timestamp,value,metric_name,instance,job,namespace,pod,uid
+2025-07-07 10:34:11,1751884463,kube_pod_deletion_timestamp,10.244.2.7:8080,prometheus.scrape.annotated_pods,nimbusguard,consumer-789d764dc7-f8sl9,5c8bc673-27c0-4633-8e8c-123eaf8077f4
+2025-07-07 10:41:11,1751884885,kube_pod_deletion_timestamp,10.244.2.7:8080,prometheus.scrape.annotated_pods,nimbusguard,consumer-789d764dc7-gtrv5,55b14dd6-5030-4442-9080-8d4e2ff13b2d
+2025-07-07 11:01:11,1751886092,kube_pod_deletion_timestamp,10.244.2.7:8080,prometheus.scrape.annotated_pods,nimbusguard,load-test-comparison-baseline-px4ct,c321394e-d3df-4ed5-a462-af3c78f63efb
+2025-07-07 10:34:11,1751884463,kube_pod_deletion_timestamp,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-f8sl9,5c8bc673-27c0-4633-8e8c-123eaf8077f4
+2025-07-07 10:41:11,1751884885,kube_pod_deletion_timestamp,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-gtrv5,55b14dd6-5030-4442-9080-8d4e2ff13b2d
+2025-07-07 11:01:11,1751886092,kube_pod_deletion_timestamp,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,load-test-comparison-baseline-px4ct,c321394e-d3df-4ed5-a462-af3c78f63efb
