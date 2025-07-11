@@ -15,11 +15,6 @@ class RewardConfig(BaseSettings):
     health_weight: float = Field(default=0.20, validation_alias=AliasChoices("REWARD_HEALTH_WEIGHT", "health_weight"))
     cost_weight: float = Field(default=0.10, validation_alias=AliasChoices("REWARD_COST_WEIGHT", "cost_weight"))
     
-    # Additional reward parameters
-    latency_weight: float = Field(default=10.0, validation_alias=AliasChoices("REWARD_LATENCY_WEIGHT", "latency_weight"))
-    replica_cost: float = Field(default=0.1, validation_alias=AliasChoices("REWARD_REPLICA_COST", "replica_cost"))
-    enable_improved_rewards: bool = Field(default=True, validation_alias=AliasChoices("ENABLE_IMPROVED_REWARDS", "enable_improved_rewards"))
-    
     @model_validator(mode='after')
     def validate_weights_sum(self):
         total = (self.performance_weight + 

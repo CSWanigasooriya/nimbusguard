@@ -64,7 +64,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     
     logger.info("STARTUP: NimbusGuard DQN Operator initializing components")
     logger.info("KOPF: using_annotations_storage to_avoid_schema_pruning")
-    logger.info(f"IMPROVEMENTS: stabilization_period={config.kubernetes.stabilization_period_seconds}s improved_rewards={config.reward.enable_improved_rewards}")
+    logger.info(f"IMPROVEMENTS: stabilization_period={config.kubernetes.stabilization_period_seconds}s")
     
     # Log all configurable hyperparameters for research transparency
     logger.info("=== MODULAR CONFIGURATION ===")

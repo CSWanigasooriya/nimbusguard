@@ -111,10 +111,12 @@ setup: ## Setup development environment (install latest tools)
 	@if ! helm repo list | grep -q kedacore 2>/dev/null; then \
 		echo "📥 Adding Helm repositories..."; \
 		helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1; \
+		helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1; \
 		echo "✅ Helm repositories configured"; \
 	else \
 		echo "✅ Helm repositories already configured"; \
 	fi
+	@helm repo update >/dev/null 2>&1
 	
 	@echo ""
 	@echo "🔧 Creating 'nimbusguard' namespace if it doesn't exist..."
@@ -148,6 +150,25 @@ setup: ## Setup development environment (install latest tools)
 		echo "✅ Metrics-server already installed"; \
 	fi
 	
+	# Install Prometheus Adapter for HPA custom metrics
+	@echo ""
+	@echo "📈 Installing Prometheus Adapter for HPA custom metrics..."
+	@if ! helm list -n nimbusguard | grep -q prometheus-adapter 2>/dev/null; then \
+		echo "📥 Applying Prometheus Adapter configuration..."; \
+		kubectl apply -f kubernetes-manifests/components/monitoring/prometheus-adapter-config.yaml; \
+		echo "📥 Installing Prometheus Adapter with custom configuration..."; \
+		helm install prometheus-adapter prometheus-community/prometheus-adapter \
+			--namespace nimbusguard \
+			--set prometheus.url=http://prometheus.nimbusguard.svc \
+			--set prometheus.port=9090 \
+			--set rules.default=false \
+			--set rules.existing=adapter-config \
+			--wait >/dev/null 2>&1; \
+		echo "✅ Prometheus Adapter installed with custom metrics configuration"; \
+	else \
+		echo "✅ Prometheus Adapter already installed"; \
+	fi
+	
 	@echo ""
 	@echo "🎉 Environment setup complete!"
 	@echo "📋 Available tools:"
@@ -158,7 +179,11 @@ setup: ## Setup development environment (install latest tools)
 	@echo "   • yq: $$(yq --version 2>/dev/null || echo 'not installed')"
 	@echo "   • k9s: $$(k9s version -s 2>/dev/null || echo 'not installed')"
 	@echo ""
-	@echo "🚀 Ready to deploy!"
+	@echo "📊 Installed cluster components:"
+	@echo "   • metrics-server (CPU/Memory monitoring)"
+	@echo "   • prometheus-adapter (HPA custom metrics)"
+	@echo ""
+	@echo "🚀 Ready to deploy! HPA can now use custom Prometheus metrics."
 
 # KServe installation removed - no longer needed with combined DQN architecture
 # The DQN model is now loaded locally in the adapter for optimal performance
@@ -182,6 +207,11 @@ keda-uninstall: ## Uninstall the KEDA operator
 	@echo "🗑️  Uninstalling KEDA operator from nimbusguard namespace..."
 	@helm uninstall keda -n nimbusguard 2>/dev/null || true
 	@echo "✅ KEDA uninstalled"
+
+prometheus-adapter-uninstall: ## Uninstall the Prometheus Adapter
+	@echo "🗑️  Uninstalling Prometheus Adapter from nimbusguard namespace..."
+	@helm uninstall prometheus-adapter -n nimbusguard 2>/dev/null || true
+	@echo "✅ Prometheus Adapter uninstalled"
 
 # -----------------------------------------------------------------------------
 # KEDA Management Commands
@@ -341,13 +371,15 @@ clean: ## NUCLEAR cleanup - immediate brutal force deletion of everything
 		fi; \
 	done
 	
-	# Step 3: Delete KEDA CRDs immediately (no waiting for namespace cleanup)
-	@echo "💥 Nuclear KEDA destruction..."
-	@kubectl get crd 2>/dev/null | grep keda | awk '{print $$1}' | xargs -r kubectl delete crd --force --grace-period=0 2>/dev/null &
+	# Step 3: Delete KEDA and Prometheus Adapter CRDs immediately (no waiting for namespace cleanup)
+	@echo "💥 Nuclear KEDA and Prometheus Adapter destruction..."
+	@kubectl get crd 2>/dev/null | grep -E "(keda|metrics\.k8s\.io)" | awk '{print $$1}' | xargs -r kubectl delete crd --force --grace-period=0 2>/dev/null &
+	@helm uninstall prometheus-adapter -n nimbusguard 2>/dev/null &
+	@helm uninstall keda -n nimbusguard 2>/dev/null &
 	
 	# Step 4: Destroy all RBAC resources matching our patterns
 	@echo "💥 Nuclear RBAC destruction..."
-	@kubectl get clusterrole,clusterrolebinding --no-headers 2>/dev/null | grep -E "(nimbusguard|dqn-adapter|mcp-server|alloy|beyla|prometheus|kube-state-metrics)" | awk '{print $$1}' | xargs -r kubectl delete --force --grace-period=0 2>/dev/null &
+	@kubectl get clusterrole,clusterrolebinding --no-headers 2>/dev/null | grep -E "(nimbusguard|dqn-adapter|mcp-server|alloy|beyla|prometheus|kube-state-metrics|prometheus-adapter)" | awk '{print $$1}' | xargs -r kubectl delete --force --grace-period=0 2>/dev/null &
 	
 	# Step 5: Kill webhook configurations
 	@echo "💥 Nuclear webhook destruction..."

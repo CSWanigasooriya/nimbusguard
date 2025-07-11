@@ -27,7 +27,6 @@ class AIConfig(BaseSettings):
     
     # Reasoning and logging
     enable_detailed_reasoning: bool = Field(default=True, validation_alias=AliasChoices("ENABLE_DETAILED_REASONING", "enable_detailed_reasoning"))
-    reasoning_log_level: LogLevel = Field(default=LogLevel.INFO, validation_alias=AliasChoices("REASONING_LOG_LEVEL", "reasoning_log_level"))
     
     @field_validator('temperature')
     @classmethod
