@@ -4,12 +4,13 @@ FROM nimbusguard-base:latest
 # Set the working directory
 WORKDIR /app
 
-# Copy the requirements file into the container
-COPY requirements.txt .
+# Copy the pyproject.toml file into the container for dependency management
+COPY pyproject.toml .
 
-# Install the dependencies
+# Install the dependencies using modern pyproject.toml approach
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --upgrade pip && \
+    pip install -e .
 
 # Copy the application code into the container
 COPY . .

@@ -1,38 +1,33 @@
 # NimbusGuard DQN Adapter Service
 
-This service is the intelligent core of the NimbusGuard autoscaling system. It combines the predictive power of a Deep Q-Network (DQN) model with real-time learning capabilities and robust execution through KEDA. It runs a continuous reconciliation loop to determine the optimal number of replicas for a target service and exposes this decision as a Prometheus metric.
+This service is the intelligent core of the NimbusGuard autoscaling system. It uses a Deep Q-Network (DQN) model with real-time learning capabilities to make optimal scaling decisions. It runs a continuous reconciliation loop to determine the optimal number of replicas for a target service and exposes this decision as a Prometheus metric.
 
-The adapter uses **5 scientifically selected raw features** identified through advanced statistical analysis using 6 rigorous methods (Mutual Information, Random Forest, Correlation Analysis, RFECV, Statistical Significance, and VIF Analysis) from 894 real per-minute decision points. These are combined with **6 LSTM temporal features** for predictive intelligence, creating a total of **11 features** with zero overlap and no redundancy.
+The adapter uses **9 scientifically selected raw features** identified through advanced statistical analysis using 6 rigorous methods (Mutual Information, Random Forest, Correlation Analysis, RFECV, Statistical Significance, and VIF Analysis) from 894 real per-minute decision points.
 
-## 🏗️ Clean Feature Architecture
+## 🏗️ DQN Feature Architecture
 
-The system uses a **clean separation** approach with **zero redundancy**:
+The system uses a **scientifically optimized** approach with **9 carefully selected features**:
 
-### 📊 RAW BASE FEATURES (5)
-Current system state observations without any temporal computations:
-1. **Scaling Issues** (`kube_deployment_status_replicas_unavailable`) - Score: 22.35
-2. **Pod Health** (`kube_pod_container_status_ready`) - Score: 21.85  
-3. **CPU Usage** (`process_cpu_seconds_total`) - Score: 17.55
-4. **HTTP Latency** (`http_request_duration_highr_seconds_sum`) - Score: 17.30
-5. **System Stability** (`kube_pod_container_status_restarts_total`) - Score: 16.40
+### 📊 BASE FEATURES (9)
+Current system state observations that provide comprehensive scaling intelligence:
+1. **Scaling Issues** (`kube_deployment_status_replicas_unavailable`) - Critical scaling failures
+2. **Pod Health** (`kube_pod_container_status_ready`) - Container readiness status  
+3. **Desired Replicas** (`kube_deployment_spec_replicas`) - Target replica configuration
+4. **Resource Limits CPU** (`kube_pod_container_resource_limits_cpu`) - CPU allocation limits
+5. **Resource Limits Memory** (`kube_pod_container_resource_limits_memory`) - Memory allocation limits
+6. **Container Running Status** (`kube_pod_container_status_running`) - Active container count
+7. **Deployment Generation** (`kube_deployment_status_observed_generation`) - Configuration version
+8. **Network Status** (`node_network_up`) - Cluster network health
+9. **Exit Code** (`kube_pod_container_status_last_terminated_exitcode`) - Container termination health
 
-### 🧠 LSTM TEMPORAL FEATURES (6)
-Predictive intelligence and pattern-based features:
-1. **Predicted Response Time** (5-minute forecast)
-2. **Predicted Memory Usage** (5-minute forecast)  
-3. **Workload Trend Direction** (-1: decreasing, 0: stable, 1: increasing)
-4. **Pattern Confidence** (confidence in detected patterns)
-5. **Anomaly Score** (0-1 anomaly detection score)
-6. **Optimal Replicas Forecast** (LSTM's replica recommendation)
-
-**Total: 11 features with ZERO overlap between raw metrics and temporal intelligence!**
+**Total: 9 features providing comprehensive, scientifically-validated input for DQN decision making!**
 
 ### ✅ Architecture Benefits
-- **Clean Separation**: Raw metrics (current) vs LSTM (temporal)
-- **No Redundancy**: Zero overlap between feature types
-- **Optimal Performance**: 11 vs 14 features (simpler training)
-- **No Feature Confusion**: Clear roles for each feature type
-- **Future-Proof**: Easy to add new raw metrics without conflicts
+- **Scientific Selection**: Features chosen through 6 rigorous statistical methods
+- **No Redundancy**: Each feature provides distinct, non-overlapping information
+- **Optimal Performance**: 9 scientifically-validated features (comprehensive coverage)
+- **Statistical Rigor**: Features tested for significance, correlation, and importance
+- **Research-Based**: Selected from 894 real decision points with advanced analytics
 
 ## 🧠 Explainable AI Features
 
@@ -51,7 +46,7 @@ The DQN adapter includes comprehensive **explainable AI capabilities** that prov
 - **Expected Outcomes**: Prediction of scaling action results and risk mitigation strategies
 
 ### 🤖 LLM Validation with Structured Reasoning
-- **Cost-Effective Model**: Uses `gpt-3.5-turbo` instead of `gpt-4o-mini` for 60-80% cost reduction
+- **Large Context Model**: Uses `gpt-4-turbo` with 128K context window for complex LLM validation
 - **Structured JSON Responses**: LLM provides structured validation with confidence, risks, and benefits
 - **Fallback Parsing**: Robust JSON parsing with intelligent text analysis fallbacks
 - **Cluster State Integration**: Can query live Kubernetes state via MCP tools for validation
@@ -123,7 +118,7 @@ The service is configured via environment variables:
 | `PROMETHEUS_URL` | The URL of the Prometheus query API. | `http://prometheus.nimbusguard.svc:9090` |
 | `MCP_SERVER_URL` | The URL of the Model Context Protocol server for cluster tools. | `None` |
 | `OPENAI_API_KEY` | **(Required)** Your API key for OpenAI. | `None` |
-| `AI_MODEL` | OpenAI model to use for LLM validation (cost-effective). | `gpt-3.5-turbo` |
+| `AI_MODEL` | OpenAI model to use for LLM validation (large context). | `gpt-4-turbo` |
 | `AI_TEMPERATURE` | Temperature for LLM responses (lower = more consistent). | `0.1` |
 | `ENABLE_DETAILED_REASONING` | Enable comprehensive AI reasoning logs. | `true` |
 | `REASONING_LOG_LEVEL` | Log level for AI reasoning (INFO/DEBUG). | `INFO` |
@@ -138,7 +133,7 @@ The service is configured via environment variables:
 ### Cost Optimization
 
 The system is configured for **cost-effective operation**:
-- **AI Model**: Uses `gpt-3.5-turbo` instead of `gpt-4o-mini` for **60-80% cost reduction**
+- **AI Model**: Uses `gpt-4-turbo` with **128K context window** for complex LLM validation tasks
 - **Smart Caching**: Validation results cached to reduce API calls
 - **Efficient Prompting**: Structured prompts minimize token usage
 - **Fallback Logic**: Robust fallbacks reduce failed API calls

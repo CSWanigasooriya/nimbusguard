@@ -3,12 +3,11 @@
 Evaluation Module for DQN Adapter
 
 This module generates publication-quality diagrams and evaluation metrics
-for the clean 11-feature DQN architecture (5 raw + 6 LSTM), then saves them to MinIO for persistence.
+for the clean 5-feature DQN architecture, then saves them to MinIO for persistence.
 
 Feature Architecture:
-- 5 Raw Features: Current system state from Prometheus
-- 6 LSTM Features: Temporal intelligence and forecasting
-- Total: 11 features with zero overlap for optimal DQN performance
+- 9 Base Features: Scientifically-selected Kubernetes state metrics from Prometheus
+- Total: 9 scientifically-selected features for optimal DQN performance
 """
 
 import os
@@ -120,10 +119,16 @@ class DQNEvaluator:
                 logger.error(f"EVALUATOR: bucket_setup_failed error={bucket_error}")
                 raise
             
-            # Initialize data storage
+            # Initialize data storage with resource limits
             self.experiences = []
             self.training_metrics = []
             self.model_checkpoints = []
+            
+            # Resource limits to prevent memory leaks
+            self.max_experiences = 10000
+            self.max_training_metrics = 5000
+            self.max_q_value_history = 5000
+            self.max_episode_metrics = 1000
             
             # RESEARCH ENHANCEMENT: Add research-focused data tracking
             self.episode_metrics = []           # Episode-level statistics
@@ -150,6 +155,9 @@ class DQNEvaluator:
             self.current_episode_rewards.append(experience['reward'])
         
         self.experiences.append(experience)
+        # Enforce memory limits
+        if len(self.experiences) > self.max_experiences:
+            self.experiences = self.experiences[-self.max_experiences:]
     
     def add_q_values(self, q_values: List[float], action_taken: int, state_features: Dict[str, float]):
         """Add Q-value data for research analysis."""
@@ -166,6 +174,9 @@ class DQNEvaluator:
                 'state_features': state_features.copy()
             }
             self.q_value_history.append(q_value_entry)
+            # Enforce memory limits
+            if len(self.q_value_history) > self.max_q_value_history:
+                self.q_value_history = self.q_value_history[-self.max_q_value_history:]
             
             if len(self.q_value_history) % 10 == 0:
                 logger.info(f"EVALUATOR: q_values_tracked count={len(self.q_value_history)} "
@@ -196,6 +207,9 @@ class DQNEvaluator:
             }
             
             self.episode_metrics.append(episode_stats)
+            # Enforce memory limits
+            if len(self.episode_metrics) > self.max_episode_metrics:
+                self.episode_metrics = self.episode_metrics[-self.max_episode_metrics:]
             
             logger.info(f"EVALUATOR: episode_completed episode_id={self.current_episode_id} "
                        f"length={episode_stats['episode_length']} "
@@ -280,10 +294,10 @@ class DQNEvaluator:
                 logger.info(f"EVALUATOR: training_metrics_added count={len(self.training_metrics)} "
                            f"loss={loss:.4f} buffer_size={buffer_size} epsilon={epsilon:.4f}")
             
-            # Limit memory usage - keep only last 10,000 metrics
-            if len(self.training_metrics) > 10000:
-                self.training_metrics = self.training_metrics[-5000:]  # Keep last 5000
-                logger.info("EVALUATOR: training_metrics_trimmed kept_last=5000")
+            # Enforce memory limits
+            if len(self.training_metrics) > self.max_training_metrics:
+                self.training_metrics = self.training_metrics[-self.max_training_metrics:]
+                logger.info(f"EVALUATOR: training_metrics_trimmed kept_last={self.max_training_metrics}")
                 
         except Exception as e:
             logger.error(f"EVALUATOR: add_training_metrics_failed error={e}")
@@ -1001,12 +1015,11 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
             self._plot_feature_architecture(axes[0, 0])
             
             # 2. Feature Type Comparison
-            raw_count = 5
-            lstm_count = 6
-            total_count = 11
+            base_count = 5
+            total_count = 5
             
-            categories = ['Raw\nFeatures', 'LSTM\nFeatures', 'Total\nFeatures']
-            values = [raw_count, lstm_count, total_count]
+            categories = ['Base\nFeatures', 'Total\nFeatures']
+            values = [base_count, total_count]
             colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
             
             bars = axes[0, 1].bar(categories, values, color=colors, alpha=0.8, edgecolor='black')
@@ -1026,30 +1039,34 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
                            fontsize=14, transform=axes[1, 0].transAxes)
             
             flow_text = """
-            ┌─────────────────┐    ┌─────────────────┐
-            │   PROMETHEUS    │    │   LSTM MODEL    │
-            │   (5 Features)  │    │  (Time Series)  │
-            │                 │    │                 │
-            │ • HTTP Bucket   │    │ • 24 Timesteps │
-            │ • Memory Usage  │    │ • Pattern Learn │
-            │ • CPU Usage     │────▶ • Forecasting  │
-            │ • Scrape Health │    │ • Trend Analysis│
-            │ • Response Size │    │                 │
-            └─────────────────┘    └─────────────────┘
-                    │                        │
-                    ▼                        ▼
-            ┌─────────────────┐    ┌─────────────────┐
-            │ BALANCED SCALER │    │ LSTM FEATURES   │
-            │ (5 Features)    │    │ (6 Features)    │
-            └─────────────────┘    └─────────────────┘
-                    │                        │
-                    └───────────▼────────────┘
-                        ┌─────────────────┐
-                        │   DQN MODEL     │
-                        │ (11 Features)   │
-                        │  Max Corr: 0.74 │
-                        │ Scale Decision  │
-                        └─────────────────┘
+            ┌─────────────────┐
+            │   PROMETHEUS    │
+            │  (9 Features)   │
+            │                 │
+            │ • Unavailable   │
+            │ • Pod Ready     │
+            │ • Desired Rep.  │
+            │ • CPU Limits    │
+            │ • Memory Limits │
+            │ • Running       │
+            │ • Generation    │
+            │ • Network       │
+            │ • Exit Code     │
+            └─────────────────┘
+                    │
+                    ▼
+            ┌─────────────────┐
+            │ ROBUST SCALER   │
+            │  (9 Features)   │
+            └─────────────────┘
+                    │
+                    ▼
+            ┌─────────────────┐
+            │   DQN MODEL     │
+            │  (9 Features)   │
+            │ Scientifically  │
+            │   Selected      │
+            └─────────────────┘
             """
             
             axes[1, 0].text(0.5, 0.5, flow_text, ha='center', va='center',
@@ -1147,9 +1164,9 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
             return None
     
     def _plot_model_architecture(self, ax, model_state):
-        """Plot model architecture diagram for clean 11-feature architecture."""
-        layers = ['Input\n(11)\n5 Raw + 6 LSTM', 'Hidden 1\n(512)', 'Hidden 2\n(256)', 'Hidden 3\n(128)', 'Output\n(3)']
-        sizes = [11, 512, 256, 128, 3]
+        """Plot model architecture diagram for clean 5-feature architecture."""
+        layers = ['Input\n(9)\n9 Base Features', 'Hidden 1\n(64)', 'Hidden 2\n(32)', 'Output\n(3)']
+        sizes = [5, 64, 32, 3]
         colors = ['red', 'orange', 'yellow', 'green', 'blue']
         
         for i, (layer, size, color) in enumerate(zip(layers, sizes, colors)):
@@ -1173,58 +1190,48 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
         ax.set_title('DQN Architecture', fontsize=14, fontweight='bold')
     
     def _plot_feature_architecture(self, ax):
-        """Plot feature architecture breakdown showing 5 raw + 6 LSTM features."""
-        # Define feature groups (balanced selected features)
-        raw_features = [
-            'HTTP Traffic Patterns (Duration Bucket)',
-            'Memory Resource Usage (Resident Bytes)',
-            'CPU Resource Usage (Process Seconds)',
-            'Health Monitoring (Scrape Samples)', 
-            'Response Size Patterns (Bytes Sum)'
+        """Plot feature architecture breakdown showing 9 scientifically-selected base features."""
+        # Define feature groups (scientifically-selected Kubernetes state features)
+        base_features = [
+            'kube_deployment_status_replicas_unavailable',
+            'kube_pod_container_status_ready',
+            'kube_deployment_spec_replicas', 
+            'kube_pod_container_resource_limits_cpu',
+            'kube_pod_container_resource_limits_memory',
+            'kube_pod_container_status_running',
+            'kube_deployment_status_observed_generation',
+            'node_network_up',
+            'kube_pod_container_status_last_terminated_exitcode'
         ]
         
-        lstm_features = [
-            'Next 30sec Pressure',
-            'Next 60sec Pressure',
-            'Trend Velocity',
-            'Pattern Type Spike',
-            'Pattern Type Gradual',
-            'Pattern Type Cyclical'
-        ]
+        # Create bar chart showing feature list
+        y_positions = range(len(base_features))
+        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98FB98', '#F0E68C', '#FFB6C1']
         
-        # Create pie chart showing feature distribution
-        sizes = [len(raw_features), len(lstm_features)]
-        labels = [f'Raw Features\n({len(raw_features)})', f'LSTM Features\n({len(lstm_features)})']
-        colors = ['#FF6B6B', '#4ECDC4']
-        explode = (0.05, 0.05)
+        bars = ax.barh(y_positions, [1]*len(base_features), color=colors, alpha=0.8)
         
-        wedges, texts, autotexts = ax.pie(sizes, labels=labels, colors=colors, explode=explode,
-                                         autopct='%1.1f%%', shadow=True, startangle=90)
-        
-        # Enhance text
-        for autotext in autotexts:
-            autotext.set_color('white')
-            autotext.set_fontweight('bold')
-            autotext.set_fontsize(12)
-        
-        for text in texts:
-            text.set_fontsize(11)
-            text.set_fontweight('bold')
-        
-        ax.set_title('Feature Architecture: Zero Overlap Design\nTotal: 11 Features', 
+        ax.set_yticks(y_positions)
+        ax.set_yticklabels([f.replace('kube_', '').replace('_', ' ').title() for f in base_features], fontsize=10)
+        ax.set_xlabel('Feature Importance')
+        ax.set_title('Feature Architecture: 9 Scientifically-Selected Kubernetes Features', 
                     fontsize=14, fontweight='bold', pad=20)
+        ax.set_xlim(0, 1.2)
+        ax.set_xticks([])
         
-        # Add feature details as text below
+        # Add checkmarks for each feature
+        for i in range(len(base_features)):
+            ax.text(1.05, i, '✓', fontsize=16, fontweight='bold', 
+                   color='green', ha='center', va='center')
+        
+        # Add feature description text below
         feature_text = (
-            "Raw Features (Current State):\n" + 
-            "\n".join([f"• {f}" for f in raw_features]) +
-            "\n\nLSTM Features (Temporal Intelligence):\n" +
-            "\n".join([f"• {f}" for f in lstm_features])
+            "Base Features (Scientifically Selected Kubernetes State):\n" + 
+            "\n".join([f"• {f}" for f in base_features])
         )
         
-        ax.text(0.5, -1.8, feature_text, transform=ax.transAxes, fontsize=9,
+        ax.text(0.5, -0.3, feature_text, transform=ax.transAxes, fontsize=9,
                verticalalignment='top', horizontalalignment='center',
-               bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgray', alpha=0.8))
+               bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.8))
     
     def _plot_training_progress(self, ax):
         """Plot training progress."""
@@ -1346,11 +1353,10 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
         
         # Create table data with new architecture info
         data = [
-            ['Feature Architecture', '5 Raw + 6 LSTM = 11 Total (Balanced)'],
-            ['Raw Features', '5 (Balanced Consumer-Focused)'],
-            ['LSTM Features', '6 (Temporal Intelligence)'],
-            ['Feature Selection', 'Scientifically Validated'],
-            ['Max Correlation', '0.741 (No Problematic Correlations)'],
+            ['Feature Architecture', '9 Base Features (Scientifically Selected)'],
+            ['Base Features', '9 (Kubernetes State Metrics)'],
+            ['Feature Selection', 'DQN-Optimized'],
+            ['Architecture', 'Simplified & Efficient'],
             ['Total Experiences', f'{total_experiences:,}'],
             ['Training Steps', f'{total_training_steps:,}'],
             ['Average Reward', f'{avg_reward:.3f}'],

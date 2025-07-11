@@ -248,7 +248,7 @@ make dev    # Deploy the application
 - **Exploration vs Exploitation**: Epsilon-greedy strategy for optimal learning
 
 ### 🛡️ **Safety & Validation**
-- **LLM Validator**: GPT-3.5-turbo validates every scaling decision
+- **LLM Validator**: GPT-4-turbo validates every scaling decision using real cluster data
 - **Risk Assessment**: Automatic risk level calculation (low/medium/high)
 - **Safety Override**: System can proceed with caution if LLM is unavailable
 
@@ -265,7 +265,7 @@ make dev    # Deploy the application
 - **Research Outputs**: Automated generation of training analytics
 
 ### 💰 **Cost Optimization**
-- **Efficient LLM**: Uses GPT-3.5-turbo for 60-80% cost reduction
+- **Powerful LLM**: Uses GPT-4-turbo with 128K context for complex reasoning
 - **Smart Scaling**: Considers resource costs in scaling decisions
 - **Replica Optimization**: Balances performance and resource efficiency
 
@@ -277,7 +277,7 @@ make dev    # Deploy the application
 
 **AI Model Configuration:**
 ```bash
-AI_MODEL=gpt-3.5-turbo              # Cost-effective LLM model
+AI_MODEL=gpt-4-turbo                # Large context LLM model (128K tokens)
 AI_TEMPERATURE=0.1                  # Low temperature for consistent reasoning
 ENABLE_DETAILED_REASONING=true      # Enable comprehensive AI reasoning logs
 REASONING_LOG_LEVEL=INFO            # Log level for AI reasoning
