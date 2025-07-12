@@ -9,11 +9,11 @@ import time
 import logging
 import numpy as np
 import torch.nn.functional as F
-from monitoring.metrics import DQN_TRAINING_LOSS_GAUGE, DQN_BUFFER_SIZE_GAUGE, DQN_TRAINING_STEPS_GAUGE
+from monitoring.metrics import DQN_TRAINING_LOSS_GAUGE, DQN_BUFFER_SIZE_GAUGE, DQN_TRAINING_STEPS_GAUGE, DQN_EXPERIENCES_COUNTER
 logger = logging.getLogger("Trainer")
 
 class DQNTrainer:
-    """Combines real-time training with historical data loading."""
+    """Advanced DQN trainer with modern best practices for autoscaling."""
 
     def __init__(self, policy_net, device, feature_order, services=None):
         self.device = device
@@ -29,19 +29,41 @@ class DQNTrainer:
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
-        # Training components
-        self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=services.config.dqn.learning_rate)
+        # Advanced training components
+        self.optimizer = torch.optim.Adam(
+            self.policy_net.parameters(), 
+            lr=services.config.dqn.learning_rate,
+            eps=1e-4,  # More stable for small gradients
+            weight_decay=1e-6  # Light regularization
+        )
+        
+        # Learning rate scheduler for adaptive learning
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode='min', factor=0.8, patience=50, min_lr=1e-6
+        )
+        
         self.memory = ReplayBuffer(services.config.dqn.memory_capacity)
         self.training_queue = asyncio.Queue(maxsize=1000)
 
-        # Training state
+        # Enhanced training state tracking
         self.batches_trained = 0
         self.last_save_time = time.time()
         self.last_research_time = time.time()
         self.training_losses = []  # Resource limit: only keep last 1000 losses
         self.max_loss_history = 1000
+        
+        # Training stability metrics
+        self.loss_moving_avg = 0.0
+        self.loss_variance = 0.0
+        self.convergence_patience = 0
+        self.best_loss = float('inf')
+        self.stability_window = []
+        self.max_stability_window = 20
+        
+        # Soft update parameter for target network (more stable than hard updates)
+        self.tau = 0.005  # Soft update rate
 
-        logger.info(f"TRAINER: initialized device={device}")
+        logger.info(f"TRAINER: initialized device={device} lr_scheduler=ReduceLROnPlateau tau={self.tau}")
 
         # Try to initialize replay buffer with historical data
         asyncio.create_task(self._load_historical_data())
@@ -132,7 +154,13 @@ class DQNTrainer:
 
                 # Add to replay buffer
                 self.memory.push(training_exp)
-                logger.info(f"TRAINING: experience_added_to_buffer buffer_size={len(self.memory)} min_required={self.services.config.dqn.min_batch_size}")
+                buffer_size = len(self.memory)
+                
+                # Update buffer size gauge immediately when experiences are added
+                DQN_BUFFER_SIZE_GAUGE.set(buffer_size)
+                DQN_EXPERIENCES_COUNTER.inc()
+                
+                logger.info(f"TRAINING: experience_added_to_buffer buffer_size={buffer_size} min_required={self.services.config.dqn.min_batch_size}")
 
                 # Train if we have enough experiences
                 if len(self.memory) >= self.services.config.dqn.min_batch_size:
@@ -196,6 +224,18 @@ class DQNTrainer:
 
             if loss > 0:
                 logger.info(f"TRAINING: step_completed batch={self.batches_trained} loss={loss:.4f} buffer_size={len(self.memory)}")
+                
+                # Update learning rate scheduler based on loss
+                self.scheduler.step(loss)
+                current_lr = self.optimizer.param_groups[0]['lr']
+                
+                # Update training stability metrics
+                self._update_stability_metrics(loss)
+                
+                if self.batches_trained % 10 == 0:
+                    logger.info(f"TRAINING: stability_check batch={self.batches_trained} "
+                               f"loss_avg={self.loss_moving_avg:.4f} variance={self.loss_variance:.4f} "
+                               f"lr={current_lr:.2e} convergence_patience={self.convergence_patience}")
             else:
                 logger.warning(f"TRAINING: step_failed_or_skipped loss={loss}")
 
@@ -205,8 +245,30 @@ class DQNTrainer:
         except Exception as e:
             logger.error(f"TRAINING: async_step_error error={e}", exc_info=True)
 
+    def _update_stability_metrics(self, loss):
+        """Update training stability metrics for convergence monitoring."""
+        self.stability_window.append(loss)
+        if len(self.stability_window) > self.max_stability_window:
+            self.stability_window.pop(0)
+        
+        # Update moving average and variance
+        if len(self.stability_window) >= 5:
+            self.loss_moving_avg = np.mean(self.stability_window)
+            self.loss_variance = np.var(self.stability_window)
+            
+            # Check for convergence
+            if loss < self.best_loss * 0.99:  # 1% improvement threshold
+                self.best_loss = loss
+                self.convergence_patience = 0
+            else:
+                self.convergence_patience += 1
+                
+            # Early stopping for unstable training
+            if self.loss_variance > 10.0 and len(self.stability_window) >= self.max_stability_window:
+                logger.warning(f"TRAINING: high_variance_detected variance={self.loss_variance:.4f} - may need hyperparameter adjustment")
+
     def _sync_train_step(self):
-        """Synchronous training step (runs in thread pool)."""
+        """Enhanced synchronous training step with modern DQN improvements."""
         try:
             logger.info(f"TRAINING: sync_step_starting memory_size={len(self.memory)}")
             
@@ -244,16 +306,19 @@ class DQNTrainer:
                 next_q_values = self.target_net(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
                 target_q_values = rewards + (self.services.config.dqn.gamma * next_q_values * ~dones)
 
-            # Calculate loss and backpropagate
-            loss = F.mse_loss(current_q_values, target_q_values)
+            # Use Huber loss for more robust training (less sensitive to outliers)
+            loss = F.smooth_l1_loss(current_q_values, target_q_values)
 
-            # Validate loss before proceeding
+            # Enhanced loss validation
             if not torch.isfinite(loss) or loss.item() < 0:
                 logger.warning(f"TRAINER: invalid_loss_detected loss={loss.item()} - skipping training step")
                 return 0.0
 
+            # Adaptive loss threshold based on training progress
+            loss_threshold = max(100, 1000 - (self.batches_trained * 0.5))  # Decreases over time
+            
             # Diagnostic logging for high losses
-            if loss.item() > 100:
+            if loss.item() > loss_threshold:
                 q_val_range = f"[{current_q_values.min().item():.2f}, {current_q_values.max().item():.2f}]"
                 target_range = f"[{target_q_values.min().item():.2f}, {target_q_values.max().item():.2f}]"
                 reward_range = f"[{rewards.min().item():.2f}, {rewards.max().item():.2f}]"
@@ -269,20 +334,18 @@ class DQNTrainer:
             self.optimizer.zero_grad()
             loss.backward()
 
-            # Gradient clipping to prevent exploding gradients (more aggressive for high losses)
+            # Enhanced gradient clipping with norm monitoring
             grad_norm = torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
             
-            # Log gradient information for high losses
-            if loss.item() > 100:
-                logger.warning(f"TRAINER: gradient_analysis grad_norm={grad_norm:.4f} clipped_to=1.0")
+            # Log gradient information for debugging
+            if grad_norm > 0.8:  # Log when gradients are getting clipped significantly
+                logger.debug(f"TRAINER: gradient_clipping grad_norm={grad_norm:.4f} clipped_to=1.0")
 
             self.optimizer.step()
             self.batches_trained += 1
 
-            # Update target network periodically
-            if self.batches_trained % self.services.config.dqn.target_update_interval == 0:
-                self.target_net.load_state_dict(self.policy_net.state_dict())
-                logger.info(f"TRAINING: target_network_updated batch={self.batches_trained}")
+            # Soft update target network (more stable than hard updates)
+            self._soft_update_target_network()
 
             # Track training metrics with resource limits
             self.training_losses.append(loss.item())
@@ -333,8 +396,13 @@ class DQNTrainer:
             logger.error(f"Sync training step error: {e}")
             return 0.0
 
+    def _soft_update_target_network(self):
+        """Soft update of target network parameters: θ_target = τ*θ_local + (1-τ)*θ_target"""
+        for target_param, local_param in zip(self.target_net.parameters(), self.policy_net.parameters()):
+            target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
+
     async def _save_model(self):
-        """Save model to MinIO."""
+        """Save model to MinIO with enhanced checkpoint information."""
         logger.info("MODEL_SAVE: attempting_minio_upload")
         try:
             if not self.services or not self.services.minio_client:
@@ -343,18 +411,27 @@ class DQNTrainer:
 
             # Get epsilon from services (no more global state)
             current_epsilon = self.services.get_epsilon() if self.services else 0.3
+            current_lr = self.optimizer.param_groups[0]['lr']
 
-            # Create comprehensive checkpoint
+            # Create comprehensive checkpoint with training state
             checkpoint = {
                 'policy_net_state_dict': self.policy_net.state_dict(),
                 'target_net_state_dict': self.target_net.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
+                'scheduler_state_dict': self.scheduler.state_dict(),
                 'batches_trained': self.batches_trained,
                 'epsilon': current_epsilon,
+                'learning_rate': current_lr,
                 'feature_order': self.feature_order,
-                'model_architecture': 'Simplified DQN (64-32)',
+                'model_architecture': 'Enhanced DQN with Huber Loss',
                 'state_dim': len(self.feature_order),
                 'action_dim': 3,
+                'training_losses': self.training_losses[-100:],  # Last 100 losses
+                'loss_moving_avg': self.loss_moving_avg,
+                'loss_variance': self.loss_variance,
+                'best_loss': self.best_loss,
+                'convergence_patience': self.convergence_patience,
+                'tau': self.tau,
                 'saved_at': time.time()
             }
 
@@ -367,7 +444,7 @@ class DQNTrainer:
                 self.services.config.minio.bucket_name, "dqn_model.pt", data=buffer, length=buffer.getbuffer().nbytes,
                 content_type='application/octet-stream'
             )
-            logger.info(f"MODEL_SAVE: success batch={self.batches_trained} size={buffer.getbuffer().nbytes}")
+            logger.info(f"MODEL_SAVE: success batch={self.batches_trained} size={buffer.getbuffer().nbytes} lr={current_lr:.2e}")
 
         except Exception as e:
             logger.error(f"MODEL_SAVE: failed error={e}")
@@ -494,12 +571,19 @@ class DQNTrainer:
 
             # Get model state information
             total_params = sum(p.numel() for p in self.policy_net.parameters())
+            current_lr = self.optimizer.param_groups[0]['lr']
+            
             model_state = {
                 'total_params': total_params,
                 'batches_trained': self.batches_trained,
                 'device': str(self.device),
-                'architecture': 'Simplified DQN (64-32)',
+                'architecture': 'Enhanced DQN with Huber Loss',
                 'training_losses': self.training_losses[-100:],  # Last 100 losses
+                'learning_rate': current_lr,
+                'loss_moving_avg': self.loss_moving_avg,
+                'loss_variance': self.loss_variance,
+                'convergence_patience': self.convergence_patience,
+                'tau': self.tau
             }
 
             # Generate all evaluation outputs

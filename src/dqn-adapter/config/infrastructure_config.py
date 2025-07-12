@@ -3,14 +3,14 @@ Infrastructure configuration for external services.
 """
 
 from typing import Optional
-from pydantic import ConfigDict, Field, field_validator, AliasChoices
+from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
 class PrometheusConfig(BaseSettings):
     """Prometheus configuration."""
-    url: str = Field(default="http://prometheus.nimbusguard.svc:9090", validation_alias=AliasChoices("PROMETHEUS_URL", "url"))
-    timeout: int = Field(default=30, validation_alias=AliasChoices("PROMETHEUS_TIMEOUT", "timeout"))
+    url: str = Field(default="http://prometheus.nimbusguard.svc:9090", env="PROMETHEUS_URL")
+    timeout: int = Field(default=30, env="PROMETHEUS_TIMEOUT")
     
     @field_validator('url')
     @classmethod
@@ -28,12 +28,12 @@ class PrometheusConfig(BaseSettings):
 
 class MinIOConfig(BaseSettings):
     """MinIO configuration."""
-    endpoint: str = Field(default="http://minio.nimbusguard.svc:9000", validation_alias=AliasChoices("MINIO_ENDPOINT", "endpoint"))
-    access_key: str = Field(default="minioadmin", validation_alias=AliasChoices("MINIO_ACCESS_KEY", "access_key"))
-    secret_key: str = Field(default="minioadmin", validation_alias=AliasChoices("MINIO_SECRET_KEY", "secret_key"))
-    bucket_name: str = Field(default="models", validation_alias=AliasChoices("BUCKET_NAME", "bucket_name"))
-    scaler_name: str = Field(default="feature_scaler.gz", validation_alias=AliasChoices("SCALER_NAME", "scaler_name"))
-    scaler_path: str = Field(default="/app/feature_scaler.gz", validation_alias=AliasChoices("SCALER_PATH", "scaler_path"))
+    endpoint: str = Field(default="http://minio.nimbusguard.svc:9000", env="MINIO_ENDPOINT")
+    access_key: str = Field(default="minioadmin", env="MINIO_ACCESS_KEY")
+    secret_key: str = Field(default="minioadmin", env="MINIO_SECRET_KEY")
+    bucket_name: str = Field(default="models", env="BUCKET_NAME")
+    scaler_name: str = Field(default="feature_scaler.gz", env="SCALER_NAME")
+    scaler_path: str = Field(default="/app/feature_scaler.gz", env="SCALER_PATH")
     
     @field_validator('endpoint')
     @classmethod
@@ -51,8 +51,8 @@ class MinIOConfig(BaseSettings):
 
 class RedisConfig(BaseSettings):
     """Redis configuration."""
-    url: str = Field(default="redis://redis:6379", validation_alias=AliasChoices("REDIS_URL", "redis_url"))
-    replay_buffer_key: str = Field(default="replay_buffer", validation_alias=AliasChoices("REPLAY_BUFFER_KEY", "replay_buffer_key"))
+    url: str = Field(default="redis://redis:6379", env="REDIS_URL")
+    replay_buffer_key: str = Field(default="replay_buffer", env="REPLAY_BUFFER_KEY")
     
     @field_validator('url')
     @classmethod
@@ -70,9 +70,9 @@ class RedisConfig(BaseSettings):
 
 class KubernetesConfig(BaseSettings):
     """Kubernetes configuration."""
-    target_deployment: str = Field(default="consumer", validation_alias=AliasChoices("TARGET_DEPLOYMENT", "target_deployment"))
-    target_namespace: str = Field(default="nimbusguard", validation_alias=AliasChoices("TARGET_NAMESPACE", "target_namespace"))
-    stabilization_period_seconds: int = Field(default=30, validation_alias=AliasChoices("STABILIZATION_PERIOD_SECONDS", "stabilization_period_seconds"))
+    target_deployment: str = Field(default="consumer", env="TARGET_DEPLOYMENT")
+    target_namespace: str = Field(default="nimbusguard", env="TARGET_NAMESPACE")
+    stabilization_period_seconds: int = Field(default=30, env="STABILIZATION_PERIOD_SECONDS")
     
     @field_validator('stabilization_period_seconds')
     @classmethod
@@ -90,9 +90,9 @@ class KubernetesConfig(BaseSettings):
 
 class ServerConfig(BaseSettings):
     """Server configuration."""
-    port: int = Field(default=8080, validation_alias=AliasChoices("SERVER_PORT", "port"))
-    host: str = Field(default="0.0.0.0", validation_alias=AliasChoices("SERVER_HOST", "host"))
-    kopf_health_port: int = Field(default=8081, validation_alias=AliasChoices("KOPF_HEALTH_PORT", "kopf_health_port"))
+    port: int = Field(default=8080, env="SERVER_PORT")
+    host: str = Field(default="0.0.0.0", env="SERVER_HOST")
+    kopf_health_port: int = Field(default=8081, env="KOPF_HEALTH_PORT")
     
     @field_validator('port', 'kopf_health_port')
     @classmethod

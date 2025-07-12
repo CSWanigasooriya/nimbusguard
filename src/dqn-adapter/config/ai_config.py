@@ -4,7 +4,7 @@ AI and LLM configuration.
 
 from typing import Optional
 from enum import Enum
-from pydantic import ConfigDict, Field, field_validator, AliasChoices
+from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -20,13 +20,22 @@ class AIConfig(BaseSettings):
     """AI and LLM configuration."""
     
     # LLM settings
-    model: str = Field(default="gpt-4-turbo", validation_alias=AliasChoices("AI_MODEL", "ai_model"))
-    temperature: float = Field(default=0.1, validation_alias=AliasChoices("AI_TEMPERATURE", "ai_temperature"))
-    enable_llm_validation: bool = Field(default=False, validation_alias=AliasChoices("ENABLE_LLM_VALIDATION", "enable_llm_validation"))
-    mcp_server_url: Optional[str] = Field(default=None, validation_alias=AliasChoices("MCP_SERVER_URL", "mcp_server_url"))
+    model: str = Field(default="gpt-4-turbo", env="AI_MODEL")
+    temperature: float = Field(default=0.1, env="AI_TEMPERATURE")
+    enable_llm_validation: bool = Field(default=False, env="ENABLE_LLM_VALIDATION")
+    
+    @field_validator('enable_llm_validation', mode='before')
+    @classmethod
+    def validate_llm_booleans(cls, v):
+        """Parse string boolean values correctly."""
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes', 'on')
+        return bool(v)
+    
+    mcp_server_url: Optional[str] = Field(default=None, env="MCP_SERVER_URL")
     
     # Reasoning and logging
-    enable_detailed_reasoning: bool = Field(default=True, validation_alias=AliasChoices("ENABLE_DETAILED_REASONING", "enable_detailed_reasoning"))
+    enable_detailed_reasoning: bool = Field(default=True, env="ENABLE_DETAILED_REASONING")
     
     @field_validator('temperature')
     @classmethod

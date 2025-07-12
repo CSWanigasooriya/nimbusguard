@@ -3,7 +3,7 @@ DQN-specific configuration.
 """
 
 from typing import List
-from pydantic import ConfigDict, Field, field_validator, AliasChoices
+from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -11,21 +11,21 @@ class DQNConfig(BaseSettings):
     """DQN algorithm configuration."""
     
     # Architecture
-    hidden_dims_str: str = Field(default="64,32", validation_alias=AliasChoices("DQN_HIDDEN_DIMS", "hidden_dims_str"))
+    hidden_dims_str: str = Field(default="64,32", env="DQN_HIDDEN_DIMS")
     
     # Training parameters
-    epsilon_start: float = Field(default=0.3, validation_alias=AliasChoices("EPSILON_START", "epsilon_start"))
-    epsilon_end: float = Field(default=0.05, validation_alias=AliasChoices("EPSILON_END", "epsilon_end"))
-    epsilon_decay: float = Field(default=0.995, validation_alias=AliasChoices("EPSILON_DECAY", "epsilon_decay"))
-    gamma: float = Field(default=0.99, validation_alias=AliasChoices("GAMMA", "gamma"))
-    learning_rate: float = Field(default=1e-4, validation_alias=AliasChoices("LEARNING_RATE", "learning_rate"))
+    epsilon_start: float = Field(default=0.3, env="EPSILON_START")
+    epsilon_end: float = Field(default=0.05, env="EPSILON_END")
+    epsilon_decay: float = Field(default=0.995, env="EPSILON_DECAY")
+    gamma: float = Field(default=0.99, env="GAMMA")
+    learning_rate: float = Field(default=1e-4, env="LEARNING_RATE")
     
     # Memory and batching
-    memory_capacity: int = Field(default=50000, validation_alias=AliasChoices("MEMORY_CAPACITY", "memory_capacity"))
-    batch_size: int = Field(default=32, validation_alias=AliasChoices("BATCH_SIZE", "batch_size"))
-    min_batch_size: int = Field(default=8, validation_alias=AliasChoices("MIN_BATCH_SIZE", "min_batch_size"))
-    target_batch_size: int = Field(default=64, validation_alias=AliasChoices("TARGET_BATCH_SIZE", "target_batch_size"))
-    target_update_interval: int = Field(default=1000, validation_alias=AliasChoices("TARGET_UPDATE_INTERVAL", "target_update_interval"))
+    memory_capacity: int = Field(default=50000, env="MEMORY_CAPACITY")
+    batch_size: int = Field(default=32, env="BATCH_SIZE")
+    min_batch_size: int = Field(default=8, env="MIN_BATCH_SIZE")
+    target_batch_size: int = Field(default=64, env="TARGET_BATCH_SIZE")
+    target_update_interval: int = Field(default=1000, env="TARGET_UPDATE_INTERVAL")
     
     @property
     def hidden_dims(self) -> List[int]:
