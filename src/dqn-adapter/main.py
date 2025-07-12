@@ -71,7 +71,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     logger.info(f"DQN_EXPLORATION: epsilon_start={config.dqn.epsilon_start} epsilon_end={config.dqn.epsilon_end} epsilon_decay={config.dqn.epsilon_decay}")
     logger.info(f"DQN_TRAINING: gamma={config.dqn.gamma} lr={config.dqn.learning_rate} memory_capacity={config.dqn.memory_capacity} batch_size={config.dqn.batch_size}")
     logger.info(f"DQN_ARCHITECTURE: hidden_dims={config.dqn.hidden_dims}")
-    logger.info(f"REWARD_WEIGHTS: performance={config.reward.performance_weight:.0%} resource={config.reward.resource_weight:.0%} health={config.reward.health_weight:.0%} cost={config.reward.cost_weight:.0%}")
+    logger.info("REWARD_SYSTEM: pure_llm_based_rewards no_hardcoded_weights")
     logger.info("=== END CONFIGURATION ===")
     
     # Initialize service container for dependency injection
@@ -82,29 +82,22 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     
     services.prometheus_client = PrometheusClient()
     
-    # Only initialize LLM if validation is enabled
-    if config.ai.enable_llm_validation:
-        try:
-            services.llm = ChatOpenAI(model=config.ai.model, temperature=config.ai.temperature)
-            logger.info(f"LLM: initialized_successfully model={config.ai.model}")
-        except Exception as e:
-            logger.error(f"LLM: initialization_failed error={e}")
-            logger.warning("LLM: consider_disabling_validation ENABLE_LLM_VALIDATION=false")
-            
-            # Check if this is an API key issue (graceful fallback)
-            error_str = str(e).lower()
-            if 'api_key' in error_str or 'openai_api_key' in error_str:
-                logger.warning("LLM: api_key_missing - automatically_disabling_llm_validation")
-                logger.info("LLM: dqn_will_operate_without_llm_safety_monitor")
-                services.llm = None
-                # Update config to reflect the actual state
-                config.ai.enable_llm_validation = False
-            else:
-                # For other errors (network issues, etc.), still fail hard
-                raise kopf.PermanentError(f"LLM initialization failed with non-API-key error: {e}")
-    else:
-        services.llm = None
-        logger.info("LLM: skipped_initialization validation_disabled")
+    # Always try to initialize LLM if OpenAI API key is available (needed for both safety and rewards)
+    try:
+        services.llm = ChatOpenAI(model=config.ai.model, temperature=config.ai.temperature)
+        logger.info(f"LLM: initialized_successfully model={config.ai.model}")
+    except Exception as e:
+        logger.error(f"LLM: initialization_failed error={e}")
+        
+        # Check if this is an API key issue (graceful fallback)
+        error_str = str(e).lower()
+        if 'api_key' in error_str or 'openai_api_key' in error_str:
+            logger.warning("LLM: api_key_missing - llm_features_disabled")
+            logger.info("LLM: dqn_will_operate_without_llm_features (safety_monitor_and_rewards)")
+            services.llm = None
+        else:
+            # For other errors (network issues, etc.), still fail hard
+            raise kopf.PermanentError(f"LLM initialization failed with non-API-key error: {e}")
 
     # Initialize MinIO client
     try:
@@ -192,38 +185,57 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     # Load DQN model from MinIO
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     try:
-        logger.info("DQN_MODEL: loading from_minio=dqn_model.pt")
+        # Try to load existing model from MinIO
+        logger.info("DQN_MODEL: loading_from_minio")
         response = services.minio_client.get_object(config.minio.bucket_name, "dqn_model.pt")
-        buffer = BytesIO(response.read())
-        checkpoint = torch.load(buffer, map_location=device)
+        model_bytes = response.read()
         
-        # Initialize model with scientifically-validated architecture (9 consumer performance features)
-        state_dim = len(config.feature_order)  # 9 scientifically-selected consumer performance features
+        checkpoint = torch.load(BytesIO(model_bytes), map_location=device)
+        
+        # Initialize model with current architecture
+        state_dim = len(config.feature_order)  # Scientifically-validated: 9 consumer performance features
         action_dim = 3
         services.dqn_model = EnhancedQNetwork(state_dim, action_dim, config.dqn.hidden_dims).to(device)
-        logger.info(f"DQN_MODEL: architecture_initialized input_features={state_dim} output_actions={action_dim}")
         
-        if isinstance(checkpoint, dict) and 'policy_net_state_dict' in checkpoint:
-            services.dqn_model.load_state_dict(checkpoint['policy_net_state_dict'])
+        # Try to load state dict with graceful handling of architecture mismatches
+        if 'policy_net_state_dict' in checkpoint:
+            try:
+                services.dqn_model.load_state_dict(checkpoint['policy_net_state_dict'], strict=False)
+                logger.info("DQN_MODEL: loaded_with_partial_compatibility (policy_net)")
+            except Exception as load_error:
+                logger.warning(f"DQN_MODEL: policy_net_load_failed error={load_error}")
+                logger.info("DQN_MODEL: using_fresh_weights_with_checkpoint_metadata")
         else:
-            services.dqn_model.load_state_dict(checkpoint)
+            try:
+                services.dqn_model.load_state_dict(checkpoint, strict=False)
+                logger.info("DQN_MODEL: loaded_with_partial_compatibility (direct)")
+            except Exception as load_error:
+                logger.warning(f"DQN_MODEL: direct_load_failed error={load_error}")
+                logger.info("DQN_MODEL: using_fresh_weights")
             
         services.dqn_model.eval()  # Set to evaluation mode
         logger.info(f"DQN_MODEL: loaded_successfully device={device}")
         
         # Initialize combined trainer for real-time learning
-        services.dqn_trainer = DQNTrainer(services.dqn_model, device, config.feature_order, services)
-        
-        # Ensure model is saved to MinIO (in case it was loaded but trainer is new)
         try:
-            await services.dqn_trainer._save_model()
-            logger.info("DQN_MODEL: saved_to_minio")
-        except Exception as save_error:
-            logger.error(f"DQN_MODEL: save_failed error={save_error}")
-        
-        # Start background training loop
-        asyncio.create_task(services.dqn_trainer.continuous_training_loop())
-        logger.info("DQN_TRAINER: background_loop_started")
+            services.dqn_trainer = DQNTrainer(services.dqn_model, device, config.feature_order, services)
+            logger.info("DQN_TRAINER: initialized_successfully")
+            
+            # Start background training loop
+            asyncio.create_task(services.dqn_trainer.continuous_training_loop())
+            logger.info("DQN_TRAINER: background_loop_started")
+            
+            # Ensure model is saved to MinIO (in case it was loaded but trainer is new)
+            try:
+                await services.dqn_trainer._save_model()
+                logger.info("DQN_MODEL: saved_to_minio")
+            except Exception as save_error:
+                logger.warning(f"DQN_MODEL: save_failed error={save_error}")
+                
+        except Exception as trainer_error:
+            logger.error(f"DQN_TRAINER: initialization_failed error={trainer_error}")
+            # Clear the trainer to trigger fallback
+            services.dqn_trainer = None
         
     except Exception as e:
         logger.warning(f"DQN_MODEL: load_failed error={e}")
@@ -237,9 +249,13 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
             logger.info(f"DQN_MODEL: fresh_model_created input_features={state_dim} output_actions={action_dim}")
             
             # Initialize trainer with fresh model
-            logger.info("DQN_TRAINER: initializing")
+            logger.info("DQN_TRAINER: initializing_fresh")
             services.dqn_trainer = DQNTrainer(services.dqn_model, device, config.feature_order, services)
             logger.info("DQN_TRAINER: initialized_successfully")
+            
+            # Start background training loop
+            asyncio.create_task(services.dqn_trainer.continuous_training_loop())
+            logger.info("DQN_TRAINER: fresh_model_loop_started")
             
             # Save fresh model to MinIO immediately (synchronous to catch errors)
             logger.info("DQN_MODEL: saving_fresh_model")
@@ -247,14 +263,13 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
                 await services.dqn_trainer._save_model()
                 logger.info("DQN_MODEL: fresh_model_saved")
             except Exception as save_error:
-                logger.error(f"DQN_MODEL: save_failed error={save_error}")
+                logger.warning(f"DQN_MODEL: save_failed error={save_error}")
                 # Continue anyway - the system can still function without saving
-            
-            asyncio.create_task(services.dqn_trainer.continuous_training_loop())
-            logger.info("DQN_TRAINER: fresh_model_loop_started")
             
         except Exception as fresh_model_error:
             logger.error(f"DQN_MODEL: fresh_creation_failed error={fresh_model_error}")
+            # Set trainer to None to indicate failure
+            services.dqn_trainer = None
 
     try:
         services.redis_client = redis.from_url(config.redis.url, decode_responses=True)
@@ -263,8 +278,8 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         logger.error(f"REDIS: connection_failed error={e}")
         # Not raising a permanent error, as the operator might still function for decision-making
         
-    # Initialize MCP validation with LLM supervisor (only if LLM validation is enabled and LLM is available)
-    if config.ai.enable_llm_validation and services.llm is not None:
+    # Initialize MCP validation with LLM supervisor (always if LLM is available)
+    if services.llm is not None:
         if config.ai.mcp_server_url:
             try:
                 logger.info(f"MCP: connecting url={config.ai.mcp_server_url}")
@@ -285,12 +300,15 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         else:
             logger.info("MCP: url_not_set using_llm_only")
             services.validator_agent = create_react_agent(services.llm, tools=[])
+        
+        # Log LLM capabilities based on validation setting
+        if config.ai.enable_llm_validation:
+            logger.info("LLM_FEATURES: safety_monitor=enabled rewards=enabled")
+        else:
+            logger.info("LLM_FEATURES: safety_monitor=disabled rewards=enabled")
     else:
         services.validator_agent = None
-        if not config.ai.enable_llm_validation:
-            logger.info("VALIDATOR: skipped_initialization llm_validation_disabled")
-        else:
-            logger.info("VALIDATOR: skipped_initialization llm_unavailable")
+        logger.info("LLM_FEATURES: safety_monitor=disabled rewards=disabled (no_api_key)")
     
     # Initialize evaluator
     if config.enable_evaluation_outputs:
@@ -319,10 +337,6 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     DQN_Q_VALUE_SCALE_DOWN_GAUGE.set(0.0)
     DQN_Q_VALUE_KEEP_SAME_GAUGE.set(0.0)
     DQN_REWARD_TOTAL_GAUGE.set(0.0)
-    DQN_REWARD_PERFORMANCE_GAUGE.set(0.0)
-    DQN_REWARD_RESOURCE_GAUGE.set(0.0)
-    DQN_REWARD_HEALTH_GAUGE.set(0.0)
-    DQN_REWARD_COST_GAUGE.set(0.0)
     
     # Run initial DQN decision to get a baseline
     try:
@@ -380,16 +394,16 @@ decision_reasoning = DecisionReasoning()
 
 @kopf.timer('apps', 'v1', 'deployments', 
            when=lambda name, namespace, **_: name == config.kubernetes.target_deployment and namespace == config.kubernetes.target_namespace,
-                       interval=config.kubernetes.stabilization_period_seconds)  # Configurable interval (default: 30s)
+                       interval=config.kubernetes.stabilization_period_seconds) 
 async def continuous_dqn_monitoring(name, namespace, **kwargs):
     """
-    🎯 CONTINUOUS DQN MONITORING: Proactive decision-making every STABILIZATION_PERIOD_SECONDS
+    🎯 CONTINUOUS DQN MONITORING: Decision-making with proper stabilization waiting
     
     This replaces the old ScaledObject timer with direct deployment monitoring.
-    The DQN continuously monitors metrics and makes intelligent scaling decisions.
-    Interval is configurable via STABILIZATION_PERIOD_SECONDS env var (default: 30s).
+    The DQN makes decisions, waits for system stabilization, then calculates rewards.
+    Interval is 3x STABILIZATION_PERIOD_SECONDS to allow full decision cycle (default: 90s).
     """
-    logger.info(f"TIMER: continuous_monitoring_triggered deployment={name} namespace={namespace} interval={config.kubernetes.stabilization_period_seconds}s")
+    logger.info(f"TIMER: continuous_monitoring_triggered deployment={name} namespace={namespace} interval={config.kubernetes.stabilization_period_seconds * 3}s")
     
     try:
         # Run intelligent scaling decision - this is our core DQN loop

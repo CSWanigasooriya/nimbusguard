@@ -3,14 +3,14 @@ Main configuration for DQN Adapter.
 Combines all component-specific configurations.
 """
 
-from typing import List, Optional
-from pydantic import ConfigDict, Field, AliasChoices
+from typing import List
+from pydantic import ConfigDict, Field
 from pydantic_settings import BaseSettings
 from collections import namedtuple
 
 # Import component-specific configurations
 from .dqn_config import DQNConfig
-from .reward_config import RewardConfig
+
 from .infrastructure_config import PrometheusConfig, MinIOConfig, RedisConfig, KubernetesConfig, ServerConfig
 from .ai_config import AIConfig, LogLevel
 
@@ -19,10 +19,10 @@ class DQNAdapterConfig(BaseSettings):
     """Main configuration class that combines all component configurations."""
     
     # === GLOBAL SETTINGS ===
-    log_level: LogLevel = Field(default=LogLevel.INFO, validation_alias=AliasChoices("LOG_LEVEL", "log_level"))
-    enable_evaluation_outputs: bool = Field(default=True, validation_alias=AliasChoices("ENABLE_EVALUATION_OUTPUTS", "enable_evaluation_outputs"))
-    evaluation_interval: int = Field(default=300, validation_alias=AliasChoices("EVALUATION_INTERVAL", "evaluation_interval"))
-    save_interval_seconds: int = Field(default=300, validation_alias=AliasChoices("SAVE_INTERVAL_SECONDS", "save_interval_seconds"))
+    log_level: LogLevel = Field(default=LogLevel.INFO, env="LOG_LEVEL")
+    enable_evaluation_outputs: bool = Field(default=True, env="ENABLE_EVALUATION_OUTPUTS")
+    evaluation_interval: int = Field(default=300, env="EVALUATION_INTERVAL")
+    save_interval_seconds: int = Field(default=300, env="SAVE_INTERVAL_SECONDS")
     
     # === FEATURE CONFIGURATION ===
     base_features: List[str] = Field(default=[
@@ -40,9 +40,8 @@ class DQNAdapterConfig(BaseSettings):
 
     
     # === COMPONENT CONFIGURATIONS ===
-    # These are not initialized with default_factory to allow proper env var loading
+    # All components are required for the AI-powered autoscaling system
     dqn: DQNConfig = Field(default=None)
-    reward: RewardConfig = Field(default=None)
     prometheus: PrometheusConfig = Field(default=None)
     minio: MinIOConfig = Field(default=None)
     redis: RedisConfig = Field(default=None)
@@ -55,8 +54,6 @@ class DQNAdapterConfig(BaseSettings):
         # Initialize component configs first
         if 'dqn' not in data or data['dqn'] is None:
             data['dqn'] = DQNConfig()
-        if 'reward' not in data or data['reward'] is None:
-            data['reward'] = RewardConfig()
         if 'prometheus' not in data or data['prometheus'] is None:
             data['prometheus'] = PrometheusConfig()
         if 'minio' not in data or data['minio'] is None:
@@ -125,7 +122,7 @@ def load_config() -> DQNAdapterConfig:
 
 
 # Global configuration instance
-_config: Optional[DQNAdapterConfig] = None
+_config: DQNAdapterConfig = None
 
 
 def get_config() -> DQNAdapterConfig:

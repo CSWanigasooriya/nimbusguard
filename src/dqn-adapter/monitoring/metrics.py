@@ -27,9 +27,5 @@ DQN_EXPLOITATION_COUNTER = Counter('dqn_exploitation_actions_total', 'Total expl
 DQN_EXPERIENCES_COUNTER = Counter('dqn_experiences_added_total', 'Total experiences added to replay buffer')
 DQN_DECISIONS_COUNTER = Counter('dqn_decisions_total', 'Total decisions made by DQN')
 
-# Reward Component Metrics
-DQN_REWARD_TOTAL_GAUGE = Gauge('dqn_reward_total', 'Total reward received')
-DQN_REWARD_PERFORMANCE_GAUGE = Gauge('dqn_reward_performance_component', 'Performance component of reward')
-DQN_REWARD_RESOURCE_GAUGE = Gauge('dqn_reward_resource_component', 'Resource component of reward')
-DQN_REWARD_HEALTH_GAUGE = Gauge('dqn_reward_health_component', 'Health component of reward')
-DQN_REWARD_COST_GAUGE = Gauge('dqn_reward_cost_component', 'Cost component of reward')
+# LLM Reward Metrics
+DQN_REWARD_TOTAL_GAUGE = Gauge('dqn_reward_total', 'LLM-calculated reward value')

@@ -7,7 +7,7 @@ This package contains all configuration modules organized by component.
 # Import component config classes
 from .dqn_config import DQNConfig
 
-from .reward_config import RewardConfig
+
 from .infrastructure_config import (
     PrometheusConfig, MinIOConfig, RedisConfig, 
     KubernetesConfig, ServerConfig
@@ -20,7 +20,7 @@ from .main import DQNAdapterConfig, TrainingExperience, load_config, get_config
 __all__ = [
     # Component configs
     'DQNConfig',
-    'RewardConfig',
+
     'PrometheusConfig',
     'MinIOConfig',
     'RedisConfig',
