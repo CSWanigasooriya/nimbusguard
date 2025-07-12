@@ -295,8 +295,7 @@ GAMMA=0.99                          # Discount factor
 **System Configuration:**
 ```bash
 STABILIZATION_PERIOD_SECONDS=60     # Wait time after scaling
-EVALUATION_INTERVAL=300             # Research output generation interval
-ENABLE_EVALUATION_OUTPUTS=true      # Enable research analytics
+
 ```
 
 ---
