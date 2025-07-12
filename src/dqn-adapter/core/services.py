@@ -25,7 +25,8 @@ class ServiceContainer:
     # AI/ML models
     scaler: Optional[Any] = None
     dqn_model: Optional[Any] = None
-    validator_agent: Optional[Any] = None
+    validator_agent: Optional[Any] = None  # For LLM safety validation
+    reward_agent: Optional[Any] = None     # For LLM reward calculation
     dqn_trainer: Optional[Any] = None
     
     # Utilities

@@ -303,8 +303,10 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         logger.error(f"REDIS: connection_failed error={e}")
         # Not raising a permanent error, as the operator might still function for decision-making
         
-    # Initialize MCP validation with LLM supervisor (always if LLM is available)
+    # Initialize LLM agents separately for validation and rewards
     if services.llm is not None:
+        # Create MCP tools if available
+        tools = []
         if config.ai.mcp_server_url:
             try:
                 logger.info(f"MCP: connecting url={config.ai.mcp_server_url}")
@@ -315,24 +317,38 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
                     }
                 })
                 tools = await mcp_client.get_tools()
-                services.validator_agent = create_react_agent(services.llm, tools=tools)
-                logger.info(f"MCP: validator_initialized tools_count={len(tools)}")
+                logger.info(f"MCP: tools_loaded count={len(tools)}")
                 logger.info(f"MCP: available_tools=[{','.join(tool.name for tool in tools)}]")
             except Exception as e:
                 logger.error(f"MCP: initialization_failed error={e}")
                 logger.info("MCP: fallback_to_llm_only")
-                services.validator_agent = create_react_agent(services.llm, tools=[])
+                tools = []
         else:
             logger.info("MCP: url_not_set using_llm_only")
-            services.validator_agent = create_react_agent(services.llm, tools=[])
         
-        # Log LLM capabilities based on validation setting
+        # Initialize safety validation agent (only if validation enabled)
         if config.ai.enable_llm_validation:
-            logger.info("LLM_FEATURES: safety_monitor=enabled rewards=enabled")
+            services.validator_agent = create_react_agent(services.llm, tools=tools)
+            logger.info("LLM_SAFETY: validation_agent_created")
         else:
-            logger.info("LLM_FEATURES: safety_monitor=disabled rewards=enabled")
+            services.validator_agent = None
+            logger.info("LLM_SAFETY: validation_disabled")
+        
+        # Initialize reward agent (always when LLM available, separate from validation)
+        if config.ai.enable_llm_rewards:
+            services.reward_agent = create_react_agent(services.llm, tools=tools)
+            logger.info("LLM_REWARDS: reward_agent_created")
+        else:
+            services.reward_agent = None
+            logger.info("LLM_REWARDS: rewards_disabled")
+        
+        # Log final LLM capabilities
+        validation_status = "enabled" if config.ai.enable_llm_validation else "disabled"
+        reward_status = "enabled" if config.ai.enable_llm_rewards else "disabled"
+        logger.info(f"LLM_FEATURES: safety_monitor={validation_status} rewards={reward_status}")
     else:
         services.validator_agent = None
+        services.reward_agent = None
         logger.info("LLM_FEATURES: safety_monitor=disabled rewards=disabled (no_api_key)")
     
     # Initialize evaluator

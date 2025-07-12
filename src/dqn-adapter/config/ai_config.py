@@ -22,9 +22,12 @@ class AIConfig(BaseSettings):
     # LLM settings
     model: str = Field(default="gpt-4-turbo", env="AI_MODEL")
     temperature: float = Field(default=0.1, env="AI_TEMPERATURE")
-    enable_llm_validation: bool = Field(default=False, env="ENABLE_LLM_VALIDATION")
     
-    @field_validator('enable_llm_validation', mode='before')
+    # Separate controls for LLM features
+    enable_llm_validation: bool = Field(default=False, env="ENABLE_LLM_VALIDATION")
+    enable_llm_rewards: bool = Field(default=True, env="ENABLE_LLM_REWARDS")
+    
+    @field_validator('enable_llm_validation', 'enable_llm_rewards', mode='before')
     @classmethod
     def validate_llm_booleans(cls, v):
         """Parse string boolean values correctly."""

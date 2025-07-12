@@ -488,12 +488,15 @@ async def validate_with_llm(state: ScalingState, services: ServiceContainer) -> 
 - If frequent pod restarts → Block "Scale Down"
 - If deployment shows errors → Force conservative scaling
 
-🛡️ **DECISION OVERRIDE LOGIC**:
+🛡️ **LLM DECISION LOGIC** (FULL CONTROL):
 
-1. **FORCE SCALE UP**: When resource pressure detected but DQN suggests "Keep Same" or "Scale Down"
-2. **BLOCK SCALE DOWN**: When system shows stress but DQN suggests reducing resources  
-3. **APPROVE**: When no resource pressure detected or DQN decision aligns with resource needs
-4. **FORCE SCALE DOWN**: When massive over-provisioning detected (rare)
+**Your job:** Make the optimal scaling decision based on current metrics and cluster state.
+**DQN Input:** The DQN suggested "{action_name}" - use this as reference, but make your own decision.
+
+1. **Scale Up**: When you detect resource pressure, high load, or performance degradation  
+2. **Keep Same**: When system is balanced and performing well
+3. **Scale Down**: When you detect over-provisioning and can safely reduce resources
+4. **CRITICAL**: Always provide your recommended action in "override_action" field
 
 🎯 **TARGET DEPLOYMENT**:
 - Namespace: {services.config.kubernetes.target_namespace}
@@ -501,28 +504,40 @@ async def validate_with_llm(state: ScalingState, services: ServiceContainer) -> 
 
 ⚠️ **RESPONSE FORMAT**: Respond with ONLY valid JSON. No markdown, no explanations outside JSON.
 
-**Example Override (Force Scale Up)**:
+**Example Response (LLM Decides Scale Up)**:
 {{
-    "approved": false,
+    "approved": true,
     "confidence": "high", 
-    "reasoning": "RESOURCE PRESSURE OVERRIDE: mcp_kubernetes_pods_top shows CPU usage at 98% of limits. Forcing Scale Up instead of DQN's 'Keep Same' recommendation.",
-    "safety_risk": "high",
-    "extreme_factors": ["cpu_throttling_detected", "resource_pressure_override"],
-    "alternative_suggestion": "Scale Up",
+    "reasoning": "CPU usage at 98% of limits detected via mcp_kubernetes_pods_top. System needs more resources.",
+    "safety_risk": "medium",
+    "extreme_factors": ["cpu_throttling_detected"],
     "override_action": "Scale Up",
     "cluster_check_performed": true,
-    "tool_findings": ["CPU usage 495m/500m (99%)", "Memory pressure detected", "No recent OOM events"]
+    "tool_findings": ["CPU usage 495m/500m (99%)", "Memory usage normal", "No OOM events"]
 }}
 
-**Example Approval (No Issues)**:
+**Example Response (LLM Decides Scale Down)**:
 {{
     "approved": true,
     "confidence": "high",
-    "reasoning": "No resource pressure detected. CPU usage 150m/500m (30%), memory stable. DQN decision appropriate.",
+    "reasoning": "Over-provisioned system. CPU usage 50m/500m (10%), very low HTTP load. Can safely reduce resources.",
     "safety_risk": "none", 
     "extreme_factors": [],
+    "override_action": "Scale Down",
     "cluster_check_performed": true,
-    "tool_findings": ["All pods healthy", "Resource usage normal", "No pressure indicators"]
+    "tool_findings": ["All pods healthy", "Low resource usage", "No pressure indicators"]
+}}
+
+**Example Response (LLM Decides Keep Same)**:
+{{
+    "approved": true,
+    "confidence": "high",
+    "reasoning": "System balanced. CPU usage 200m/500m (40%), stable performance, no scaling needed.",
+    "safety_risk": "none", 
+    "extreme_factors": [],
+    "override_action": "Keep Same",
+    "cluster_check_performed": true,
+    "tool_findings": ["System balanced", "Performance stable", "Resource usage appropriate"]
 }}
 
 Your JSON response:"""
@@ -656,6 +671,10 @@ def parse_llm_json_response(response_text: str, action_name: str) -> Dict[str, A
 
                 # Merge parsed response with safety defaults
                 result = {**parsed, **safety_defaults}
+                
+                # ALWAYS USE LLM DECISION: Extract override_action for full LLM control
+                result['override_action'] = parsed.get('override_action', None)
+                logger.debug(f"LLM_PARSING: extracted_decision override_action={result['override_action']}")
 
                 # Ensure confidence is valid
                 if result['confidence'] not in ['low', 'medium', 'high']:
@@ -765,11 +784,15 @@ async def plan_final_action(state: ScalingState, services: ServiceContainer) -> 
     llm_reasoning = llm_validation.get('reasoning', 'No validation reasoning available')
     override_action = llm_validation.get('override_action', None)  # LLM can suggest alternative action
 
-    # Calculate new replica count based on DQN decision or LLM override
-    if not llm_approved and override_action:
-        # LLM RESOURCE PRESSURE OVERRIDE: Use LLM's alternative action
-        logger.warning(f"RESOURCE_PRESSURE_OVERRIDE: llm_suggests={override_action} instead_of_dqn={action_name}")
-        action_name = override_action  # Override DQN decision with LLM recommendation
+    # ALWAYS USE LLM DECISION: Let LLM make all scaling decisions while DQN learns
+    override_action = llm_validation.get('override_action', llm_validation.get('alternative_suggestion', None))
+    if override_action:
+        # LLM FULL CONTROL: Always use LLM's decision while DQN is learning
+        if override_action != action_name:
+            logger.info(f"LLM_FULL_CONTROL: llm_decides={override_action} dqn_suggested={action_name}")
+        else:
+            logger.info(f"LLM_AGREES: both_suggest={action_name}")
+        action_name = override_action  # Always use LLM's decision
         
     new_replicas = current_replicas
     if action_name == 'Scale Up':
@@ -1106,10 +1129,10 @@ async def calculate_llm_reward(current_state: Dict[str, Any], next_state: Dict[s
     - Real-time cluster verification
     """
     
-    # Only require the LLM agent to be available for reward calculation
-    if not services.validator_agent:
-        logger.error("LLM_REWARD: llm_required_but_not_available - Cannot calculate intelligent rewards without LLM!")
-        raise ValueError("LLM agent must be available for reward calculation. Provide OPENAI_API_KEY and ensure LLM is initialized.")
+    # Only require the reward agent to be available for reward calculation
+    if not services.reward_agent:
+        logger.error("LLM_REWARD: reward_agent_not_available - Cannot calculate intelligent rewards without LLM!")
+        raise ValueError("LLM reward agent must be available for reward calculation. Provide OPENAI_API_KEY and set ENABLE_LLM_REWARDS=true.")
     
     # Extract comprehensive metrics for analysis
     metrics_analysis = _extract_comprehensive_metrics(current_state, next_state, current_replicas)
@@ -1119,96 +1142,68 @@ async def calculate_llm_reward(current_state: Dict[str, Any], next_state: Dict[s
 
 🎯 MISSION: Calculate a balanced reward (-5.0 to +5.0) for action "{action}" using multi-dimensional analysis.
 
+🔍 **CLUSTER VERIFICATION TOOLS AVAILABLE**:
+You have access to MCP Kubernetes tools to verify actual cluster state and enhance reward accuracy. Use any tools that are relevant for your reward calculation:
+
+- **Target Deployment**: {services.config.kubernetes.target_deployment} in namespace {services.config.kubernetes.target_namespace}
+- **Available Tools**: You can use any MCP Kubernetes tools that provide valuable insights for reward calculation
+- **Common Examples**: `mcp_kubernetes_pods_top`, `mcp_kubernetes_resources_get`, `mcp_kubernetes_events_list`, etc.
+
+⚠️ **INTELLIGENT CHOICE**: Use your judgment to select which tools (if any) provide the most valuable cluster insights for this specific reward calculation scenario.
+
 📊 SYSTEM CONTEXT:
 - Action: {action}
-- Replicas: {current_replicas}
+- Replicas: {current_replicas}  
 - Deployment: {services.config.kubernetes.target_deployment}
 - Namespace: {services.config.kubernetes.target_namespace}
 
-📈 COMPREHENSIVE METRICS ANALYSIS:
+📈 PROMETHEUS METRICS CONTEXT:
 {metrics_analysis['formatted_metrics']}
 
 🚨 CRITICAL SCALING SIGNALS TO PRIORITIZE:
 
 **OVER-PROVISIONING DETECTION (PRIORITY #1):**
-- If replicas >15 AND CPU rate <0.01/sec per replica AND HTTP load <0.5 req/sec per replica: SEVERE over-provisioning, Scale Up should get -4 to -5
-- If replicas >10 AND CPU rate <0.02/sec per replica AND HTTP load <1.0 req/sec per replica: Over-provisioning, Scale Up should get -3 to -4
-- If CPU rate <0.005/sec per replica AND HTTP load <0.3 req/sec per replica: Scale Down opportunity, Scale Up should be negative
+- Verify if actual resource usage is significantly below limits with many replicas
+- Scale Up should get -4 to -5 if adding unnecessary replicas when resources are underutilized
+- Scale Down should get +4 to +5 if removing excess replicas while maintaining performance
 
 **CPU THROTTLING DETECTION:**
-- If CPU rate >0.08/sec per replica AND current replicas=1: STRONG scale up signal
-- If CPU rate >0.12/sec per replica: CRITICAL scale up signal (resource starvation)
-- If CPU rate <0.02/sec per replica: Consider scale down opportunity
+- Detect if pods are hitting CPU limits or experiencing resource starvation
+- Scale Up should get +4 to +5 if preventing resource starvation
+- Scale Down should get -4 to -5 if creating resource pressure
 
 **MEMORY PRESSURE DETECTION:**
-- If GC pressure >2.0/sec per replica: Memory constrained, scale up needed
-- If GC pressure >4.0/sec per replica: CRITICAL memory pressure
+- Check for memory usage approaching limits or OOM conditions
+- Scale Up should get +4 to +5 if addressing memory pressure
+- Scale Down should get -4 to -5 if causing OOM conditions
 
-**LOAD DISTRIBUTION:**
-- If HTTP requests >3.0/sec per replica: High load, scale up beneficial
-- If HTTP requests >5.0/sec per replica: CRITICAL load, scale up essential
+**SYSTEM INSTABILITY:**
+- Monitor for deployment health issues, pod restarts, or error patterns
+- Heavily penalize actions that worsen system stability
 
 🔍 MULTI-DIMENSIONAL EVALUATION FRAMEWORK:
 
 **1. PERFORMANCE DIMENSION (30%)**
-- Response Time: HTTP latency trends (CRITICAL if degrading)
-- Throughput: Request processing capability
-- Resource Efficiency: CPU/Memory utilization patterns (PRIORITIZE CPU throttling)
+- Response Time: HTTP latency trends and user experience impact
+- Throughput: Request processing capability and system responsiveness
+- Resource Efficiency: Actual CPU/Memory utilization patterns and optimization
 
 **2. STABILITY DIMENSION (25%)**  
-- System Health: Error rates, GC pressure
-- Predictability: Metric variance and stability
-- Resilience: Ability to handle load fluctuations
+- System Health: Pod restart patterns, error rates, and reliability
+- Deployment Status: Overall health and operational stability
+- Resource Pressure: OOM events, throttling, and pressure indicators
 
 **3. EFFICIENCY DIMENSION (25%)**
-- Resource Optimization: Right-sizing effectiveness
-- Cost Efficiency: Performance per resource unit
-- Waste Minimization: Avoiding over/under-provisioning
+- Resource Optimization: Right-sizing effectiveness and waste reduction
+- Cost Efficiency: Performance per resource unit and value optimization
+- Waste Minimization: Over/under-provisioning detection and correction
 
 **4. ADAPTABILITY DIMENSION (20%)**
-- Proactive vs Reactive: Anticipating vs responding to issues
-- Context Awareness: Matching action to current conditions
-- Learning Opportunity: Value for model improvement
+- Proactive vs Reactive: Action timing and predictive capabilities
+- Context Awareness: Matching action to current system conditions
+- Learning Opportunity: Value for model improvement and pattern recognition
 
-🎯 ACTION-SPECIFIC BALANCED EVALUATION WITH CPU FOCUS:
-
-**SCALE UP REWARDS (STRICT OVER-PROVISIONING DETECTION):**
-+4 to +5: Prevented CPU throttling/resource starvation, optimal timing, clear demand increase
-+3 to +4: Good performance improvement, addressed resource constraints  
-+1 to +2: Reasonable resource increase, moderate benefit
-+0 to +1: Minor benefit, acceptable resource trade-off
--1 to -2: Premature scaling, minimal performance gain
--3 to -4: OVER-PROVISIONING - scaling up with low CPU (<0.02/sec per replica) and low HTTP load (<1 req/sec per replica)
--4 to -5: SEVERE OVER-PROVISIONING - scaling up with very low load and already high replica count (>15 replicas)
-
-**SCALE DOWN REWARDS:**
-+4 to +5: Excellent cost optimization, maintained performance, intelligent right-sizing
-+2 to +3: Good efficiency gain, stable performance, no resource pressure
-+0 to +1: Reasonable optimization, minor efficiency improvement
--1 to -2: Performance risk, rushed decision
--3 to -5: Performance degradation, created resource pressure, under-provisioning
-
-**KEEP SAME REWARDS:**
-+4 to +5: Perfect stability maintenance, optimal current state, no action needed
-+2 to +3: Good decision to maintain, system in acceptable state, no resource pressure
-+0 to +1: Reasonable choice, no clear alternative
--1 to -2: Missed optimization opportunity, mild resource pressure ignored
--3 to -5: Failed to address CPU throttling/resource starvation, poor pattern recognition
-
-🛠️ MANDATORY CLUSTER VERIFICATION:
-
-Use MCP tools to verify actual system state:
-
-1. **Deployment Health Check:**
-   `mcp_kubernetes_resources_get` (apiVersion: apps/v1, kind: Deployment, name: {services.config.kubernetes.target_deployment}, namespace: {services.config.kubernetes.target_namespace})
-
-2. **Resource Consumption Analysis:**
-   `mcp_kubernetes_pods_top` for actual resource usage patterns
-
-3. **System Events Review:**
-   `mcp_kubernetes_events_list` (namespace: {services.config.kubernetes.target_namespace}) for issues/warnings
-
-⚠️ Respond with ONLY a valid, strictly parsable JSON object. All property names and string values MUST use double quotes. Do not use single quotes. Do not include any text or explanation outside the JSON.
+⚠️ **RESPONSE FORMAT**: Respond with ONLY valid JSON. Include any MCP tool findings you used in the response.
 
 📊 REQUIRED RESPONSE FORMAT:
 
@@ -1230,20 +1225,33 @@ Use MCP tools to verify actual system state:
         "resource_trend": "<optimizing|stable|wasting>",
         "load_pattern": "<increasing|stable|decreasing>"
     }},
-    "reasoning": "<detailed multi-dimensional analysis>",
-    "cluster_findings": ["<specific MCP tool findings>"],
-    "balance_justification": "<explanation of how reward balances across dimensions>",
+    "reasoning": "<detailed analysis based on MCP tool findings>",
+    "cluster_findings": ["<specific MCP tool findings if tools were used>"],
+    "cluster_verification_performed": <true if MCP tools used, false otherwise>,
+    "mcp_tools_used": ["<list of any MCP tools you chose to use>"],
+    "balance_justification": "<explanation based on verified cluster state>",
     "cpu_throttling_detected": <boolean>,
+    "memory_pressure_detected": <boolean>,
     "scaling_urgency": "<none|low|medium|high|critical>"
 }}
 
-CRITICAL: Ensure rewards are balanced across all actions. Each action type should have equal opportunity for high rewards when appropriate. However, PRIORITIZE CPU throttling and resource starvation as strong scaling signals."""
+**Example Response Structure:**
+{{
+    "reward": 2.5,
+    "cluster_findings": ["Example: CPU usage low via cluster verification", "Example: No system events detected"],
+    "cluster_verification_performed": true,
+    "mcp_tools_used": ["example_tool_1", "example_tool_2"],
+    "reasoning": "Analysis based on Prometheus metrics and any cluster verification performed...",
+    ...
+}}
+
+GUIDANCE: You have access to MCP Kubernetes tools if you need real cluster verification. Use your judgment to decide which tools (if any) would enhance your reward calculation accuracy for this specific scenario."""
 
     try:
         logger.info(f"LLM_REWARD: starting_evaluation action={action}")
         
-        # Invoke LLM agent with MCP tools
-        response = await services.validator_agent.ainvoke({
+        # Invoke LLM reward agent with MCP tools
+        response = await services.reward_agent.ainvoke({
             "messages": [{"role": "user", "content": prompt}]
         })
         
@@ -1285,9 +1293,23 @@ CRITICAL: Ensure rewards are balanced across all actions. Each action type shoul
             if balance_justification:
                 logger.info(f"LLM_BALANCE: {balance_justification[:100]}...")
             
+            # Track MCP tool usage compliance for reward calculation
+            cluster_verified = result.get('cluster_verification_performed', False)
+            tools_used = result.get('mcp_tools_used', [])
             cluster_findings = result.get('cluster_findings', [])
-            for i, finding in enumerate(cluster_findings[:3]):
-                logger.info(f"LLM_CLUSTER_FINDING_{i+1}: {finding}")
+            
+            # Log MCP tool verification status (similar to safety validator)
+            logger.info(f"REWARD_TOOL_VERIFICATION: cluster_verified={cluster_verified} tools_used_count={len(tools_used)}")
+            
+            if cluster_verified and tools_used:
+                logger.info(f"REWARD_TOOL_COMPLIANCE: enhanced - tools=[{','.join(tools_used)}]")
+                logger.info(f"REWARD_TOOL_FINDINGS: findings_count={len(cluster_findings)}")
+                if cluster_findings:
+                    for i, finding in enumerate(cluster_findings[:5]):  # Log up to 5 findings
+                        logger.info(f"LLM_CLUSTER_FINDING_{i+1}: {finding}")
+            else:
+                logger.info("REWARD_TOOL_COMPLIANCE: basic - reward calculated using Prometheus metrics only")
+                logger.info("REWARD_TOOL_COMPLIANCE: llm_chose_not_to_use_additional_cluster_verification")
             
             # Log reward distribution for balance analysis
             if reward > 3.0:
