@@ -29,7 +29,6 @@ class ServiceContainer:
     dqn_trainer: Optional[Any] = None
     
     # Utilities
-    evaluator: Optional[Any] = None
     llm: Optional[Any] = None
     
     # DQN state management (eliminates global variables)
@@ -82,7 +81,7 @@ class ServiceContainer:
         health["services"]["validator_agent"] = "healthy" if self.validator_agent else "disabled"
         health["services"]["redis"] = "healthy" if self.redis_client else "missing"
         health["services"]["minio"] = "healthy" if self.minio_client else "missing"
-        health["services"]["evaluator"] = "healthy" if self.evaluator else "disabled"
+        health["services"]["llm"] = "healthy" if self.llm else "disabled"
             
         # Overall status assessment
         if health["errors"]:

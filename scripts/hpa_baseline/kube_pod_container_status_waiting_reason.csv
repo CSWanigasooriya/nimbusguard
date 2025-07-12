@@ -1,0 +1,11 @@
+timestamp,value,metric_name,container,instance,job,namespace,pod,reason,uid
+2025-07-12 05:29:28,1,kube_pod_container_status_waiting_reason,beyla,10.244.1.4:8080,prometheus.scrape.annotated_pods,nimbusguard,beyla-b7789,ContainerCreating,c7a6d4e2-db09-4c48-a933-55a871cb39e6
+2025-07-12 05:29:28,1,kube_pod_container_status_waiting_reason,beyla,10.244.1.4:8080,prometheus.scrape.annotated_pods,nimbusguard,beyla-h42cg,ContainerCreating,47a2a73f-e6f6-46e1-94ec-2dc7ae800fb4
+2025-07-12 05:50:28,1,kube_pod_container_status_waiting_reason,consumer,10.244.1.4:8080,prometheus.scrape.annotated_pods,nimbusguard,consumer-789d764dc7-mbqtq,CrashLoopBackOff,bc096d17-b095-4b72-808f-0e354a6bd047
+2025-07-12 05:50:28,1,kube_pod_container_status_waiting_reason,consumer,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-mbqtq,CrashLoopBackOff,bc096d17-b095-4b72-808f-0e354a6bd047
+2025-07-12 05:29:28,1,kube_pod_container_status_waiting_reason,mcp-kubernetes,10.244.1.4:8080,prometheus.scrape.annotated_pods,nimbusguard,mcp-server-cf77cd4dd-vwdz8,ContainerCreating,adefc092-b99a-40d5-b69d-e38ca4ecf6a4
+2025-07-12 05:29:28,1,kube_pod_container_status_waiting_reason,minio,10.244.1.4:8080,prometheus.scrape.annotated_pods,nimbusguard,minio-744678b59d-lmvzx,ContainerCreating,52564dfe-1dcf-421e-9535-6a45533763e0
+2025-07-12 05:29:28,1,kube_pod_container_status_waiting_reason,node-exporter,10.244.1.4:8080,prometheus.scrape.annotated_pods,nimbusguard,node-exporter-hsf6w,ContainerCreating,cda54c64-add3-4ad5-9a28-e2f98ebbf735
+2025-07-12 05:29:28,1,kube_pod_container_status_waiting_reason,prometheus,10.244.1.4:8080,prometheus.scrape.annotated_pods,nimbusguard,prometheus-994c5566f-wtrsc,ContainerCreating,06c823a3-c7e7-4d76-b83d-14dc94a5f846
+2025-07-12 05:29:28,1,kube_pod_container_status_waiting_reason,redis,10.244.1.4:8080,prometheus.scrape.annotated_pods,nimbusguard,redis-698496554f-t544g,ContainerCreating,d0d90247-a5b1-4d85-8407-704aa65e4bf6
+2025-07-12 05:29:28,1,kube_pod_container_status_waiting_reason,tempo,10.244.1.4:8080,prometheus.scrape.annotated_pods,nimbusguard,tempo-88bccc5f8-s2hg2,ContainerCreating,bc5bb778-3ac7-40a7-9529-f0e0a11bb45e

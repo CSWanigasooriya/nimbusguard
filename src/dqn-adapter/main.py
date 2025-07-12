@@ -16,9 +16,8 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from minio import Minio
 from config import get_config
+# Import monitoring metrics
 from monitoring.metrics import *
-# Import evaluator
-from monitoring.evaluator import DQNEvaluator
 from ai.graph import create_graph
 from core.services import ServiceContainer
 
@@ -278,19 +277,6 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         services.validator_agent = None
         logger.info("VALIDATOR: skipped_initialization llm_validation_disabled")
     
-    # Initialize evaluator
-    if config.enable_evaluation_outputs:
-        try:
-            services.evaluator = DQNEvaluator(services.minio_client, bucket_name="evaluation-outputs")
-            logger.info("EVALUATOR: initialized")
-        except Exception as e:
-            logger.error(f"EVALUATOR: initialization_failed error={e}")
-            services.evaluator = None
-    else:
-        logger.info("EVALUATOR: disabled")
-        services.evaluator = None
-
-
     # Initialize gauges to a default value
     CURRENT_REPLICAS_GAUGE.set(1)
     DESIRED_REPLICAS_GAUGE.set(1)

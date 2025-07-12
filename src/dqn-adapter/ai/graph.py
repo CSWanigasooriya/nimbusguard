@@ -78,35 +78,49 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
     from datetime import datetime
     current_time = datetime.now()
 
-    # FIXED: Multi-dimensional Kubernetes state queries with proper target deployment scoping
-    # DUPLICATION FIX: Use count() for ready/running containers to avoid double-counting duplicated metrics
+    # FIXED: Multi-dimensional consumer pod queries with proper target deployment scoping
+    # These queries target consumer pod metrics with rate calculations where needed
+    # Using job=prometheus.scrape.nimbusguard_consumer to target specifically the consumer deployment
     queries = {
-        # 1. Deployment unavailable replicas (single value per deployment, deduplicate across scraping sources)
-        "kube_deployment_status_replicas_unavailable": f'max(kube_deployment_status_replicas_unavailable{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}}) or vector(0)',
+        # 1. CPU rate (process CPU seconds total rate across consumer pods)
+        "process_cpu_seconds_total_rate": f'sum(rate(process_cpu_seconds_total{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
 
-        # 2. Pod container readiness (group by pod to deduplicate, then count unique pods)
-        "kube_pod_container_status_ready": f'count(count by (pod) (kube_pod_container_status_ready{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}} == 1)) or vector(0)',
+        # 2. Python GC collections rate (memory pressure indicator)
+        "python_gc_collections_total_rate": f'sum(rate(python_gc_collections_total{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
 
-        # 3. Desired replica count (single value per deployment, deduplicate)
-        "kube_deployment_spec_replicas": f'max(kube_deployment_spec_replicas{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}}) or vector(1)',
+        # 3. Python GC objects collected rate (memory churn indicator)
+        "python_gc_objects_collected_total_rate": f'sum(rate(python_gc_objects_collected_total{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
 
-        # 4. Running containers (group by pod to deduplicate, then count unique pods)
-        "kube_pod_container_status_running": f'count(count by (pod) (kube_pod_container_status_running{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}} == 1)) or vector(0)',
+        # 4. HTTP request duration sum rate (latency indicator)
+        "http_request_duration_seconds_sum_rate": f'sum(rate(http_request_duration_seconds_sum{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
 
-        # 5. Deployment generation (single value per deployment, deduplicate)
-        "kube_deployment_status_observed_generation": f'max(kube_deployment_status_observed_generation{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}}) or vector(1)',
+        # 5. HTTP requests total rate (throughput indicator)
+        "http_requests_total_rate": f'sum(rate(http_requests_total{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
 
-        # 6. CPU resource limits (sum by pod to deduplicate, then sum total)
-        "kube_pod_container_resource_limits_cpu": f'sum(sum by (pod) (kube_pod_container_resource_limits{{resource="cpu",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}})) or vector(0.25)',
+        # 6. HTTP request duration count rate (request count indicator)
+        "http_request_duration_seconds_count_rate": f'sum(rate(http_request_duration_seconds_count{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
 
-        # 7. Memory resource limits (sum by pod to deduplicate, then sum total)
-        "kube_pod_container_resource_limits_memory": f'sum(sum by (pod) (kube_pod_container_resource_limits{{resource="memory",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}})) or vector(268435456)',
+        # 7. Process open file descriptors (system resource indicator)
+        "process_open_fds": f'sum(process_open_fds{{job="prometheus.scrape.nimbusguard_consumer"}}) or vector(0)',
 
-        # 8. Network status (check if any nodes have network up - cluster-wide indicator)
-        "node_network_up": 'sum(up{job=~".*node.*"}) or sum(up{job="node-exporter"}) or sum(node_network_up) or vector(1)',
+        # 8. HTTP response size bytes sum rate (response size indicator)
+        "http_response_size_bytes_sum_rate": f'sum(rate(http_response_size_bytes_sum{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
 
-        # 9. Container last terminated exit code (termination health indicator)
-        "kube_pod_container_status_last_terminated_exitcode": f'max(kube_pod_container_status_last_terminated_exitcode{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}) or vector(0)',
+        # 9. HTTP request size bytes count rate (request size indicator)
+        "http_request_size_bytes_count_rate": f'sum(rate(http_request_size_bytes_count{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
+
+        # AUXILIARY: Current replica count for scaling decisions
+        "current_replicas": f'kube_deployment_status_replicas{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}}',
+        
+        # KUBERNETES STATE QUERIES: For proper availability and health status
+        "deployment_replicas_unavailable": f'kube_deployment_status_replicas_unavailable{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}} or vector(0)',
+        "deployment_replicas_ready": f'kube_deployment_status_ready_replicas{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}} or vector(0)',
+        "pod_container_ready": f'kube_pod_container_status_ready{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
+        "pod_container_running": f'kube_pod_container_status_running{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
+        "pod_container_restarts": f'kube_pod_container_status_restarts_total{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
+        "pod_resource_limits_cpu": f'kube_pod_container_resource_limits{{resource="cpu",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
+        "pod_resource_limits_memory": f'kube_pod_container_resource_limits{{resource="memory",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
+        "node_network_up": f'node_network_up{{device!~"veth.*"}}',
     }
     # CLEAN ARCHITECTURE: No computed temporal features (moving averages, deviations, etc.)
 
@@ -115,31 +129,13 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
     logger.info(f"QUERY_TARGETING: namespace={services.config.kubernetes.target_namespace} "
                 f"deployment={services.config.kubernetes.target_deployment}")
     
-    # Log key queries for debugging container counting issues (now using count() to avoid duplication)
-    logger.debug(f"CONTAINER_READY_QUERY: {queries['kube_pod_container_status_ready']}")
-    logger.debug(f"CONTAINER_RUNNING_QUERY: {queries['kube_pod_container_status_running']}")
-    logger.debug(f"CPU_LIMITS_QUERY: {queries['kube_pod_container_resource_limits_cpu']}")
-    logger.debug(f"MEMORY_LIMITS_QUERY: {queries['kube_pod_container_resource_limits_memory']}")
+    # Log key queries for debugging consumer pod metrics
+    logger.debug(f"CPU_RATE_QUERY: {queries['process_cpu_seconds_total_rate']}")
+    logger.debug(f"HTTP_REQUESTS_QUERY: {queries['http_requests_total_rate']}")
+    logger.debug(f"GC_COLLECTIONS_QUERY: {queries['python_gc_collections_total_rate']}")
+    logger.debug(f"OPEN_FDS_QUERY: {queries['process_open_fds']}")
 
     tasks = {name: services.prometheus_client.query(query) for name, query in queries.items()}
-
-    # Also get current replicas separately
-    current_replicas_query = f'kube_deployment_status_replicas{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}}'
-    tasks['current_replicas'] = services.prometheus_client.query(current_replicas_query)
-    
-    # AUXILIARY QUERIES: Get actual deployment resource specifications (for accurate reward calculations)
-    # These are NOT part of the main features but needed for reward calculation
-    # Using max() since these should be per-replica values (all containers have same limits)
-    auxiliary_resource_queries = {
-        "deployment_cpu_requests_per_replica": f'max(kube_pod_container_resource_requests{{resource="cpu",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}) or vector(0.1)',
-        "deployment_memory_requests_per_replica": f'max(kube_pod_container_resource_requests{{resource="memory",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}) or vector(134217728)',
-        "deployment_cpu_limits_per_replica": f'max(kube_pod_container_resource_limits{{resource="cpu",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}) or vector(0.25)',
-        "deployment_memory_limits_per_replica": f'max(kube_pod_container_resource_limits{{resource="memory",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}) or vector(268435456)',
-    }
-    
-    # Add auxiliary resource queries to tasks (these will be included in the metrics but not processed as features)
-    for name, query in auxiliary_resource_queries.items():
-        tasks[name] = services.prometheus_client.query(query)
     
     # Debug query to see what pods are actually being targeted
     debug_pods_query = f'kube_pod_info{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}'
@@ -167,55 +163,69 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
 
     CURRENT_REPLICAS_GAUGE.set(current_replicas)
 
-    # Enhanced logging with Kubernetes state architecture
-    replicas_unavailable = metrics.get('kube_deployment_status_replicas_unavailable', 0)
-    pods_ready = metrics.get('kube_pod_container_status_ready', 1)
-    desired_replicas = metrics.get('kube_deployment_spec_replicas', 1)
-    containers_running = metrics.get('kube_pod_container_status_running', 1)
-    deployment_generation = metrics.get('kube_deployment_status_observed_generation', 1)
-    cpu_limits = metrics.get('kube_pod_container_resource_limits_cpu', 0.5)
-    memory_limits = metrics.get('kube_pod_container_resource_limits_memory', 536870912)
-    network_up = metrics.get('node_network_up', 1)
-    terminated_exitcode = metrics.get('kube_pod_container_status_last_terminated_exitcode', 0)
+    # Enhanced logging with consumer pod metrics
+    cpu_rate = metrics.get('process_cpu_seconds_total_rate', 0.0)
+    gc_collections_rate = metrics.get('python_gc_collections_total_rate', 0.0)
+    gc_objects_rate = metrics.get('python_gc_objects_collected_total_rate', 0.0)
+    http_duration_rate = metrics.get('http_request_duration_seconds_sum_rate', 0.0)
+    http_requests_rate = metrics.get('http_requests_total_rate', 0.0)
+    http_count_rate = metrics.get('http_request_duration_seconds_count_rate', 0.0)
+    open_fds = metrics.get('process_open_fds', 0.0)
+    response_size_rate = metrics.get('http_response_size_bytes_sum_rate', 0.0)
+    request_size_rate = metrics.get('http_request_size_bytes_count_rate', 0.0)
 
-    logger.info(f"KUBERNETES_STATE: unavailable_replicas={replicas_unavailable} "
-                f"pods_ready={pods_ready} desired_replicas={desired_replicas} "
-                f"containers_running={containers_running} deployment_gen={deployment_generation} "
+    # Kubernetes state metrics for proper availability and health reporting
+    replicas_unavailable = metrics.get('deployment_replicas_unavailable', 0)
+    replicas_ready = metrics.get('deployment_replicas_ready', current_replicas)
+    containers_ready = metrics.get('pod_container_ready', 0)
+    containers_running = metrics.get('pod_container_running', 0)
+    container_restarts = metrics.get('pod_container_restarts', 0)
+    cpu_limits = metrics.get('pod_resource_limits_cpu', 0)
+    memory_limits = metrics.get('pod_resource_limits_memory', 0)
+    network_up = metrics.get('node_network_up', 0)
+
+    logger.info(f"CONSUMER_METRICS: cpu_rate={cpu_rate:.4f} gc_collections_rate={gc_collections_rate:.4f} "
+                f"gc_objects_rate={gc_objects_rate:.4f} http_requests_rate={http_requests_rate:.4f} "
                 f"current_replicas={current_replicas}")
 
-    logger.info(f"RESOURCE_LIMITS: cpu_cores={cpu_limits:.2f} "
-                f"memory_mb={memory_limits / 1000000:.1f} network_up={network_up} "
-                f"last_exit_code={terminated_exitcode}")
+    logger.info(f"NETWORK_METRICS: http_duration_rate={http_duration_rate:.4f} "
+                f"http_count_rate={http_count_rate:.4f} response_size_rate={response_size_rate:.4f} "
+                f"request_size_rate={request_size_rate:.4f}")
 
-    logger.info(f"MULTI_DIMENSIONAL: aggregated_across_pods={services.config.kubernetes.target_deployment}-* "
-                f"cpu_sum={cpu_limits:.2f} memory_sum={memory_limits / 1000000:.1f}MB "
-                f"ready_containers={pods_ready} running_containers={containers_running} "
-                f"termination_health={terminated_exitcode}")
+    logger.info(f"SYSTEM_METRICS: open_fds={open_fds:.0f} targeting_consumer_pods={services.config.kubernetes.target_deployment} "
+                f"namespace={services.config.kubernetes.target_namespace}")
 
-    # Container ratio analysis for debugging (after deduplication fixes)
+    # Kubernetes state logging for availability and health status
+    logger.info(f"KUBERNETES_STATE: replicas_unavailable={replicas_unavailable} replicas_ready={replicas_ready} "
+                f"containers_ready={containers_ready} containers_running={containers_running} "
+                f"container_restarts={container_restarts}")
+    
+    # Resource limits logging
+    memory_limits_mb = memory_limits / 1000000 if memory_limits > 0 else 0
+    logger.info(f"RESOURCE_LIMITS: cpu_limits={cpu_limits:.2f} memory_limits_mb={memory_limits_mb:.0f} "
+                f"network_up={network_up:.0f}")
+
+    # Consumer pod metrics analysis for debugging
     if current_replicas > 0:
-        containers_per_replica = containers_running / current_replicas
-        ready_per_replica = pods_ready / current_replicas
+        # Analyze per-replica metrics to understand load distribution
+        cpu_rate_per_replica = cpu_rate / current_replicas if current_replicas > 0 else 0
+        http_rate_per_replica = http_requests_rate / current_replicas if current_replicas > 0 else 0
         
-        logger.info(f"CONTAINER_ANALYSIS: containers_per_replica={containers_per_replica:.1f} "
-                    f"ready_per_replica={ready_per_replica:.1f} "
-                    f"expected_ratio=1.0_container_per_replica")
+        logger.info(f"LOAD_ANALYSIS: cpu_rate_per_replica={cpu_rate_per_replica:.4f} "
+                    f"http_rate_per_replica={http_rate_per_replica:.4f}")
         
-        # Provide analysis based on fixed counting (should be ~1 container per replica)
-        if 0.8 <= containers_per_replica <= 1.2:
-            logger.info(f"CONTAINER_RATIO_NORMAL: {containers_per_replica:.1f} containers per replica (expected 1.0)")
-        elif containers_per_replica > 1.5:
-            logger.warning(f"CONTAINER_COUNT_HIGH: {containers_per_replica:.1f} containers per replica - "
-                          f"may indicate duplication not fully resolved or multi-container pods")
-        elif containers_per_replica < 0.5:
-            logger.warning(f"CONTAINER_COUNT_LOW: {containers_per_replica:.1f} containers per replica - "
-                          f"some containers may not be running")
+        # Analyze system load patterns
+        if http_requests_rate > 0:
+            avg_request_duration = http_duration_rate / http_requests_rate if http_requests_rate > 0 else 0
+            logger.info(f"PERFORMANCE_ANALYSIS: avg_request_duration={avg_request_duration:.4f}s "
+                        f"gc_pressure={gc_collections_rate:.4f} fds_usage={open_fds:.0f}")
         
-        # With fixed counting, containers_running should equal current_replicas (1 container per pod)
-        logger.info(f"EXPECTED_VS_ACTUAL: expected_containers={current_replicas} "
-                    f"actual_containers={containers_running} ready_containers={pods_ready}")
+        # Load distribution analysis
+        logger.info(f"SCALING_INDICATORS: replicas={current_replicas} "
+                    f"total_cpu_rate={cpu_rate:.4f} total_http_rate={http_requests_rate:.4f} "
+                    f"memory_pressure={gc_collections_rate:.4f}")
 
-    # Log feature availability for debugging (clean architecture: base features only)
+    # Log feature availability for debugging (clean architecture: consumer metrics only)
     # Check if features exist (not None) rather than > 0, since 0 can be a valid value
     base_features_available = sum(1 for feat in services.config.base_features if feat in metrics)
     total_features_available = base_features_available
@@ -227,7 +237,7 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
     if total_features_available < len(services.config.feature_order):
         missing_base = [feat for feat in services.config.base_features if feat not in metrics]
         if missing_base:
-            logger.warning(f"MISSING_BASE_FEATURES: {missing_base}")
+            logger.warning(f"MISSING_CONSUMER_FEATURES: {missing_base}")
 
     logger.info("=" * 60)
     logger.info(f"NODE_END: {node_name}")
@@ -237,24 +247,41 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
 
 # --- Feature Engineering Helper ---
 def _ensure_raw_features(metrics: Dict[str, float]) -> Dict[str, float]:
-    """Ensure Kubernetes state features have fallback values - no computed features."""
+    """Ensure consumer pod metrics have fallback values - no computed features."""
 
-    # Kubernetes state feature defaults (current state indicators)
+    # Consumer pod metric defaults (application performance indicators)
     feature_defaults = {
-        'kube_deployment_status_replicas_unavailable': 0.0,  # Default: no unavailable replicas (healthy)
-        'kube_pod_container_status_ready': 1.0,  # Default: containers ready (healthy)
-        'kube_deployment_spec_replicas': 1.0,  # Default: 1 desired replica
-        'kube_pod_container_resource_limits_cpu': 0.5,  # Default: 0.5 CPU cores
-        'kube_pod_container_resource_limits_memory': 536870912,  # Default: 512MB in bytes
-        'kube_pod_container_status_running': 1.0,  # Default: containers running (healthy)
-        'kube_deployment_status_observed_generation': 1.0,  # Default: deployment generation 1
-        'node_network_up': 1.0,  # Default: network up (healthy)
-        'kube_pod_container_status_last_terminated_exitcode': 0.0,  # Default: 0 exit code (successful termination)
+        'process_cpu_seconds_total_rate': 0.0,  # Default: no CPU usage rate
+        'python_gc_collections_total_rate': 0.0,  # Default: no GC collections rate
+        'python_gc_objects_collected_total_rate': 0.0,  # Default: no GC objects rate
+        'http_request_duration_seconds_sum_rate': 0.0,  # Default: no HTTP latency rate
+        'http_requests_total_rate': 0.0,  # Default: no HTTP requests rate
+        'http_request_duration_seconds_count_rate': 0.0,  # Default: no HTTP request count rate
+        'process_open_fds': 0.0,  # Default: no open file descriptors
+        'http_response_size_bytes_sum_rate': 0.0,  # Default: no HTTP response size rate
+        'http_request_size_bytes_count_rate': 0.0,  # Default: no HTTP request size rate
     }
 
-    # Apply defaults for missing Kubernetes state features only
+    # Kubernetes state metric defaults (infrastructure health indicators)
+    k8s_defaults = {
+        'deployment_replicas_unavailable': 0.0,  # Default: no unavailable replicas
+        'deployment_replicas_ready': 0.0,  # Default: no ready replicas (will be set to current_replicas)
+        'pod_container_ready': 0.0,  # Default: no ready containers
+        'pod_container_running': 0.0,  # Default: no running containers
+        'pod_container_restarts': 0.0,  # Default: no container restarts
+        'pod_resource_limits_cpu': 0.0,  # Default: no CPU limits set
+        'pod_resource_limits_memory': 0.0,  # Default: no memory limits set
+        'node_network_up': 0.0,  # Default: network status unknown
+    }
+
+    # Apply defaults for missing consumer pod metrics only
     for feature, default_value in feature_defaults.items():
-        if feature not in metrics or metrics[feature] == 0:
+        if feature not in metrics or metrics[feature] is None:
+            metrics[feature] = default_value
+
+    # Apply defaults for missing Kubernetes state metrics
+    for feature, default_value in k8s_defaults.items():
+        if feature not in metrics or metrics[feature] is None:
             metrics[feature] = default_value
 
     return metrics
@@ -287,16 +314,25 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
     # Count available feature types (check existence, not value > 0)
     base_available = sum(1 for feat in services.config.base_features if feat in metrics)
 
+    # Get Kubernetes state metrics for proper system state reporting
+    replicas_unavailable = metrics.get('deployment_replicas_unavailable', 0)
+    replicas_ready = metrics.get('deployment_replicas_ready', current_replicas)
+    containers_ready = metrics.get('pod_container_ready', 0)
+    containers_running = metrics.get('pod_container_running', 0)
+    cpu_limits = metrics.get('pod_resource_limits_cpu', 0)
+    memory_limits = metrics.get('pod_resource_limits_memory', 0)
+    network_up = metrics.get('node_network_up', 0)
+
     logger.info(f"SYSTEM_STATE: replicas={current_replicas} "
-                f"unavailable={metrics.get('kube_deployment_status_replicas_unavailable', 0)} "
-                f"readiness={metrics.get('kube_pod_container_status_ready', 1.0):.3f}")
+                f"unavailable={replicas_unavailable} "
+                f"readiness={containers_ready/current_replicas if current_replicas > 0 else 0:.3f}")
 
     # DIAGNOSTIC: Log key features that should indicate load decrease
     logger.info(f"LOAD_INDICATORS: "
-                f"cpu_limits={metrics.get('kube_pod_container_resource_limits_cpu', 0):.2f} "
-                f"memory_limits_mb={metrics.get('kube_pod_container_resource_limits_memory', 0) / 1000000:.0f} "
-                f"running_containers={metrics.get('kube_pod_container_status_running', 0)} "
-                f"network_up={metrics.get('node_network_up', 0)}")
+                f"cpu_limits={cpu_limits:.2f} "
+                f"memory_limits_mb={memory_limits / 1000000:.0f} "
+                f"running_containers={containers_running} "
+                f"network_up={network_up}")
 
 
 
@@ -448,57 +484,57 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
             # Enhanced fallback: Rule-based logic with balanced selected features
             logger.info("DQN_FALLBACK: using_rule_based_logic model_not_available")
 
-            # Get current Kubernetes state features for fallback decision
-            replicas_unavailable = metrics.get('kube_deployment_status_replicas_unavailable', 0)
-            pods_ready = metrics.get('kube_pod_container_status_ready', 1)
-            desired_replicas = metrics.get('kube_deployment_spec_replicas', 1)
-            containers_running = metrics.get('kube_pod_container_status_running', 1)
-            deployment_generation = metrics.get('kube_deployment_status_observed_generation', 1)
-            cpu_limits = metrics.get('kube_pod_container_resource_limits_cpu', 0.5)
-            memory_limits = metrics.get('kube_pod_container_resource_limits_memory', 536870912)
-            network_up = metrics.get('node_network_up', 1)
-            terminated_exitcode = metrics.get('kube_pod_container_status_last_terminated_exitcode', 0)
+            # Get current consumer pod metrics for fallback decision
+            cpu_rate = metrics.get('process_cpu_seconds_total_rate', 0.0)
+            gc_collections_rate = metrics.get('python_gc_collections_total_rate', 0.0)
+            gc_objects_rate = metrics.get('python_gc_objects_collected_total_rate', 0.0)
+            http_duration_rate = metrics.get('http_request_duration_seconds_sum_rate', 0.0)
+            http_requests_rate = metrics.get('http_requests_total_rate', 0.0)
+            http_count_rate = metrics.get('http_request_duration_seconds_count_rate', 0.0)
+            open_fds = metrics.get('process_open_fds', 0.0)
+            response_size_rate = metrics.get('http_response_size_bytes_sum_rate', 0.0)
+            request_size_rate = metrics.get('http_request_size_bytes_count_rate', 0.0)
 
             # Generate analysis for fallback decision
             analysis = decision_reasoning.analyze_metrics(metrics, current_replicas)
 
-            # Enhanced rule-based decision with Kubernetes state features
+            # Enhanced rule-based decision with consumer pod metrics
             reasoning_factors = []
 
-            # Decision logic based on multi-dimensional Kubernetes state
-            memory_mb = memory_limits / 1000000  # Convert to MB for readability
-
-            if replicas_unavailable > 0 or pods_ready < 0.8 or containers_running < 0.8:  # Health issues
+            # Decision logic based on consumer application metrics
+            avg_request_duration = http_duration_rate / http_requests_rate if http_requests_rate > 0 else 0
+            
+            if cpu_rate > 0.8 or gc_collections_rate > 0.1 or avg_request_duration > 1.0:  # High load/pressure
                 action_name = "Scale Up"
                 reasoning_factors.append(
-                    f"Health issues detected: {replicas_unavailable} unavailable, {pods_ready:.1f} ready ratio, {containers_running:.1f} running ratio")
-                reasoning_factors.append("Scaling up to improve system health and availability")
+                    f"High load detected: CPU rate {cpu_rate:.4f}, GC rate {gc_collections_rate:.4f}, avg duration {avg_request_duration:.4f}s")
+                reasoning_factors.append("Scaling up to handle increased load and reduce latency")
                 risk_level = "high"
-            elif cpu_limits > 2.0 or memory_mb > 800 or terminated_exitcode > 0:  # Resource pressure
+            elif http_requests_rate > 10.0 or response_size_rate > 1000000:  # High traffic
                 action_name = "Scale Up"
                 reasoning_factors.append(
-                    f"Resource pressure: {cpu_limits:.1f} CPU cores, {memory_mb:.1f}MB memory, exit code {terminated_exitcode}")
-                reasoning_factors.append("Scaling up to handle resource pressure")
+                    f"High traffic: {http_requests_rate:.4f} req/s, response size rate {response_size_rate:.0f} bytes/s")
+                reasoning_factors.append("Scaling up to handle high traffic volume")
                 risk_level = "medium"
-            elif cpu_limits < 1.0 and memory_mb < 300 and current_replicas > 1 and network_up > 0.8:  # Low utilization
+            elif cpu_rate < 0.1 and http_requests_rate < 1.0 and current_replicas > 1:  # Low utilization
                 action_name = "Scale Down"
                 reasoning_factors.append(
-                    f"Low utilization: {cpu_limits:.1f} CPU cores, {memory_mb:.1f}MB memory, healthy network")
+                    f"Low utilization: CPU rate {cpu_rate:.4f}, HTTP rate {http_requests_rate:.4f}")
                 reasoning_factors.append(
                     f"System has excess capacity with {current_replicas} replicas - can optimize costs")
                 risk_level = "low"
-            # ENHANCED: Add explicit scale-down for high replica counts with stable system
-            elif current_replicas >= 8 and replicas_unavailable == 0 and pods_ready >= 0.9 and terminated_exitcode == 0:  # High replica count but stable
+            # ENHANCED: Add explicit scale-down for high replica counts with low load
+            elif current_replicas >= 8 and cpu_rate < 0.2 and http_requests_rate < 2.0:  # Over-provisioned
                 action_name = "Scale Down"
                 reasoning_factors.append(
-                    f"Over-provisioned: {current_replicas} replicas with perfect health - cost optimization opportunity")
+                    f"Over-provisioned: {current_replicas} replicas with low load - cost optimization opportunity")
                 reasoning_factors.append(
-                    f"System stability indicators: {pods_ready:.1%} ready, {replicas_unavailable} unavailable, clean exits")
+                    f"Low load indicators: CPU rate {cpu_rate:.4f}, HTTP rate {http_requests_rate:.4f}")
                 risk_level = "low"
             else:
                 action_name = "Keep Same"
                 reasoning_factors.append(
-                    f"Balanced state: {cpu_limits:.1f} CPU cores, {memory_mb:.1f}MB memory, {desired_replicas} replicas")
+                    f"Balanced state: CPU rate {cpu_rate:.4f}, HTTP rate {http_requests_rate:.4f}, {current_replicas} replicas")
                 reasoning_factors.append("System operating within acceptable parameters")
                 risk_level = "low"
 
@@ -1632,9 +1668,8 @@ async def log_experience(state: ScalingState, services: ServiceContainer) -> Dic
             services.redis_client.ltrim(replay_buffer_key, 0, 99)  # Keep last 100 for monitoring
             logger.info("EXPERIENCE: logged_to_redis monitoring_enabled")
 
-        # 3. Add to evaluator for analysis
-        if services.evaluator and services.config.enable_evaluation_outputs:
-            services.evaluator.add_experience(exp)
+        # 3. Log experience for monitoring
+        logger.info("EXPERIENCE: logged for monitoring")
 
         # 4. Update Prometheus experience counter
         DQN_EXPERIENCES_COUNTER.inc()

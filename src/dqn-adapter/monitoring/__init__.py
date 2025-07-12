@@ -1,10 +1,9 @@
 """
 Monitoring and evaluation.
 
-Contains Prometheus metrics and model evaluation.
+Contains Prometheus metrics.
 """
 
 from .metrics import *
-from .evaluator import DQNEvaluator
 
-__all__ = ['DQNEvaluator']
+__all__ = []
