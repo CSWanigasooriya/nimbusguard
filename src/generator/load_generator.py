@@ -449,7 +449,7 @@ class LoadGenerator:
         
         self.results.append(baseline_summary)
         return baseline_summary
-
+    
     async def run_comparison_pattern_test(self, load_test: LoadTest) -> Dict[str, Any]:
         """Run the deterministic multi-phase comparison pattern"""
         logger.info(f"🎯 Starting DETERMINISTIC multi-phase comparison pattern")

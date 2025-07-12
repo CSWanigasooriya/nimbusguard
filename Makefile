@@ -150,24 +150,7 @@ setup: ## Setup development environment (install latest tools)
 		echo "✅ Metrics-server already installed"; \
 	fi
 	
-	# Install Prometheus Adapter for HPA custom metrics
-	@echo ""
-	@echo "📈 Installing Prometheus Adapter for HPA custom metrics..."
-	@if ! helm list -n nimbusguard | grep -q prometheus-adapter 2>/dev/null; then \
-		echo "📥 Applying Prometheus Adapter configuration..."; \
-		kubectl apply -f kubernetes-manifests/components/monitoring/prometheus-adapter-config.yaml; \
-		echo "📥 Installing Prometheus Adapter with custom configuration..."; \
-		helm install prometheus-adapter prometheus-community/prometheus-adapter \
-			--namespace nimbusguard \
-			--set prometheus.url=http://prometheus.nimbusguard.svc \
-			--set prometheus.port=9090 \
-			--set rules.default=false \
-			--set rules.existing=adapter-config \
-			--wait >/dev/null 2>&1; \
-		echo "✅ Prometheus Adapter installed with custom metrics configuration"; \
-	else \
-		echo "✅ Prometheus Adapter already installed"; \
-	fi
+
 	
 	@echo ""
 	@echo "🎉 Environment setup complete!"
@@ -181,9 +164,8 @@ setup: ## Setup development environment (install latest tools)
 	@echo ""
 	@echo "📊 Installed cluster components:"
 	@echo "   • metrics-server (CPU/Memory monitoring)"
-	@echo "   • prometheus-adapter (HPA custom metrics)"
 	@echo ""
-	@echo "🚀 Ready to deploy! HPA can now use custom Prometheus metrics."
+	@echo "🚀 Ready to deploy!"
 
 # KServe installation removed - no longer needed with combined DQN architecture
 # The DQN model is now loaded locally in the adapter for optimal performance
