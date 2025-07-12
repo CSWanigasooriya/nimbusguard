@@ -1,283 +1,541 @@
 {
-  "methodology": {
-    "approach": "Advanced multi-method feature selection",
-    "target_features": 11,
-    "selection_methods": [
-      "mutual_information",
-      "random_forest",
-      "correlation",
-      "rfe"
-    ],
-    "statistical_validation": true,
-    "scaler_type": "RobustScaler"
-  },
-  "dataset_info": {
-    "n_samples": 894,
-    "n_features": 11,
-    "time_range": null,
-    "action_distribution": {
-      "2": 795,
-      "1": 72,
-      "0": 27
-    }
-  },
+  "timestamp": "2025-07-12T13:36:52.950010",
+  "methodology": "Intelligent data-driven feature selection",
+  "discovered_metrics": 31,
+  "analyzed_metrics": 41,
   "selected_features": [
-    "avg_response_time",
-    "http_request_duration_highr_seconds_sum",
-    "http_request_duration_seconds_sum",
-    "process_resident_memory_bytes",
-    "node_network_iface_link",
-    "node_network_transmit_queue_length",
-    "http_request_duration_seconds_sum_dev_10",
-    "http_request_duration_seconds_sum_ma_5",
-    "http_request_duration_highr_seconds_sum_ma_10",
-    "node_network_flags",
-    "http_request_duration_highr_seconds_sum_ma_5"
+    "process_cpu_seconds_total_rate",
+    "python_gc_collections_total_rate",
+    "python_gc_objects_collected_total_rate",
+    "http_request_duration_seconds_sum_rate",
+    "http_requests_total_rate",
+    "http_request_duration_seconds_count_rate",
+    "process_open_fds",
+    "http_response_size_bytes_sum_rate",
+    "http_request_size_bytes_count_rate"
   ],
-  "feature_analysis": {
-    "selection_methods": {
-      "mutual_information": {
-        "avg_response_time": 0.36497229741434367,
-        "http_request_duration_highr_seconds_sum": 0.2356087527554651,
-        "http_request_duration_seconds_sum": 0.22360243464681062,
-        "node_disk_discarded_sectors_total": 0.15673344153511604,
-        "go_memstats_last_gc_time_seconds": 0.15260472681867654,
-        "prometheus_remote_storage_queue_highest_sent_timestamp_seconds": 0.15254324492658888,
-        "http_request_size_bytes_created": 0.15173128016033033,
-        "http_response_size_bytes_created": 0.15165302676059778,
-        "http_request_duration_seconds_created": 0.15144968533442693,
-        "http_requests_created": 0.15090836625939552
-      },
-      "random_forest": {
-        "avg_response_time": 0.8391971732472612,
-        "health_ratio_log": 0.08547350372481885,
-        "health_ratio": 0.0712845718198424,
-        "health_ratio_dev_10": 0.0010780557900232817,
-        "kube_pod_container_status_ready_dev_10": 0.0007965712267641691,
-        "go_memstats_last_gc_time_seconds_volatility": 0.000654168348809045,
-        "kube_pod_container_status_ready": 0.00029785424447388565,
-        "kube_deployment_status_replicas_unavailable_dev_10": 0.0002882130068208808,
-        "scrape_duration_seconds_dev_5": 0.0002454174109103686,
-        "kube_pod_created_dev_10": 0.00022003806773431323
-      },
-      "correlation": {
-        "avg_response_time": [
-          0.3407290109406064,
-          9.710044098655683e-26
-        ],
-        "http_request_duration_seconds_sum": [
-          0.335537508481977,
-          5.775535838650114e-25
-        ],
-        "http_request_duration_highr_seconds_sum": [
-          0.3176662668104217,
-          2.0713419131980874e-22
-        ],
-        "avg_response_time_ma_5": [
-          0.2686731530462791,
-          3.0137131969994395e-16
-        ],
-        "process_resident_memory_bytes_log": [
-          0.268570514224537,
-          3.0958110505254824e-16
-        ],
-        "http_request_duration_seconds_sum_dev_10": [
-          0.25689819462934577,
-          6.104456602758464e-15
-        ],
-        "http_request_duration_seconds_sum_ma_5": [
-          0.23503701001250923,
-          1.097619214719991e-12
-        ],
-        "http_request_duration_seconds_sum_dev_5": [
-          0.2333347022061369,
-          1.6102296662271845e-12
-        ],
-        "avg_response_time_dev_10": [
-          0.23324373875837853,
-          1.6434053121190967e-12
-        ],
-        "process_resident_memory_bytes": [
-          0.23097620798666452,
-          2.7247514812059663e-12
-        ]
-      },
-      "fast_selected": [
-        "http_request_duration_highr_seconds_sum",
-        "http_request_duration_seconds_sum",
-        "node_network_flags",
-        "node_network_iface_link",
-        "node_network_transmit_queue_length",
-        "process_resident_memory_bytes",
-        "avg_response_time",
-        "http_request_duration_highr_seconds_sum_ma_5",
-        "http_request_duration_highr_seconds_sum_dev_5",
-        "http_request_duration_highr_seconds_sum_ma_10",
-        "http_request_duration_highr_seconds_sum_dev_10",
-        "http_request_duration_seconds_sum_ma_5",
-        "http_request_duration_seconds_sum_dev_5",
-        "http_request_duration_seconds_sum_ma_10",
-        "http_request_duration_seconds_sum_dev_10",
-        "process_resident_memory_bytes_log",
-        "process_resident_memory_bytes_ma_5",
-        "process_resident_memory_bytes_ma_10",
-        "avg_response_time_ma_5",
-        "avg_response_time_dev_5",
-        "avg_response_time_ma_10",
-        "avg_response_time_dev_10"
-      ]
-    },
-    "final_scores": {
-      "avg_response_time": 980.0,
-      "http_request_duration_highr_seconds_sum": 965.8000000000001,
-      "http_request_duration_seconds_sum": 964.5,
-      "process_resident_memory_bytes": 884.6,
-      "node_network_iface_link": 861.0,
-      "node_network_transmit_queue_length": 847.1999999999999,
-      "http_request_duration_seconds_sum_dev_10": 806.5,
-      "http_request_duration_seconds_sum_ma_5": 803.6,
-      "http_request_duration_highr_seconds_sum_ma_10": 797.7,
-      "node_network_flags": 796.7,
-      "http_request_duration_highr_seconds_sum_ma_5": 787.0
-    },
-    "selected_features": [
-      "avg_response_time",
-      "http_request_duration_highr_seconds_sum",
-      "http_request_duration_seconds_sum",
-      "process_resident_memory_bytes",
-      "node_network_iface_link",
-      "node_network_transmit_queue_length",
-      "http_request_duration_seconds_sum_dev_10",
-      "http_request_duration_seconds_sum_ma_5",
-      "http_request_duration_highr_seconds_sum_ma_10",
-      "node_network_flags",
-      "http_request_duration_highr_seconds_sum_ma_5"
-    ]
-  },
-  "scaler_statistics": {
-    "scaler_type": "RobustScaler",
-    "features": [
-      "avg_response_time",
-      "http_request_duration_highr_seconds_sum",
-      "http_request_duration_seconds_sum",
-      "process_resident_memory_bytes",
-      "node_network_iface_link",
-      "node_network_transmit_queue_length",
-      "http_request_duration_seconds_sum_dev_10",
-      "http_request_duration_seconds_sum_ma_5",
-      "http_request_duration_highr_seconds_sum_ma_10",
-      "node_network_flags",
-      "http_request_duration_highr_seconds_sum_ma_5"
-    ],
-    "n_features": 11,
-    "n_samples": 894,
-    "feature_statistics": {
-      "avg_response_time": {
-        "median": 567.1684196074266,
-        "scale": 542.5235586187948,
-        "original_mean": 635.9348203459826,
-        "original_std": 534.7098110848888,
-        "original_min": 0.0,
-        "original_max": 5193.484473140101
-      },
-      "http_request_duration_highr_seconds_sum": {
-        "median": 67.11862850550555,
-        "scale": 98.24594656320272,
-        "original_mean": 87.0384680387999,
-        "original_std": 82.68325279813627,
-        "original_min": 0.0,
-        "original_max": 768.0393717149964
-      },
-      "http_request_duration_seconds_sum": {
-        "median": 20.717914042745903,
-        "scale": 27.47969194650795,
-        "original_mean": 24.53059466105577,
-        "original_std": 21.77954409745862,
-        "original_min": 0.0,
-        "original_max": 192.0098429287491
-      },
-      "process_resident_memory_bytes": {
-        "median": 167634782.31578946,
-        "scale": 84314149.23636363,
-        "original_mean": 178603336.9502098,
-        "original_std": 63001035.66097002,
-        "original_min": 17002496.0,
-        "original_max": 498085888.0
-      },
-      "node_network_iface_link": {
-        "median": 8.197802197802197,
-        "scale": 0.8555045871559628,
-        "original_mean": 8.20214587343698,
-        "original_std": 0.5321214642836664,
-        "original_min": 6.642857142857143,
-        "original_max": 9.711538461538462
-      },
-      "node_network_transmit_queue_length": {
-        "median": 956.5217391304348,
-        "scale": 12.616822429906506,
-        "original_mean": 956.7035794474523,
-        "original_std": 8.494700758295457,
-        "original_min": 928.5714285714286,
-        "original_max": 980.7692307692307
-      },
-      "http_request_duration_seconds_sum_dev_10": {
-        "median": 0.0,
-        "scale": 12.00290848423265,
-        "original_mean": 0.1307742174117011,
-        "original_std": 14.199103812023143,
-        "original_min": -64.24940637829678,
-        "original_max": 105.16503537079332
-      },
-      "http_request_duration_seconds_sum_ma_5": {
-        "median": 20.869270581052582,
-        "scale": 25.9124962440773,
-        "original_mean": 24.486097336658702,
-        "original_std": 19.158581710044736,
-        "original_min": 0.0,
-        "original_max": 99.60415361850825
-      },
-      "http_request_duration_highr_seconds_sum_ma_10": {
-        "median": 75.68257368870573,
-        "scale": 90.94346247536576,
-        "original_mean": 86.59142751728939,
-        "original_std": 66.06427105719753,
-        "original_min": 0.0,
-        "original_max": 329.6104754715752
-      },
-      "node_network_flags": {
-        "median": 2712.521739130435,
-        "scale": 402.3378504672896,
-        "original_mean": 2718.320444999804,
-        "original_std": 270.8875124812838,
-        "original_min": 1821.2142857142858,
-        "original_max": 3485.75
-      },
-      "http_request_duration_highr_seconds_sum_ma_5": {
-        "median": 71.31868799370712,
-        "scale": 92.17315129521313,
-        "original_mean": 86.88713882408896,
-        "original_std": 71.70723559800655,
-        "original_min": 0.0,
-        "original_max": 386.17617746748135
+  "metric_analysis": {
+    "http_request_duration_highr_seconds_bucket": {
+      "type": "histogram",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 4.763563149014986,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1061.3070552819797,
+        "std": 1148.0122692404166,
+        "min": 7.5,
+        "max": 3915.090909090909,
+        "samples": 45
       }
+    },
+    "http_request_duration_highr_seconds_count": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 4.7336131553470615,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1117.8790364573697,
+        "std": 1204.606913061776,
+        "min": 7.5,
+        "max": 4094.5,
+        "samples": 45
+      }
+    },
+    "http_request_duration_highr_seconds_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 1.0223022058750168e-06,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298671.3026123,
+        "std": 450.7668580711219,
+        "min": 1752298150.600287,
+        "max": 1752299491.212226,
+        "samples": 45
+      }
+    },
+    "http_request_duration_highr_seconds_sum": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 4.398650920069199,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 546.6764328294465,
+        "std": 583.3128100444136,
+        "min": 0.02282029299749405,
+        "max": 1821.348804494417,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_bucket": {
+      "type": "histogram",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 4.112318354135516,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 246.25141304160027,
+        "std": 226.6642055831899,
+        "min": 3.75,
+        "max": 789.75,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_count": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 75.0,
+      "variability": 4.096185073138938,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 256.4271449228613,
+        "std": 235.2230433810692,
+        "min": 3.75,
+        "max": 818.9,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 9.710503988251958e-07,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298674.7307525,
+        "std": 417.08309331939574,
+        "min": 1752298162.2701163,
+        "max": 1752299446.75735,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_sum": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 80.0,
+      "variability": 3.800116092993896,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 125.5351332721411,
+        "std": 112.78972943159222,
+        "min": 0.011410146498747026,
+        "max": 364.2697608988834,
+        "samples": 45
+      }
+    },
+    "http_request_size_bytes_count": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 70.0,
+      "variability": 4.096185073138938,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 256.4271449228613,
+        "std": 235.2230433810692,
+        "min": 3.75,
+        "max": 818.9,
+        "samples": 45
+      }
+    },
+    "http_request_size_bytes_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 9.710504209113435e-07,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298674.7307,
+        "std": 417.0831005496197,
+        "min": 1752298162.270041,
+        "max": 1752299446.757306,
+        "samples": 45
+      }
+    },
+    "http_request_size_bytes_sum": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 70.0,
+      "variability": 0,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "samples": 45
+      }
+    },
+    "http_requests_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 9.710504469339704e-07,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298674.7306685,
+        "std": 417.08310537942685,
+        "min": 1752298162.2699733,
+        "max": 1752299446.7572792,
+        "samples": 45
+      }
+    },
+    "http_requests_total": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 85.0,
+      "variability": 4.096185073138938,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 256.4271449228613,
+        "std": 235.2230433810692,
+        "min": 3.75,
+        "max": 818.9,
+        "samples": 45
+      }
+    },
+    "http_response_size_bytes_count": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 70.0,
+      "variability": 4.096185073138938,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 256.4271449228613,
+        "std": 235.2230433810692,
+        "min": 3.75,
+        "max": 818.9,
+        "samples": 45
+      }
+    },
+    "http_response_size_bytes_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 9.710504124594019e-07,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298674.7307258,
+        "std": 417.08309694499206,
+        "min": 1752298162.270073,
+        "max": 1752299446.7573268,
+        "samples": 45
+      }
+    },
+    "http_response_size_bytes_sum": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 70.0,
+      "variability": 4.437847129009329,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 2102980.518725263,
+        "std": 2089287.7073874588,
+        "min": 19822.75,
+        "max": 7263241.1,
+        "samples": 45
+      }
+    },
+    "process_cpu_seconds_total": {
+      "type": "counter",
+      "category": "cpu",
+      "scaling_relevance": 95.0,
+      "variability": 4.042350827264386,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 91.95806441459776,
+        "std": 89.6967577603852,
+        "min": 0.46,
+        "max": 282.48999999999995,
+        "samples": 45
+      }
+    },
+    "process_max_fds": {
+      "type": "gauge",
+      "category": "io",
+      "scaling_relevance": 40.0,
+      "variability": 0.0,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 1048576.0,
+        "std": 0.0,
+        "min": 1048576.0,
+        "max": 1048576.0,
+        "samples": 45
+      }
+    },
+    "process_open_fds": {
+      "type": "gauge",
+      "category": "io",
+      "scaling_relevance": 90.0,
+      "variability": 0.21854757113350415,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 10.501364869698202,
+        "std": 0.37838111921443784,
+        "min": 10.083333333333334,
+        "max": 12.0,
+        "samples": 45
+      }
+    },
+    "process_resident_memory_bytes": {
+      "type": "gauge",
+      "category": "memory",
+      "scaling_relevance": 100.0,
+      "variability": 1.5673609608372536,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 113541220.69579607,
+        "std": 40838284.7643976,
+        "min": 58990592.0,
+        "max": 196112384.0,
+        "samples": 45
+      }
+    },
+    "process_start_time_seconds": {
+      "type": "info",
+      "category": "performance",
+      "scaling_relevance": 0.0,
+      "variability": 1.0221923179215669e-06,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298670.1779127,
+        "std": 450.6845725757535,
+        "min": 1752298149.5,
+        "max": 1752299490.0016668,
+        "samples": 45
+      }
+    },
+    "process_virtual_memory_bytes": {
+      "type": "gauge",
+      "category": "memory",
+      "scaling_relevance": 95.0,
+      "variability": 1.7224872296161813,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 613129632.7598288,
+        "std": 215920058.52806416,
+        "min": 224792576.0,
+        "max": 1064980480.0,
+        "samples": 45
+      }
+    },
+    "python_gc_collections_total": {
+      "type": "counter",
+      "category": "memory",
+      "scaling_relevance": 65.0,
+      "variability": 0.6546775910378525,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 62.95156133989467,
+        "std": 9.546309863472654,
+        "min": 53.333333333333336,
+        "max": 85.0,
+        "samples": 45
+      }
+    },
+    "python_gc_objects_collected_total": {
+      "type": "counter",
+      "category": "memory",
+      "scaling_relevance": 65.0,
+      "variability": 2.9688073570342635,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 816.8816611783278,
+        "std": 567.8309521995537,
+        "min": 287.6666666666667,
+        "max": 2145.0,
+        "samples": 45
+      }
+    },
+    "python_gc_objects_uncollectable_total": {
+      "type": "counter",
+      "category": "memory",
+      "scaling_relevance": 65.0,
+      "variability": 0,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "samples": 45
+      }
+    },
+    "python_info": {
+      "type": "info",
+      "category": "other",
+      "scaling_relevance": 0.0,
+      "variability": 0.0,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1.0,
+        "std": 0.0,
+        "min": 1.0,
+        "max": 1.0,
+        "samples": 45
+      }
+    },
+    "scrape_duration_seconds": {
+      "type": "gauge",
+      "category": "io",
+      "scaling_relevance": 0.0,
+      "variability": 6.5529631536809125,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 0.06569953507142519,
+        "std": 0.08101307019231234,
+        "min": 0.0020846455,
+        "max": 0.3515982085,
+        "samples": 45
+      }
+    },
+    "scrape_samples_post_metric_relabeling": {
+      "type": "gauge",
+      "category": "monitoring",
+      "scaling_relevance": 0.0,
+      "variability": 0.8644283733848874,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 92.67210080043414,
+        "std": 14.90839335316605,
+        "min": 50.8,
+        "max": 116.0,
+        "samples": 45
+      }
+    },
+    "scrape_samples_scraped": {
+      "type": "gauge",
+      "category": "monitoring",
+      "scaling_relevance": 0.0,
+      "variability": 0.8644283733848874,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 92.67210080043414,
+        "std": 14.90839335316605,
+        "min": 50.8,
+        "max": 116.0,
+        "samples": 45
+      }
+    },
+    "scrape_series_added": {
+      "type": "gauge",
+      "category": "monitoring",
+      "scaling_relevance": 0.0,
+      "variability": 28.81752325735557,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1.4216843033509698,
+        "std": 5.4694204793156755,
+        "min": 0.0,
+        "max": 35.5,
+        "samples": 45
+      }
+    },
+    "up": {
+      "type": "gauge",
+      "category": "other",
+      "scaling_relevance": 0.0,
+      "variability": 0.35902706698118847,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 0.9360676977343644,
+        "std": 0.08607364004930525,
+        "min": 0.75,
+        "max": 1.0,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_count_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 95.0,
+      "variability": 1.3249357011357696,
+      "is_consumer_performance": true,
+      "derived_from": "http_request_duration_seconds_count"
+    },
+    "http_request_duration_seconds_sum_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 100.0,
+      "variability": 2.144095361522845,
+      "is_consumer_performance": true,
+      "derived_from": "http_request_duration_seconds_sum"
+    },
+    "http_request_size_bytes_count_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 90.0,
+      "variability": 1.3249357011357696,
+      "is_consumer_performance": true,
+      "derived_from": "http_request_size_bytes_count"
+    },
+    "http_request_size_bytes_sum_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 90.0,
+      "variability": 0.0,
+      "is_consumer_performance": true,
+      "derived_from": "http_request_size_bytes_sum"
+    },
+    "http_requests_total_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 105.0,
+      "variability": 1.3249357011357696,
+      "is_consumer_performance": true,
+      "derived_from": "http_requests_total"
+    },
+    "http_response_size_bytes_count_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 90.0,
+      "variability": 1.3249357011357696,
+      "is_consumer_performance": true,
+      "derived_from": "http_response_size_bytes_count"
+    },
+    "http_response_size_bytes_sum_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 90.0,
+      "variability": 1.4994288983889748,
+      "is_consumer_performance": true,
+      "derived_from": "http_response_size_bytes_sum"
+    },
+    "process_cpu_seconds_total_rate": {
+      "type": "gauge",
+      "category": "cpu",
+      "scaling_relevance": 115.0,
+      "variability": 1.9513214797750098,
+      "is_consumer_performance": true,
+      "derived_from": "process_cpu_seconds_total"
+    },
+    "python_gc_collections_total_rate": {
+      "type": "gauge",
+      "category": "memory",
+      "scaling_relevance": 85.0,
+      "variability": 1.9177145414357266,
+      "is_consumer_performance": true,
+      "derived_from": "python_gc_collections_total"
+    },
+    "python_gc_objects_collected_total_rate": {
+      "type": "gauge",
+      "category": "memory",
+      "scaling_relevance": 85.0,
+      "variability": 1.7474971552814982,
+      "is_consumer_performance": true,
+      "derived_from": "python_gc_objects_collected_total"
     }
   },
-  "quality_metrics": {
-    "missing_data_percentage": 0.0,
-    "feature_stability": {
-      "avg_response_time": 0.8408248662231659,
-      "http_request_duration_highr_seconds_sum": 0.9499621685817776,
-      "http_request_duration_seconds_sum": 0.8878522314904623,
-      "process_resident_memory_bytes": 0.3527427691820383,
-      "node_network_iface_link": 0.06487587609616766,
-      "node_network_transmit_queue_length": 0.00887913553571365,
-      "http_request_duration_seconds_sum_dev_10": 108.5764114413369,
-      "http_request_duration_seconds_sum_ma_5": 0.782426887560195,
-      "http_request_duration_highr_seconds_sum_ma_10": 0.7629423857351738,
-      "node_network_flags": 0.09965253098835845,
-      "http_request_duration_highr_seconds_sum_ma_5": 0.8252917030435628
-    }
-  },
-  "created_at": "2025-06-27T18:41:57.200107",
-  "research_grade": true
+  "dataset_shape": [
+    45,
+    10
+  ],
+  "scaling_action_distribution": {
+    "scale_up": 44,
+    "keep_same": 1
+  }
 }

@@ -111,10 +111,12 @@ setup: ## Setup development environment (install latest tools)
 	@if ! helm repo list | grep -q kedacore 2>/dev/null; then \
 		echo "📥 Adding Helm repositories..."; \
 		helm repo add kedacore https://kedacore.github.io/charts >/dev/null 2>&1; \
+		helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1; \
 		echo "✅ Helm repositories configured"; \
 	else \
 		echo "✅ Helm repositories already configured"; \
 	fi
+	@helm repo update >/dev/null 2>&1
 	
 	@echo ""
 	@echo "🔧 Creating 'nimbusguard' namespace if it doesn't exist..."
@@ -148,6 +150,8 @@ setup: ## Setup development environment (install latest tools)
 		echo "✅ Metrics-server already installed"; \
 	fi
 	
+
+	
 	@echo ""
 	@echo "🎉 Environment setup complete!"
 	@echo "📋 Available tools:"
@@ -157,6 +161,9 @@ setup: ## Setup development environment (install latest tools)
 	@echo "   • jq: $$(jq --version 2>/dev/null || echo 'not installed')"
 	@echo "   • yq: $$(yq --version 2>/dev/null || echo 'not installed')"
 	@echo "   • k9s: $$(k9s version -s 2>/dev/null || echo 'not installed')"
+	@echo ""
+	@echo "📊 Installed cluster components:"
+	@echo "   • metrics-server (CPU/Memory monitoring)"
 	@echo ""
 	@echo "🚀 Ready to deploy!"
 
@@ -182,6 +189,11 @@ keda-uninstall: ## Uninstall the KEDA operator
 	@echo "🗑️  Uninstalling KEDA operator from nimbusguard namespace..."
 	@helm uninstall keda -n nimbusguard 2>/dev/null || true
 	@echo "✅ KEDA uninstalled"
+
+prometheus-adapter-uninstall: ## Uninstall the Prometheus Adapter
+	@echo "🗑️  Uninstalling Prometheus Adapter from nimbusguard namespace..."
+	@helm uninstall prometheus-adapter -n nimbusguard 2>/dev/null || true
+	@echo "✅ Prometheus Adapter uninstalled"
 
 # -----------------------------------------------------------------------------
 # KEDA Management Commands
@@ -320,17 +332,81 @@ deploy: docker-build ## Build images and deploy all components to the cluster
 
 dev: deploy ## Alias for 'deploy' - builds and deploys all components for development
 
-clean: ## Delete all deployed resources from the cluster
-	@echo "🗑️  Deleting all resources in the nimbusguard namespace..."
-	@kubectl delete namespace nimbusguard --ignore-not-found=true
-	@echo "✅ Cleanup complete."
+clean: ## NUCLEAR cleanup - immediate brutal force deletion of everything
+	@echo "💥 NUCLEAR OPTION: Immediately destroying all NimbusGuard resources..."
+	@echo "⚠️  WARNING: This will BRUTALLY FORCE DELETE everything!"
+	@echo ""
+	
+	# Step 1: Kill all port forwards immediately
+	@echo "🔪 Killing all port forwards..."
+	@pkill -f "kubectl port-forward.*nimbusguard" 2>/dev/null || true
+	@pkill -f "kubectl port-forward.*9090" 2>/dev/null || true
+	@pkill -f "kubectl port-forward.*3000" 2>/dev/null || true
+	
+	# Step 2: Nuclear namespace deletion - no mercy, no waiting
+	@echo "💥 NUCLEAR namespace deletion..."
+	@for ns in nimbusguard kubeflow keda-system monitoring; do \
+		if kubectl get namespace $$ns >/dev/null 2>&1; then \
+			echo "   💀 Destroying namespace: $$ns"; \
+			kubectl patch namespace $$ns -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
+			kubectl delete namespace $$ns --force --grace-period=0 2>/dev/null & \
+		fi; \
+	done
+	
+	# Step 3: Delete KEDA and Prometheus Adapter CRDs immediately (no waiting for namespace cleanup)
+	@echo "💥 Nuclear KEDA and Prometheus Adapter destruction..."
+	@kubectl get crd 2>/dev/null | grep -E "(keda|metrics\.k8s\.io)" | awk '{print $$1}' | xargs -r kubectl delete crd --force --grace-period=0 2>/dev/null &
+	@helm uninstall prometheus-adapter -n nimbusguard 2>/dev/null &
+	@helm uninstall keda -n nimbusguard 2>/dev/null &
+	
+	# Step 4: Destroy all RBAC resources matching our patterns
+	@echo "💥 Nuclear RBAC destruction..."
+	@kubectl get clusterrole,clusterrolebinding --no-headers 2>/dev/null | grep -E "(nimbusguard|dqn-adapter|mcp-server|alloy|beyla|prometheus|kube-state-metrics|prometheus-adapter)" | awk '{print $$1}' | xargs -r kubectl delete --force --grace-period=0 2>/dev/null &
+	
+	# Step 5: Kill webhook configurations
+	@echo "💥 Nuclear webhook destruction..."
+	@kubectl delete validatingwebhookconfiguration,mutatingwebhookconfiguration --all --force --grace-period=0 2>/dev/null &
+	
+	# Step 6: Clean up project resources from default namespace (but don't delete the namespace)
+	@echo "💥 Cleaning project resources from default namespace..."
+	@kubectl delete pods,services,deployments,configmaps,secrets,jobs,cronjobs -n default -l app=nimbusguard --force --grace-period=0 2>/dev/null || true
+	@kubectl delete pods,services,deployments,configmaps,secrets,jobs,cronjobs -n default -l component=keda-dqn --force --grace-period=0 2>/dev/null || true
+	@kubectl delete scaledobjects,hpa -n default --all --force --grace-period=0 2>/dev/null || true
+	
+	# Step 7: Wait briefly for background deletions then force-finalize stuck namespaces
+	@echo "⏳ Waiting 5 seconds for background deletions..."
+	@sleep 5
+	@for ns in nimbusguard kubeflow keda-system monitoring; do \
+		if kubectl get namespace $$ns 2>/dev/null | grep -q "Terminating"; then \
+			echo "   🔨 Force-finalizing stuck namespace: $$ns"; \
+			kubectl get namespace $$ns -o json | jq '.spec.finalizers = []' | kubectl replace --raw /api/v1/namespaces/$$ns/finalize -f - 2>/dev/null || true; \
+		fi; \
+	done
+	
+	# Step 8: Final brute force check
+	@echo "🔍 Final nuclear verification..."
+	@sleep 3
+	@REMAINING=$$(kubectl get namespaces --no-headers 2>/dev/null | grep -E "(nimbusguard|kubeflow|keda-system|monitoring)" | awk '{print $$1}' || true); \
+	if [ -n "$$REMAINING" ]; then \
+		echo "💀 Still found stubborn namespaces: $$REMAINING"; \
+		echo "   Applying final nuclear option..."; \
+		for ns in $$REMAINING; do \
+			kubectl delete namespace $$ns --force --grace-period=0 2>/dev/null || true; \
+		done; \
+	else \
+		echo "✅ Nuclear cleanup successful - all targets eliminated!"; \
+	fi
+	
+	@echo ""
+	@echo "💥 NUCLEAR cleanup complete! Everything should be destroyed."
+	@echo "🔄 Ready for fresh deployment with 'make deploy'"
 
 # Port forwards
 ports: ## Port forward all relevant services in the background
 	@echo "🚀 Starting all port forwarding in the background..."
 	@nohup kubectl port-forward -n nimbusguard svc/prometheus 9090:9090 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/grafana 3000:3000 > .ports.log 2>&1 &
-	@nohup kubectl port-forward -n nimbusguard svc/dqn-adapter 8001:8000 > .ports.log 2>&1 &
+	@nohup kubectl port-forward -n nimbusguard svc/dqn-adapter 8080:8080 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/redis 6379:6379 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/minio 9000:9000 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/minio 9001:9001 > .ports.log 2>&1 &
@@ -340,7 +416,10 @@ ports: ## Port forward all relevant services in the background
 	@echo "-----------------------------------------"
 	@echo "📈 Prometheus:         http://localhost:9090"
 	@echo "📋 Grafana:            http://localhost:3000  (admin/admin)"
-	@echo "🧠 DQN Adapter:        http://localhost:8001"
+	@echo "🧠 DQN Adapter HTTP:   http://localhost:8080"
+	@echo "    ├── /healthz      Health check"
+	@echo "    ├── /metrics      Prometheus metrics (includes nimbusguard_dqn_desired_replicas)"
+	@echo "    └── /evaluate     Manual evaluation trigger"
 	@echo "💾 Redis (CLI):        redis-cli -p 6379"
 	@echo "🗄️ MinIO API:          http://localhost:9000"
 	@echo "🖥️ MinIO Console:      http://localhost:9001  (minioadmin/minioadmin)"
@@ -352,3 +431,27 @@ ports-stop:
 	@pkill -f "kubectl port-forward.*nimbusguard" || true
 	@pkill -f "kubectl port-forward.*kubeflow" || true
 	@echo "✅ All port forwarding stopped"
+
+# Experimental comparison targets
+.PHONY: test-hpa-baseline test-dqn-baseline
+
+test-hpa-baseline: ## Run HPA-only test with deterministic load
+	@echo "🧪 Starting HPA baseline test with deterministic load..."
+	kubectl delete jobs --all -n nimbusguard --ignore-not-found=true
+	kubectl scale deployment consumer --replicas=1 -n nimbusguard
+	kubectl apply -f kubernetes-manifests/components/consumer/hpa.yaml
+	sleep 10
+	kubectl apply -f kubernetes-manifests/components/load-generator/job-comparison-baseline.yaml -n nimbusguard
+	@echo "✅ HPA test started. Monitor with: kubectl logs -f job/load-test-comparison-baseline"
+	@echo "⏱️  Test duration: 30 minutes"
+
+test-dqn-baseline: ## Run DQN test with identical deterministic load  
+	@echo "🧠 Starting DQN test with identical deterministic load..."
+	kubectl delete jobs --all -n nimbusguard --ignore-not-found=true
+	kubectl delete hpa --all -n nimbusguard --ignore-not-found=true
+	kubectl scale deployment consumer --replicas=1 -n nimbusguard
+	kubectl apply -k kubernetes-manifests/overlays/development/
+	sleep 30  # Wait for DQN to initialize
+	kubectl apply -f kubernetes-manifests/components/load-generator/job-comparison-baseline.yaml -n nimbusguard
+	@echo "✅ DQN test started. Monitor with: kubectl logs -f job/load-test-comparison-baseline"
+	@echo "⏱️  Test duration: 30 minutes"

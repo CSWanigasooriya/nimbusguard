@@ -4,12 +4,13 @@ FROM nimbusguard-base:latest
 # Set the working directory
 WORKDIR /app
 
-# Copy the requirements file into the container
-COPY requirements.txt .
+# Copy the pyproject.toml file into the container for dependency management
+COPY pyproject.toml .
 
-# Install the dependencies
+# Install the dependencies using modern pyproject.toml approach
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --upgrade pip && \
+    pip install -e .
 
 # Copy the application code into the container
 COPY . .
@@ -18,8 +19,8 @@ COPY . .
 COPY feature_scaler.gz /app/feature_scaler.gz
 COPY dqn_features.parquet /app/dqn_features.parquet
 
-# Expose the port the app runs on
+# Expose the ports the app runs on
 EXPOSE 8080
 
 # Command to run the application using Kopf with liveness probe
-CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8001/healthz", "/app/main.py"] 
+CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8081/healthz", "/app/main.py"] 
