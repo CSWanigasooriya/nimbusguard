@@ -11,7 +11,7 @@ class EnhancedQNetwork(nn.Module):
 
         # Use appropriately sized hidden dimensions for the feature space
         if hidden_dims is None:
-            hidden_dims = [64, 32]  # Simplified architecture for 11 input features
+            hidden_dims = [64, 32]  # Simplified architecture for 9 consumer performance features
 
         layers = []
         prev_dim = state_dim

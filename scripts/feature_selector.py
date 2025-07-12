@@ -1,1427 +1,658 @@
 #!/usr/bin/env python3
 """
-Advanced DQN Feature Engineering for Kubernetes Pod Autoscaling
-==============================================================
+Intelligent Consumer Pod DQN Feature Selector
+===========================================
 
-This script implements research-grade feature engineering using advanced statistical
-and machine learning techniques to extract the 11 most critical features for DQN
-pod scaling decisions.
-
-Research Methods Applied:
-1. Principal Component Analysis (PCA) for dimensionality reduction
-2. Mutual Information for feature selection
-3. Statistical significance testing
-4. Time-series decomposition
-5. Correlation analysis with target variable
-6. Domain knowledge integration
-
-Target: 11 optimal features for DQN state representation
+Dynamically analyzes CSV files to:
+1. Auto-detect metric types (gauge vs counter)
+2. Auto-calculate rate metrics from counters
+3. Auto-categorize metrics by analysis
+4. Auto-prioritize consumer performance
+5. Auto-ensure diversity across categories
 """
 
 import pandas as pd
 import numpy as np
 import joblib
-import requests
 from pathlib import Path
 import logging
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional
-import warnings
-warnings.filterwarnings('ignore')
-
-# Advanced ML and statistical libraries
-from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.decomposition import PCA
-from sklearn.feature_selection import (
-    mutual_info_regression, 
-    SelectKBest, 
-    f_regression,
-    RFE
-)
-from sklearn.ensemble import RandomForestRegressor
-from scipy import stats
-from scipy.stats import pearsonr, spearmanr
-from statsmodels.tsa.seasonal import seasonal_decompose
-from statsmodels.stats.diagnostic import acorr_ljungbox
+from typing import Dict, List, Tuple, Set
+import json
+import re
+from sklearn.preprocessing import RobustScaler
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-class AdvancedDQNFeatureEngineer:
-    """
-    Advanced feature engineering for DQN pod scaling using statistical methods.
+class IntelligentConsumerFeatureSelector:
+    """Intelligent feature selector that analyzes data patterns dynamically."""
     
-    Implements research-grade techniques to extract the 11 most predictive features
-    for Kubernetes pod autoscaling decisions with dynamic metric discovery.
-    """
-    
-    def __init__(self, data_dir: Path, target_features: int = 9, prometheus_url: str = "http://localhost:9090"):
+    def __init__(self, data_dir: Path, target_features: int = 9):
         self.data_dir = Path(data_dir)
         self.target_features = target_features
-        self.prometheus_url = prometheus_url
-        self.logger = logging.getLogger(__name__)
+        self.consumer_metrics = []
+        self.metric_analysis = {}
         
-        # CONSUMER POD SPECIFIC PATTERNS: Focus on metrics that directly affect consumer pod scaling
-        # Based on actual available metrics from prometheus_data_keda/
-        self.consumer_metric_patterns = [
-            # HTTP Traffic Metrics (consumer app performance)
-            'http_request_duration',        # Request latency (performance indicator)
-            'http_request_size',           # Request size (load indicator)
-            'http_response_size',          # Response size (load indicator)  
-            'http_requests',               # Request count (load indicator)
-            'http_server_duration',        # Server-side latency
-            'http_server_request_size',    # Server request processing
-            'http_server_response_size',   # Server response processing
-            
-            # Process Resource Metrics (consumer pod resource usage)
-            'process_resident_memory',     # Current memory usage (key scaling signal)
-            'alloy_resources_process',     # Alloy process metrics (if monitoring consumer)
-            
-            # Go Runtime Metrics (consumer app internal state)
-            'go_goroutines',              # Concurrency level (current gauge)
-            'go_memstats_heap',           # Heap memory state (current gauge)
-            'go_threads',                 # Thread count (current gauge)
-            'go_gc_duration_seconds',     # GC pressure (not _total)
-            
-            # Kubernetes State Metrics (pod/deployment state)
-            'kube_pod_status',            # Pod health status
-            'kube_pod_container',         # Container state
-            'kube_deployment_status',     # Deployment replica state
-            'kube_deployment_spec',       # Deployment configuration
-            
-            # System Health Metrics (monitoring health)
-            'up',                         # Service up status (boolean gauge)
-            'scrape_samples_scraped',     # Monitoring sample count (health indicator)
-            'scrape_duration_seconds',    # Scrape latency (monitoring performance)
-        ]
+    def discover_consumer_metrics(self) -> List[str]:
+        """Dynamically discover all metrics containing consumer pod data."""
+        logger.info("🔍 Discovering consumer pod metrics...")
         
-        # CUMULATIVE PATTERNS TO AVOID: These accumulate over time and misrepresent current state
-        self.cumulative_patterns_exclude = [
-            '_total',                     # Standard Prometheus counter suffix
-            '_bucket',                    # Histogram bucket counters (cumulative)
-            '_count',                     # Histogram/summary count (cumulative)
-            '_sum',                       # Histogram/summary sum (cumulative)
-            '_created',                   # Counter creation timestamps
-            '_seconds_total',             # CPU time counters (cumulative)
-            '_bytes_total',               # Network/disk byte counters (cumulative)
-            '_failures_total',            # Error counters (cumulative)
-            '_objects_total',             # Object count counters (cumulative)
-            '_gc_cycles_total',           # GC cycle counters (cumulative)
-            '_allocs_total',              # Allocation counters (cumulative)
-            '_frees_total',               # Memory free counters (cumulative)
-        ]
-        
-        # GAUGE PATTERNS TO PREFER: Current state indicators
-        self.gauge_patterns_prefer = [
-            '_bytes',                     # Current memory/size (not _bytes_total)
-            '_ratio',                     # Current ratios
-            '_percent',                   # Current percentages  
-            '_status',                    # Current status values
-            '_ready',                     # Current readiness state
-            '_available',                 # Current availability
-            '_replicas',                  # Current replica count
-            '_goroutines',                # Current goroutine count
-            '_threads',                   # Current thread count
-            'up',                         # Service up status (boolean gauge)
-            'scrape_samples_scraped',     # Current scrape sample count
-        ]
-        
-        # Statistical parameters
-        self.confidence_level = 0.95
-        self.significance_threshold = 0.05
-        
-        # MULTI-DIMENSIONAL METRIC HANDLING: Some Prometheus metrics have multiple dimensions
-        # Example: kube_pod_container_resource_limits has resource="cpu" and resource="memory"
-        self.multi_dimensional_metrics = {
-            'kube_pod_container_resource_limits': {
-                'dimensions': [
-                    {'suffix': '_cpu', 'filter': 'resource="cpu"', 'aggregation': 'sum', 'unit': 'cores'},
-                    {'suffix': '_memory', 'filter': 'resource="memory"', 'aggregation': 'sum', 'unit': 'bytes'}
-                ],
-                'description': 'Container resource limits split by CPU cores and memory bytes'
-            }
-            # Future multi-dimensional metrics can be added here
-        }
-        
-    def discover_available_metrics(self) -> List[str]:
-        """Discover available metrics from Prometheus API."""
-        self.logger.info("🔍 Discovering available metrics from Prometheus...")
-        
-        try:
-            # Query Prometheus API for all available metric names
-            response = requests.get(
-                f"{self.prometheus_url}/api/v1/label/__name__/values",
-                timeout=10
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            if data['status'] != 'success':
-                raise ValueError(f"Prometheus API error: {data.get('error', 'Unknown error')}")
-            
-            all_metrics = data['data']
-            self.logger.info(f"  ✅ Found {len(all_metrics)} total metrics in Prometheus")
-            
-            return all_metrics
-            
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"  ❌ Failed to connect to Prometheus: {e}")
-            self.logger.warning("  ⚠️ Falling back to CSV file discovery...")
-            return self._discover_metrics_from_files()
-        except Exception as e:
-            self.logger.error(f"  ❌ Error querying Prometheus: {e}")
-            self.logger.warning("  ⚠️ Falling back to CSV file discovery...")
-            return self._discover_metrics_from_files()
-    
-    def _discover_metrics_from_files(self) -> List[str]:
-        """Fallback: discover metrics from existing CSV files."""
+        consumer_metrics = []
         csv_files = list(self.data_dir.glob("*.csv"))
-        metrics = [f.stem for f in csv_files]
-        self.logger.info(f"  📁 Found {len(metrics)} metrics from CSV files")
-        return metrics
+        
+        for csv_file in csv_files:
+            try:
+                # Quick sample to check for consumer data
+                df_sample = pd.read_csv(csv_file, nrows=10)
+                if 'instance' in df_sample.columns:
+                    if df_sample['instance'].str.contains(':8000', na=False).any():
+                        metric_name = csv_file.stem
+                        consumer_metrics.append(metric_name)
+                        logger.info(f"  ✓ Found consumer metric: {metric_name}")
+            except Exception as e:
+                logger.warning(f"  ⚠️ Could not analyze {csv_file.name}: {e}")
+        
+        logger.info(f"📊 Discovered {len(consumer_metrics)} consumer pod metrics")
+        self.consumer_metrics = consumer_metrics
+        return consumer_metrics
+
+    def analyze_metric_characteristics(self, metric_name: str, series: pd.Series) -> Dict:
+        """Analyze a metric's characteristics to determine type and importance."""
+        
+        # Basic statistical analysis
+        values = series.dropna()
+        if len(values) < 2:
+            return {'type': 'invalid', 'category': 'unknown', 'scaling_relevance': 0.0}
+        
+        mean_val = values.mean()
+        std_val = values.std()
+        min_val = values.min()
+        max_val = values.max()
+        
+        # Detect metric type from data patterns
+        metric_type = self._detect_metric_type(metric_name, values)
+        
+        # Categorize by name analysis
+        category = self._categorize_metric(metric_name)
+        
+        # Assess scaling relevance
+        scaling_relevance = self._assess_scaling_relevance(metric_name, values, category)
+        
+        # Calculate variability score
+        coeff_var = std_val / (mean_val + 1e-10) if mean_val != 0 else 0
+        range_score = (max_val - min_val) / (mean_val + 1e-10) if mean_val != 0 else 0
+        
+        # Assess if this is monitoring overhead vs consumer performance
+        is_consumer_performance = self._is_consumer_performance_metric(metric_name)
+        
+        return {
+            'type': metric_type,
+            'category': category,
+            'scaling_relevance': scaling_relevance,
+            'variability': coeff_var + range_score,
+            'is_consumer_performance': is_consumer_performance,
+            'stats': {
+                'mean': mean_val,
+                'std': std_val,
+                'min': min_val,
+                'max': max_val,
+                'samples': len(values)
+            }
+        }
     
-    def filter_consumer_metrics(self, all_metrics: List[str]) -> Dict[str, List[str]]:
-        """Filter metrics to focus on consumer pod relevant metrics."""
-        self.logger.info("🎯 Filtering metrics for consumer pod focus using actual available metrics...")
+    def _detect_metric_type(self, name: str, values: pd.Series) -> str:
+        """Automatically detect if metric is counter, gauge, or histogram using smart analysis."""
         
-        filtered_metrics = {
-            'load_metrics': [],
-            'resource_metrics': [],
-            'health_metrics': [],
-            'application_metrics': [],
-            'system_metrics': []
-        }
+        # Strong name-based indicators first (these are very reliable)
+        name_lower = name.lower()
         
-        # Define categorization based on actual available metrics
-        categorization_rules = {
-            'load_metrics': [
-                'http_request_duration',        # Request latency
-                'http_request_size',           # Request size  
-                'http_response_size',          # Response size
-                'http_requests',               # Request count
-                'http_server_duration',        # Server latency
-                'http_server_request_size',    # Server request processing
-                'http_server_response_size',   # Server response processing
-            ],
-            'resource_metrics': [
-                'process_resident_memory',     # Memory usage
-                'alloy_resources_process',     # Process metrics
-                'go_goroutines',              # Concurrency
-                'go_memstats_heap',           # Heap memory
-                'go_threads',                 # Thread count
-                'go_gc_duration_seconds',     # GC pressure (gauge version)
-            ],
-            'health_metrics': [
-                'up',                         # Service up status
-                'scrape_samples_scraped',     # Monitoring health
-                'scrape_duration_seconds',    # Scrape performance
-                'kube_pod_status',            # Pod health
-                'kube_pod_container',         # Container state
-            ],
-            'application_metrics': [
-                'kube_deployment_status',     # Deployment state
-                'kube_deployment_spec',       # Deployment configuration
-            ],
-            'system_metrics': [
-                # System-wide metrics (if any)
-            ]
-        }
+        # Definitive counter patterns
+        strong_counter_patterns = ['_total', '_count', '_sum', '_created', 'seconds_total']
+        if any(pattern in name_lower for pattern in strong_counter_patterns):
+            return 'counter'
         
-        # Filter and categorize metrics
-        cumulative_excluded = 0
-        gauge_preferred = 0
+        # Histogram buckets
+        if '_bucket' in name_lower:
+            return 'histogram'
         
-        for metric in all_metrics:
-            metric_lower = metric.lower()
+        # Info/static metrics
+        if '_info' in name_lower or 'start_time' in name_lower:
+            return 'info'
+        
+        # Data behavior analysis for ambiguous cases
+        if len(values) > 10:
+            # Remove any outliers first
+            q1 = values.quantile(0.25)
+            q3 = values.quantile(0.75)
+            iqr = q3 - q1
+            clean_values = values[(values >= q1 - 1.5*iqr) & (values <= q3 + 1.5*iqr)]
             
-            # Check if metric matches consumer patterns
-            is_consumer_relevant = any(
-                pattern.lower() in metric_lower 
-                for pattern in self.consumer_metric_patterns
-            )
-            
-            if is_consumer_relevant:
-                # EXCLUDE CUMULATIVE METRICS (they misrepresent current state)
-                is_cumulative = any(
-                    metric_lower.endswith(pattern.lower()) 
-                    for pattern in self.cumulative_patterns_exclude
-                )
+            if len(clean_values) > 5:
+                # Check for monotonic increase (strong counter indicator)
+                diffs = clean_values.diff().dropna()
                 
-                if is_cumulative:
-                    cumulative_excluded += 1
-                    self.logger.debug(f"  🚫 Excluded cumulative metric: {metric}")
+                # Counter: mostly non-decreasing with positive trend
+                non_decreasing_ratio = (diffs >= -0.01).sum() / len(diffs)  # Allow tiny decreases
+                positive_trend = clean_values.iloc[-1] > clean_values.iloc[0]
+                
+                if non_decreasing_ratio > 0.85 and positive_trend:
+                    logger.info(f"  📊 Detected COUNTER from data: {name} (non-decreasing: {non_decreasing_ratio:.2f})")
+                    return 'counter'
+                
+                # Gauge: values fluctuate around a mean
+                coefficient_of_variation = clean_values.std() / (clean_values.mean() + 1e-10)
+                if coefficient_of_variation > 0.1:  # Some variability indicates gauge
+                    return 'gauge'
+        
+        # Default fallback based on common patterns
+        if any(pattern in name_lower for pattern in ['bytes', 'fds', 'duration', 'up']):
+            return 'gauge'
+        
+        # If still uncertain, assume gauge (current state)
+        return 'gauge'
+    
+    def _categorize_metric(self, name: str) -> str:
+        """Automatically categorize metrics by analyzing name patterns."""
+        
+        name_lower = name.lower()
+        
+        # CPU patterns
+        if any(pattern in name_lower for pattern in ['cpu', 'processor']):
+            return 'cpu'
+        
+        # Memory patterns  
+        if any(pattern in name_lower for pattern in ['memory', 'mem', 'heap', 'gc']):
+            return 'memory'
+        
+        # Network/HTTP patterns
+        if any(pattern in name_lower for pattern in ['http', 'request', 'response', 'network']):
+            return 'network'
+        
+        # I/O patterns
+        if any(pattern in name_lower for pattern in ['fds', 'file', 'disk', 'io']):
+            return 'io'
+        
+        # Performance patterns
+        if any(pattern in name_lower for pattern in ['duration', 'latency', 'time', 'performance']):
+            return 'performance'
+        
+        # System patterns
+        if any(pattern in name_lower for pattern in ['load', 'system', 'node']):
+            return 'system'
+        
+        # Monitoring patterns
+        if any(pattern in name_lower for pattern in ['scrape', 'series', 'samples', 'metric']):
+            return 'monitoring'
+        
+        return 'other'
+    
+    def _is_consumer_performance_metric(self, name: str) -> bool:
+        """Determine if metric reflects TRUE consumer performance vs monitoring overhead."""
+        
+        name_lower = name.lower()
+        
+        # EXCLUDE: Monitoring infrastructure overhead
+        monitoring_overhead = [
+            'scrape_', 'series_added', 'samples_', 'alloy_', 'prometheus_',
+            'up',  # Just 0/1 availability, not performance
+        ]
+        
+        # EXCLUDE: Meaningless timestamp metrics
+        meaningless_patterns = [
+            '_created',  # These are static timestamps, not counters
+            '_info',     # Static information
+            'start_time' # Static startup timestamp
+        ]
+        
+        # Check for monitoring overhead
+        if any(pattern in name_lower for pattern in monitoring_overhead):
+            return False
+            
+        # Check for meaningless patterns
+        if any(pattern in name_lower for pattern in meaningless_patterns):
+            return False
+        
+        # INCLUDE: True consumer performance indicators
+        consumer_performance = [
+            'process_resident_memory',  # Current memory usage
+            'process_virtual_memory',   # Current virtual memory
+            'process_open_fds',         # Current I/O load
+            'process_max_fds',          # I/O capacity
+            'process_cpu_seconds_total', # CPU usage (counter, but meaningful)
+            'http_requests_total',      # Request load (counter)
+            'http_request_duration_seconds_sum',   # Latency (counter)
+            'http_request_duration_seconds_count', # Request count (counter)
+            'http_request_size_bytes',  # Request size load
+            'http_response_size_bytes', # Response size load
+            'python_gc_',               # Memory pressure indicators
+        ]
+        
+        # Check for true consumer performance
+        if any(pattern in name_lower for pattern in consumer_performance):
+            return True
+            
+        return False  # Default to exclude if uncertain
+
+    def _assess_scaling_relevance(self, name: str, values: pd.Series, category: str) -> float:
+        """Assess scaling relevance with focus on TRUE consumer performance."""
+        
+        name_lower = name.lower()
+        
+        # MAJOR EXCLUSIONS FIRST
+        
+        # Heavy penalty for monitoring overhead
+        if any(pattern in name_lower for pattern in ['scrape_', 'series', 'samples']):
+            return 0.0  # Complete exclusion
+            
+        # Heavy penalty for meaningless metrics
+        if any(pattern in name_lower for pattern in ['_created', '_info', 'start_time']):
+            return 0.0  # Complete exclusion
+            
+        # Exclude service availability (not performance)
+        if name_lower == 'up':
+            return 0.0  # Complete exclusion
+        
+        # POSITIVE SCORING FOR TRUE CONSUMER METRICS
+        
+        base_score = 0.0
+        
+        # Critical resource usage (current state)
+        if 'resident_memory' in name_lower:
+            base_score = 100.0  # Physical memory is critical
+        elif 'virtual_memory' in name_lower:
+            base_score = 95.0   # Virtual memory is critical
+        elif 'open_fds' in name_lower:
+            base_score = 90.0   # I/O pressure is critical
+        elif 'cpu_seconds_total' in name_lower:
+            base_score = 95.0   # CPU usage is critical
+            
+        # HTTP performance metrics (counters, but meaningful)
+        elif 'http_requests_total' in name_lower:
+            base_score = 85.0   # Request load is important
+        elif 'http_request_duration_seconds_sum' in name_lower:
+            base_score = 80.0   # Latency is important
+        elif 'http_request_duration_seconds_count' in name_lower:
+            base_score = 75.0   # Request frequency is important
+        elif 'request_size_bytes' in name_lower or 'response_size_bytes' in name_lower:
+            base_score = 70.0   # Payload size indicates load
+            
+        # Memory pressure indicators
+        elif 'python_gc' in name_lower:
+            base_score = 65.0   # GC indicates memory pressure
+            
+        # Other process metrics
+        elif 'max_fds' in name_lower:
+            base_score = 40.0   # FD limits (less critical than usage)
+        
+        # Rate metrics get bonus (current change rate)
+        if 'rate' in name_lower and base_score > 0:
+            base_score += 20.0  # Rates show current activity
+        
+        return base_score
+
+    def calculate_rate_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate rate metrics from MEANINGFUL counters only."""
+        logger.info("🧮 Calculating rate metrics from meaningful counters...")
+        
+        rate_df = df.copy()
+        
+        # Only calculate rates for TRUE performance counters
+        meaningful_counters = [
+            'process_cpu_seconds_total',
+            'http_requests_total', 
+            'http_request_duration_seconds_sum',
+            'http_request_duration_seconds_count',
+            'http_request_size_bytes_sum',
+            'http_request_size_bytes_count',
+            'http_response_size_bytes_sum',
+            'http_response_size_bytes_count',
+            'python_gc_collections_total',
+            'python_gc_objects_collected_total'
+        ]
+        
+        for column in df.columns:
+            if column in self.metric_analysis:
+                analysis = self.metric_analysis[column]
+                
+                # Only convert meaningful counters to rates
+                if (analysis['type'] == 'counter' and 
+                    analysis['is_consumer_performance'] and
+                    any(counter in column for counter in meaningful_counters)):
+                    
+                    # Calculate per-second rate
+                    rate_series = df[column].diff() / 60  # 60-second intervals
+                    rate_series = rate_series.fillna(0).clip(lower=0)  # Remove negative values
+                    
+                    rate_column = f"{column}_rate"
+                    rate_df[rate_column] = rate_series
+                    
+                    # Update analysis for rate metric
+                    self.metric_analysis[rate_column] = {
+                        'type': 'gauge',
+                        'category': analysis['category'],
+                        'scaling_relevance': analysis['scaling_relevance'] + 20.0,  # Boost rates
+                        'variability': rate_series.std() / (rate_series.mean() + 1e-10),
+                        'is_consumer_performance': True,
+                        'derived_from': column
+                    }
+                    
+                    logger.info(f"  ✓ Created meaningful rate metric: {rate_column}")
+        
+        return rate_df
+    
+    def ensure_category_diversity(self, ranked_features: List[str]) -> List[str]:
+        """Ensure diverse representation across metric categories with intelligence."""
+        logger.info("🎯 Ensuring intelligent category diversity...")
+        
+        selected = []
+        category_counts = {}
+        
+        # Intelligent category targets based on scaling importance
+        category_targets = {
+            'cpu': 2,           # Critical: CPU utilization + rate
+            'memory': 2,        # Critical: Physical + virtual memory
+            'network': 3,       # Important: Request rate + latency + throughput
+            'io': 1,            # Important: File descriptors or I/O rate
+            'performance': 1,   # Useful: Latency or performance indicators
+            'monitoring': 0,    # Avoid: Monitoring overhead
+            'other': 1          # Backup: Other useful metrics
+        }
+        
+        # First pass: prioritize high-impact categories
+        priority_categories = ['cpu', 'memory', 'network', 'io']
+        
+        for category in priority_categories:
+            count = 0
+            target = category_targets.get(category, 0)
+            
+            for feature in ranked_features:
+                if len(selected) >= self.target_features:
+                    break
+                    
+                if feature in selected:
+                    continue
+                    
+                if feature in self.metric_analysis:
+                    feature_category = self.metric_analysis[feature]['category']
+                    feature_type = self.metric_analysis[feature]['type']
+                    
+                    if feature_category == category and count < target:
+                        # Extra validation: avoid counters even in priority categories
+                        if feature_type != 'counter' or 'rate' in feature:
+                            selected.append(feature)
+                            category_counts[category] = category_counts.get(category, 0) + 1
+                            count += 1
+                            logger.info(f"  ✓ Selected {feature} (category: {category}, type: {feature_type})")
+        
+        # Second pass: fill remaining slots with best available (avoid monitoring)
+        for feature in ranked_features:
+            if len(selected) >= self.target_features:
+                break
+                
+            if feature not in selected and feature in self.metric_analysis:
+                analysis = self.metric_analysis[feature]
+                
+                # Skip monitoring overhead and raw counters
+                if analysis['category'] == 'monitoring':
+                    logger.info(f"  ✗ Skipped {feature} (monitoring overhead)")
+                    continue
+                    
+                if analysis['type'] == 'counter' and 'rate' not in feature:
+                    logger.info(f"  ✗ Skipped {feature} (raw counter, prefer rate)")
                     continue
                 
-                # PREFER GAUGE METRICS (current state indicators)
-                is_gauge = any(
-                    pattern.lower() in metric_lower 
-                    for pattern in self.gauge_patterns_prefer
-                )
-                
-                if is_gauge:
-                    gauge_preferred += 1
-                    self.logger.debug(f"  ✅ Preferred gauge metric: {metric}")
-                
-                # Categorize the metric
-                categorized = False
-                for category, patterns in categorization_rules.items():
-                    if any(pattern.lower() in metric_lower for pattern in patterns):
-                        filtered_metrics[category].append(metric)
-                        categorized = True
-                        break
-                
-                # If not categorized, add to application metrics as default
-                if not categorized:
-                    filtered_metrics['application_metrics'].append(metric)
+                selected.append(feature)
+                category = analysis['category']
+                category_counts[category] = category_counts.get(category, 0) + 1
+                logger.info(f"  ✓ Added {feature} (category: {category}, type: {analysis['type']})")
         
-        # Log results
-        total_filtered = sum(len(metrics) for metrics in filtered_metrics.values())
-        self.logger.info(f"  ✅ Filtered to {total_filtered} consumer-relevant metrics:")
-        self.logger.info(f"  🚫 Excluded {cumulative_excluded} cumulative metrics (avoid historical accumulation)")
-        self.logger.info(f"  📊 Preferred {gauge_preferred} gauge metrics (current state indicators)")
-        
-        for category, metrics in filtered_metrics.items():
-            if metrics:
-                self.logger.info(f"    📊 {category}: {len(metrics)} metrics")
-                # Show first few metrics as examples
-                examples = metrics[:3]
-                if len(metrics) > 3:
-                    examples.append(f"... (+{len(metrics)-3} more)")
-                self.logger.info(f"      Examples: {', '.join(examples)}")
-        
-        return filtered_metrics
+        logger.info(f"📊 Final intelligent category distribution: {category_counts}")
+        return selected
     
-    def validate_metric_availability(self, metrics_dict: Dict[str, List[str]]) -> Dict[str, List[str]]:
-        """Validate that discovered metrics have corresponding CSV files."""
-        self.logger.info("✅ Validating metric data availability...")
+    def load_and_analyze_data(self) -> pd.DataFrame:
+        """Load consumer data and perform comprehensive analysis."""
         
-        validated_metrics = {category: [] for category in metrics_dict.keys()}
-        missing_files = []
+        # Discover metrics
+        self.discover_consumer_metrics()
         
-        for category, metrics in metrics_dict.items():
-            for metric in metrics:
-                csv_file = self.data_dir / f"{metric}.csv"
-                if csv_file.exists():
-                    # Quick validation - check if file has data
-                    try:
-                        df = pd.read_csv(csv_file, nrows=1)
-                        if len(df) > 0 and 'value' in df.columns:
-                            validated_metrics[category].append(metric)
-                        else:
-                            missing_files.append(f"{metric} (empty or invalid format)")
-                    except Exception:
-                        missing_files.append(f"{metric} (read error)")
-                else:
-                    missing_files.append(f"{metric} (file not found)")
+        # Load all consumer metric data
+        all_data = []
+        for metric in self.consumer_metrics:
+            file_path = self.data_dir / f"{metric}.csv"
+            try:
+                df = pd.read_csv(file_path)
+                if 'instance' in df.columns:
+                    consumer_data = df[df['instance'].str.contains(':8000', na=False)].copy()
+                    if len(consumer_data) > 0:
+                        consumer_data['metric'] = metric
+                        all_data.append(consumer_data)
+            except Exception as e:
+                logger.warning(f"Failed to load {metric}: {e}")
         
-        # Log validation results
-        total_validated = sum(len(metrics) for metrics in validated_metrics.values())
-        self.logger.info(f"  ✅ Validated {total_validated} metrics with available data")
+        if not all_data:
+            raise ValueError("No consumer data found!")
         
-        if missing_files:
-            self.logger.warning(f"  ⚠️ {len(missing_files)} metrics missing data:")
-            for missing in missing_files[:10]:  # Show first 10
-                self.logger.warning(f"    - {missing}")
-            if len(missing_files) > 10:
-                self.logger.warning(f"    ... and {len(missing_files) - 10} more")
+        # Combine and pivot
+        combined_df = pd.concat(all_data, ignore_index=True)
+        combined_df['timestamp'] = pd.to_datetime(combined_df['timestamp'])
         
-        return validated_metrics
+        feature_df = combined_df.pivot_table(
+            index='timestamp',
+            columns='metric',
+            values='value',
+            aggfunc='mean'
+        ).fillna(method='ffill').fillna(method='bfill').fillna(0)
+        
+        # Analyze each metric
+        logger.info("🔬 Analyzing metric characteristics...")
+        for column in feature_df.columns:
+            self.metric_analysis[column] = self.analyze_metric_characteristics(column, feature_df[column])
+        
+        # Calculate rate metrics
+        feature_df = self.calculate_rate_metrics(feature_df)
+        
+        return feature_df
     
-    def _filter_consumer_pod_data(self, df: pd.DataFrame, metric_name: str) -> pd.DataFrame:
-        """Filter CSV data to only include consumer pod metrics (matching DQN adapter logic)."""
-        if 'job' not in df.columns or 'instance' not in df.columns:
-            # If no job/instance columns, return all data (fallback)
-            return df
+    def rank_features_intelligently(self, df: pd.DataFrame) -> List[str]:
+        """Rank features using intelligent analysis with better counter detection."""
+        logger.info("🧠 Ranking features intelligently...")
         
-        # Define consumer pod filters (matching main.py logic)
-        consumer_filters = [
-            # Primary: consumer pod job
-            df['job'] == 'prometheus.scrape.nimbusguard_consumer',
-            # Secondary: consumer instance
-            df['instance'] == 'consumer:8000',
-            # Tertiary: any port 8000 instance (consumer app port)
-            df['instance'].str.contains(':8000', na=False),
-        ]
+        feature_scores = {}
         
-        # Try filters in order of preference
-        for filter_condition in consumer_filters:
-            filtered_df = df[filter_condition]
-            if len(filtered_df) > 0:
-                self.logger.debug(f"    📊 {metric_name}: Using {filter_condition.name if hasattr(filter_condition, 'name') else 'consumer filter'} -> {len(filtered_df)} rows")
-                return filtered_df
-        
-        # If no consumer-specific data found, check for special cases
-        if metric_name.startswith('node_') or metric_name.startswith('kube_'):
-            # For node/kube metrics, we still want them (they're system-wide)
-            return df
-        
-        # For other metrics, return empty to exclude non-consumer data
-        self.logger.debug(f"    ⚠️ {metric_name}: No consumer pod data found, excluding")
-        return pd.DataFrame()
-
-    def load_and_prepare_data(self) -> pd.DataFrame:
-        """Load and prepare data with dynamic metric discovery and validation."""
-        self.logger.info("🔬 Loading data with dynamic metric discovery...")
-        
-        # Step 1: Discover available metrics
-        all_metrics = self.discover_available_metrics()
-        
-        # Step 2: Filter for consumer-relevant metrics
-        consumer_metrics = self.filter_consumer_metrics(all_metrics)
-        
-        # Step 3: Validate data availability
-        validated_metrics = self.validate_metric_availability(consumer_metrics)
-        
-        # Step 4: Expand multi-dimensional metrics (NEW!)
-        expanded_metrics = self.expand_multi_dimensional_metrics(validated_metrics)
-        
-        # Step 5: Load expanded metrics
-        combined_data = []
-        data_quality_report = {
-            'loaded_metrics': 0,
-            'failed_metrics': 0,
-            'total_rows': 0,
-            'missing_data_percentage': 0,
-            'multi_dimensional_expanded': 0
-        }
-        
-        for category, metrics in expanded_metrics.items():
-            if not metrics:
+        for column in df.columns:
+            if column not in self.metric_analysis:
                 continue
                 
-            self.logger.info(f"Loading {category} ({len(metrics)} metrics)...")
+            analysis = self.metric_analysis[column]
             
-            for metric in metrics:
-                csv_file = self.data_dir / f"{metric}.csv"
-                try:
-                    df = pd.read_csv(csv_file)
-                    
-                    # Data quality checks
-                    if len(df) == 0:
-                        self.logger.warning(f"  ⚠️ Empty dataset: {metric}")
-                        continue
-                        
-                    # Check for required columns
-                    required_cols = ['timestamp', 'value']
-                    if not all(col in df.columns for col in required_cols):
-                        self.logger.warning(f"  ⚠️ Missing required columns: {metric}")
-                        continue
-                    
-                    # Filter to consumer pod data only (matching DQN adapter queries)
-                    df_filtered = self._filter_consumer_pod_data(df, metric)
-                    if len(df_filtered) == 0:
-                        self.logger.warning(f"  ⚠️ No consumer pod data found for: {metric}")
-                        continue
-                    
-                    df_filtered['metric_name'] = metric
-                    df_filtered['category'] = category
-                    combined_data.append(df_filtered)
-                    data_quality_report['loaded_metrics'] += 1
-                    data_quality_report['total_rows'] += len(df_filtered)
-                    
-                    # Track multi-dimensional expansions
-                    if any(metric.startswith(base) for base in self.multi_dimensional_metrics.keys()):
-                        data_quality_report['multi_dimensional_expanded'] += 1
-                    
-                    self.logger.debug(f"  ✅ {metric}: {len(df)} rows")
-                    
-                except Exception as e:
-                    self.logger.error(f"  ❌ Failed to load {metric}: {e}")
-                    data_quality_report['failed_metrics'] += 1
-        
-        if not combined_data:
-            raise ValueError("No valid consumer metrics data could be loaded!")
-        
-        # Combine and clean data
-        df = pd.concat(combined_data, ignore_index=True)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        
-        # Calculate missing data percentage
-        data_quality_report['missing_data_percentage'] = (df['value'].isnull().sum() / len(df)) * 100
-        
-        # Store the discovered metrics for later use
-        self.discovered_metrics = expanded_metrics
-        
-        self.logger.info(f"📊 Data Quality Report (Consumer Metrics Focus + Multi-Dimensional):")
-        self.logger.info(f"  - Loaded metrics: {data_quality_report['loaded_metrics']}")
-        self.logger.info(f"  - Failed metrics: {data_quality_report['failed_metrics']}")
-        self.logger.info(f"  - Multi-dimensional expanded: {data_quality_report['multi_dimensional_expanded']}")
-        self.logger.info(f"  - Total rows: {data_quality_report['total_rows']:,}")
-        self.logger.info(f"  - Missing data: {data_quality_report['missing_data_percentage']:.2f}%")
-        
-        return df
-    
-    def create_time_series_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Create sophisticated time-series features using high-resolution sampling."""
-        self.logger.info("⏰ Creating advanced time-series features with increased sampling...")
-        
-        # Instead of grouping by timestamp (which reduces to ~894 samples),
-        # we'll resample to a higher frequency to get more training data
-        
-        # First, pivot to time-series format but keep more granular timestamps
-        ts_df = df.groupby(['timestamp', 'metric_name'])['value'].mean().reset_index()
-        ts_df = ts_df.pivot(index='timestamp', columns='metric_name', values='value')
-        ts_df = ts_df.sort_index()
-        
-        # Keep the natural 1-minute sampling frequency - don't artificially interpolate
-        # For per-minute Prometheus data, we should respect the natural sampling rate
-        # ts_df = ts_df.resample('30S').mean()  # REMOVED: This creates artificial data
-        
-        # Forward fill and backward fill to handle missing data
-        ts_df = ts_df.fillna(method='ffill').fillna(method='bfill').fillna(0)
-        
-        # Add temporal features
-        ts_df['hour'] = ts_df.index.hour
-        ts_df['day_of_week'] = ts_df.index.dayofweek
-        ts_df['is_business_hours'] = ts_df['hour'].between(9, 17).astype(int)
-        
-        # Cyclical encoding (advanced approach)
-        ts_df['hour_sin'] = np.sin(2 * np.pi * ts_df['hour'] / 24)
-        ts_df['hour_cos'] = np.cos(2 * np.pi * ts_df['hour'] / 24)
-        ts_df['day_sin'] = np.sin(2 * np.pi * ts_df['day_of_week'] / 7)
-        ts_df['day_cos'] = np.cos(2 * np.pi * ts_df['day_of_week'] / 7)
-        
-        self.logger.info(f"  ✅ Created time-series dataset: {ts_df.shape}")
-        self.logger.info(f"      📊 Using natural per-minute sampling: {len(ts_df)} samples")
-        return ts_df
-    
-    def engineer_domain_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Engineer domain-specific features based on autoscaling theory."""
-        self.logger.info("🎯 Engineering domain-specific autoscaling features...")
-        
-        feature_df = df.copy()
-        
-        # 1. Request Rate (critical for load-based scaling)
-        if 'http_requests_total' in feature_df.columns:
-            feature_df['request_rate'] = feature_df['http_requests_total'].diff() / 60  # per minute
-            feature_df['request_rate'] = feature_df['request_rate'].fillna(0).clip(lower=0)
+            # Base score from scaling relevance
+            base_score = analysis['scaling_relevance']
             
-            # Request rate velocity (acceleration)
-            feature_df['request_rate_velocity'] = feature_df['request_rate'].diff()
-            feature_df['request_rate_velocity'] = feature_df['request_rate_velocity'].fillna(0)
-        
-        # 2. Response Time (latency-based scaling signal)
-        if all(col in feature_df.columns for col in ['http_request_duration_seconds_sum', 'http_request_duration_seconds_count']):
-            feature_df['avg_response_time'] = (
-                feature_df['http_request_duration_seconds_sum'] / 
-                (feature_df['http_request_duration_seconds_count'] + 1e-6)
-            ) * 1000  # Convert to milliseconds
+            # Variability bonus (metrics that change are more useful)
+            variability_score = analysis['variability'] * 15
             
-            # Response time percentiles using rolling statistics (20-minute window)
-            feature_df['response_time_p95'] = feature_df['avg_response_time'].rolling(
-                window=20, min_periods=1
-            ).quantile(0.95)
-        
-        # 3. Current Replica Count (state variable)
-        if 'kube_deployment_status_replicas' in feature_df.columns:
-            feature_df['current_replicas'] = feature_df['kube_deployment_status_replicas']
-            
-            # Replica utilization efficiency
-            if 'request_rate' in feature_df.columns:
-                feature_df['requests_per_replica'] = (
-                    feature_df['request_rate'] / (feature_df['current_replicas'] + 1e-6)
-                )
-        
-        # 4. Resource Utilization Rate
-        if 'alloy_resources_process_cpu_seconds_total' in feature_df.columns:
-            feature_df['cpu_utilization_rate'] = feature_df['alloy_resources_process_cpu_seconds_total'].diff() / 60
-            feature_df['cpu_utilization_rate'] = feature_df['cpu_utilization_rate'].fillna(0).clip(lower=0)
-        
-        # 5. Memory Pressure (use consumer pod memory, matching DQN adapter)
-        if 'process_resident_memory_bytes' in feature_df.columns:
-            feature_df['memory_usage_mb'] = feature_df['process_resident_memory_bytes'] / (1024 * 1024)
-            
-            # Memory growth rate
-            feature_df['memory_growth_rate'] = feature_df['memory_usage_mb'].pct_change()
-            feature_df['memory_growth_rate'] = feature_df['memory_growth_rate'].fillna(0)
-        elif 'alloy_resources_process_resident_memory_bytes' in feature_df.columns:
-            # Fallback to alloy memory if consumer memory not available
-            feature_df['memory_usage_mb'] = feature_df['alloy_resources_process_resident_memory_bytes'] / (1024 * 1024)
-            feature_df['memory_growth_rate'] = feature_df['memory_usage_mb'].pct_change()
-            feature_df['memory_growth_rate'] = feature_df['memory_growth_rate'].fillna(0)
-        
-        # 6. System Health Score
-        if all(col in feature_df.columns for col in ['kube_deployment_status_replicas_available', 'kube_deployment_status_replicas']):
-            feature_df['health_ratio'] = (
-                feature_df['kube_deployment_status_replicas_available'] / 
-                (feature_df['kube_deployment_status_replicas'] + 1e-6)
-            )
-        
-        # 7. Concurrency Level
-        if 'go_goroutines' in feature_df.columns:
-            feature_df['concurrency_level'] = feature_df['go_goroutines']
-            
-            # Concurrency per replica
-            if 'current_replicas' in feature_df.columns:
-                feature_df['concurrency_per_replica'] = (
-                    feature_df['concurrency_level'] / (feature_df['current_replicas'] + 1e-6)
-                )
-        
-        # 8. System Stability Indicators
-        feature_df['system_stability'] = feature_df['up'].rolling(window=10, min_periods=1).mean()
-        
-        self.logger.info(f"  ✅ Engineered domain features: {feature_df.shape[1]} total columns")
-        return feature_df
-    
-    def apply_statistical_transformations(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Apply advanced statistical transformations for better feature quality."""
-        self.logger.info("📈 Applying statistical transformations...")
-        
-        feature_df = df.copy()
-        numeric_cols = feature_df.select_dtypes(include=[np.number]).columns
-        
-        # Remove timestamp and other non-feature columns
-        feature_cols = [col for col in numeric_cols if col not in ['hour', 'day_of_week']]
-        
-        for col in feature_cols:
-            if feature_df[col].std() > 0:  # Only transform non-constant features
+            # Major type-based scoring
+            type_bonus = 0.0
+            if analysis['type'] == 'gauge':
+                type_bonus = 50.0  # Strong preference for current state
+            elif analysis['type'] == 'counter':
+                type_bonus = -40.0  # Strong penalty for raw counters
+            elif analysis['type'] == 'info':
+                type_bonus = -60.0  # Heavy penalty for static info
                 
-                # 1. Log transformation for skewed distributions
-                if feature_df[col].min() > 0:  # Only for positive values
-                    skewness = stats.skew(feature_df[col].dropna())
-                    if abs(skewness) > 1:  # Highly skewed
-                        feature_df[f'{col}_log'] = np.log1p(feature_df[col])
-                
-                # 2. Moving averages for trend capture (appropriate for per-minute data)
-                for window in [10, 15]:  # 10-min and 15-min windows for meaningful trends
-                    feature_df[f'{col}_ma_{window}'] = feature_df[col].rolling(
-                        window=window, min_periods=1
-                    ).mean()
-                    
-                    # Deviation from moving average
-                    feature_df[f'{col}_dev_{window}'] = (
-                        feature_df[col] - feature_df[f'{col}_ma_{window}']
-                    )
-                
-                # 3. Volatility measures (15-minute window for per-minute data)
-                feature_df[f'{col}_volatility'] = feature_df[col].rolling(
-                    window=15, min_periods=1
-                ).std()
+            # Performance vs monitoring overhead
+            performance_bonus = 40.0 if analysis['is_consumer_performance'] else -30.0
+            
+            # Special bonus for rate metrics (derived from counters)
+            rate_bonus = 25.0 if 'rate' in column else 0.0
+            
+            # Final intelligent score
+            final_score = base_score + variability_score + type_bonus + performance_bonus + rate_bonus
+            feature_scores[column] = max(final_score, 0.0)
+            
+            # Log analysis for top candidates
+            if final_score > 80:
+                logger.info(f"  🎯 HIGH SCORE: {column:<45} (score: {final_score:.1f}, type: {analysis['type']}, category: {analysis['category']}, consumer: {analysis['is_consumer_performance']})")
         
-        self.logger.info(f"  ✅ Applied statistical transformations")
-        return feature_df
+        # Sort by score
+        ranked = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        logger.info("🏆 Top 15 intelligently ranked features:")
+        for i, (feature, score) in enumerate(ranked[:15], 1):
+            analysis = self.metric_analysis.get(feature, {})
+            logger.info(f"  {i:2d}. {feature:<45} (score: {score:.1f}, type: {analysis.get('type', 'unknown')}, category: {analysis.get('category', 'unknown')})")
+        
+        return [feature for feature, score in ranked]
     
-    def create_scaling_target(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Create sophisticated scaling target based on performance thresholds."""
-        self.logger.info("🎯 Creating advanced scaling target variable...")
+    def generate_scaling_actions(self, df: pd.DataFrame) -> pd.Series:
+        """Generate realistic scaling actions based on intelligent analysis."""
+        actions = []
         
-        feature_df = df.copy()
+        # Find key metrics for scaling decisions
+        cpu_metrics = [col for col in df.columns if self.metric_analysis.get(col, {}).get('category') == 'cpu']
+        memory_metrics = [col for col in df.columns if self.metric_analysis.get(col, {}).get('category') == 'memory']
+        network_metrics = [col for col in df.columns if self.metric_analysis.get(col, {}).get('category') == 'network']
         
-        # Initialize scaling action (0: scale down, 1: keep same, 2: scale up)
-        feature_df['scaling_action'] = 1  # Default: keep same
-        
-        # Define performance thresholds based on research literature
-        LATENCY_THRESHOLD_HIGH = 200  # ms - scale up threshold
-        LATENCY_THRESHOLD_LOW = 50    # ms - scale down threshold
-        LOAD_THRESHOLD_HIGH = 10      # requests/replica - scale up
-        LOAD_THRESHOLD_LOW = 2        # requests/replica - scale down
-        HEALTH_THRESHOLD = 0.95       # 95% health ratio minimum
-        
-        # Scale up conditions (any condition triggers scale up)
-        scale_up_mask = pd.Series(False, index=feature_df.index)
-        
-        if 'avg_response_time' in feature_df.columns:
-            scale_up_mask |= (feature_df['avg_response_time'] > LATENCY_THRESHOLD_HIGH)
-        
-        if 'requests_per_replica' in feature_df.columns:
-            scale_up_mask |= (feature_df['requests_per_replica'] > LOAD_THRESHOLD_HIGH)
-        
-        if 'health_ratio' in feature_df.columns:
-            scale_up_mask |= (feature_df['health_ratio'] < HEALTH_THRESHOLD)
-        
-        # Scale down conditions (all conditions must be met)
-        scale_down_mask = pd.Series(True, index=feature_df.index)
-        
-        if 'avg_response_time' in feature_df.columns:
-            scale_down_mask &= (feature_df['avg_response_time'] < LATENCY_THRESHOLD_LOW)
-        
-        if 'requests_per_replica' in feature_df.columns:
-            scale_down_mask &= (feature_df['requests_per_replica'] < LOAD_THRESHOLD_LOW)
-        
-        if 'health_ratio' in feature_df.columns:
-            scale_down_mask &= (feature_df['health_ratio'] >= HEALTH_THRESHOLD)
-        
-        # Apply scaling decisions
-        feature_df.loc[scale_up_mask, 'scaling_action'] = 2
-        feature_df.loc[scale_down_mask, 'scaling_action'] = 0
-        
-        action_counts = feature_df['scaling_action'].value_counts().sort_index()
-        self.logger.info(f"  ✅ Scaling actions: Scale Down={action_counts.get(0, 0)}, "
-                        f"Keep Same={action_counts.get(1, 0)}, Scale Up={action_counts.get(2, 0)}")
-        
-        return feature_df
-    
-    def select_optimal_features(self, df: pd.DataFrame) -> Tuple[List[str], Dict]:
-        """Select the optimal features using advanced methods with correlation filtering."""
-        self.logger.info(f"🧠 Selecting optimal {self.target_features} features using advanced methods...")
-        
-        # Prepare feature matrix
-        exclude_cols = ['scaling_action', 'timestamp'] if 'timestamp' in df.columns else ['scaling_action']
-        feature_cols = [col for col in df.columns if col not in exclude_cols]
-        
-        X = df[feature_cols].copy()
-        y = df['scaling_action']
-        
-        # Handle infinite and missing values
-        X = X.replace([np.inf, -np.inf], np.nan)
-        X = X.fillna(0)
-        
-        # Remove constant features
-        constant_features = [col for col in feature_cols if X[col].std() == 0]
-        if constant_features:
-            self.logger.info(f"  Removing {len(constant_features)} constant features")
-            feature_cols = [col for col in feature_cols if col not in constant_features]
-            X = X[feature_cols]
-        
-        # Additional safety check for extreme values
-        for col in feature_cols:
-            # Cap extreme values at 99.9th percentile
-            upper_bound = X[col].quantile(0.999)
-            lower_bound = X[col].quantile(0.001)
-            X[col] = X[col].clip(lower=lower_bound, upper=upper_bound)
-        
-        # Final check for any remaining infinite or NaN values
-        X = X.replace([np.inf, -np.inf], 0).fillna(0)
-        
-        # Remove highly correlated features (NEW STEP)
-        self.logger.info("  🔍 Removing highly correlated features...")
-        correlation_matrix = X.corr().abs()
-        
-        # Find pairs of highly correlated features (>0.85)
-        high_corr_pairs = []
-        for i in range(len(correlation_matrix.columns)):
-            for j in range(i+1, len(correlation_matrix.columns)):
-                if correlation_matrix.iloc[i, j] > 0.85:
-                    high_corr_pairs.append((
-                        correlation_matrix.columns[i],
-                        correlation_matrix.columns[j],
-                        correlation_matrix.iloc[i, j]
-                    ))
-        
-        # Remove redundant features (keep the first one in each pair)
-        features_to_remove = set()
-        for feat1, feat2, corr in high_corr_pairs:
-            # Prioritize keeping base metrics over derived ones
-            if '_dev_' in feat2 and '_dev_' not in feat1:
-                features_to_remove.add(feat2)
-            elif '_dev_' in feat1 and '_dev_' not in feat2:
-                features_to_remove.add(feat1)
-            elif 'memory_usage_mb' in feat1 and 'process_resident_memory_bytes' in feat2:
-                # Keep memory_usage_mb (already in MB) over bytes version
-                features_to_remove.add(feat2)
-            elif 'memory_usage_mb' in feat2 and 'process_resident_memory_bytes' in feat1:
-                features_to_remove.add(feat1)
+        for i, row in df.iterrows():
+            pressure_score = 0.0
+            
+            # CPU pressure
+            for metric in cpu_metrics:
+                if metric in row:
+                    val = row[metric]
+                    if 'rate' in metric:  # Rate metrics
+                        pressure_score += min(val / 0.1, 1.0) * 0.4  # CPU rate pressure
+                    else:  # Gauge metrics
+                        pressure_score += min(val / 1.0, 1.0) * 0.3  # CPU gauge pressure
+            
+            # Memory pressure  
+            for metric in memory_metrics:
+                if metric in row:
+                    val = row[metric]
+                    if 'resident_memory' in metric:
+                        pressure_score += min(val / 100_000_000, 1.0) * 0.3  # 100MB baseline
+                    elif 'virtual_memory' in metric:
+                        pressure_score += min(val / 200_000_000, 1.0) * 0.2  # 200MB baseline
+            
+            # Network pressure
+            for metric in network_metrics:
+                if metric in row and 'rate' in metric:
+                    val = row[metric]
+                    pressure_score += min(val / 10.0, 1.0) * 0.1  # Request rate pressure
+            
+            # Scaling decisions
+            if pressure_score > 0.7:
+                actions.append('scale_up')
+            elif pressure_score < 0.3:
+                actions.append('scale_down')
             else:
-                # Default: remove the second feature
-                features_to_remove.add(feat2)
+                actions.append('keep_same')
         
-        if features_to_remove:
-            self.logger.info(f"    Removing {len(features_to_remove)} highly correlated features:")
-            for feat in features_to_remove:
-                self.logger.info(f"      - {feat}")
-            feature_cols = [col for col in feature_cols if col not in features_to_remove]
-            X = X[feature_cols]
-        
-        # GAUGE METRIC PREFERENCE: Add scoring bias for real-time metrics
-        self.logger.info("  🎯 Applying gauge metric preference for real-time scaling...")
-        
-        # Define patterns for real-time vs historical metrics
-        real_time_patterns = [
-            'bytes',           # Current memory/size state
-            'goroutines',      # Current concurrency
-            'ready',           # Current readiness
-            'available',       # Current availability  
-            'status',          # Current status
-            'ratio',           # Current ratios
-            'up',              # Current service state
-            'kube_pod_',       # Kubernetes current state
-            'kube_deployment_', # Deployment current state
-            'scrape_samples',  # Current monitoring health
-        ]
-        
-        # Score features based on real-time relevance
-        real_time_scores = {}
-        for feature in feature_cols:
-            feature_lower = feature.lower()
-            
-            # Base score
-            real_time_score = 1.0
-            
-            # STRONG PREFERENCE FOR DIRECT METRICS (not derived features)
-            is_derived = any(suffix in feature_lower for suffix in [
-                '_ma_',      # Moving averages (smooth out immediate signals)
-                '_dev_',     # Deviations from moving averages  
-                '_volatility', # Volatility measures
-                '_log',      # Log transformations
-                '_sin',      # Cyclical transformations
-                '_cos',      # Cyclical transformations
-            ])
-            
-            if is_derived:
-                real_time_score -= 2.0  # Strong penalty for derived features
-                self.logger.debug(f"    ⚠️ Derived feature penalty: {feature}")
-            else:
-                real_time_score += 3.0  # Strong bonus for direct metrics
-                self.logger.debug(f"    🎯 Direct metric bonus: {feature}")
-            
-            # Boost score for real-time indicators
-            if any(pattern in feature_lower for pattern in real_time_patterns):
-                real_time_score += 2.0  # Strong preference for current state metrics
-                self.logger.debug(f"    ✅ Real-time metric bonus: {feature}")
-            
-            # Penalize remaining cumulative-like patterns that slipped through
-            cumulative_indicators = ['_total', '_sum', '_count', '_bucket', 'duration_seconds']
-            if any(indicator in feature_lower for indicator in cumulative_indicators):
-                real_time_score -= 1.0  # Penalize cumulative metrics
-                self.logger.debug(f"    ⚠️ Cumulative metric penalty: {feature}")
-            
-            # Bonus for core autoscaling metrics
-            core_scaling_patterns = [
-                'memory',          # Memory usage (core scaling signal)
-                'cpu',             # CPU usage (core scaling signal)
-                'replicas',        # Replica count (state variable)
-                'ready',           # Pod readiness (health signal)
-                'response',        # Response metrics (performance signal)
-            ]
-            if any(pattern in feature_lower for pattern in core_scaling_patterns):
-                real_time_score += 1.0
-                self.logger.debug(f"    🎯 Core scaling metric bonus: {feature}")
-            
-            real_time_scores[feature] = real_time_score
-        
-        # Method 1: Mutual Information
-        self.logger.info("  🔍 Method 1: Mutual Information Analysis")
-        mi_scores = mutual_info_regression(X, y, random_state=42)
-        mi_ranking = sorted(zip(feature_cols, mi_scores), key=lambda x: x[1], reverse=True)
-        
-        # Method 2: Random Forest Feature Importance
-        self.logger.info("  🌲 Method 2: Random Forest Feature Importance")
-        rf = RandomForestRegressor(n_estimators=100, random_state=42)
-        rf.fit(X, y)
-        rf_ranking = sorted(zip(feature_cols, rf.feature_importances_), key=lambda x: x[1], reverse=True)
-        
-        # Method 3: Correlation with target
-        self.logger.info("  📊 Method 3: Correlation Analysis")
-        correlations = []
-        for col in feature_cols:
-            corr, p_value = pearsonr(X[col], y)
-            correlations.append((col, abs(corr), p_value))
-        corr_ranking = sorted(correlations, key=lambda x: x[1], reverse=True)
-        
-        # Method 4: Recursive Feature Elimination with Cross-Validation (Proper Method)
-        self.logger.info("  🎯 Method 4: Recursive Feature Elimination with Cross-Validation")
-        from sklearn.feature_selection import RFECV
-        from sklearn.model_selection import StratifiedKFold
-        
-        # Use RFECV for optimal feature selection with cross-validation
-        cv_splitter = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        rfe_cv = RFECV(
-            estimator=RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-            step=1,  # Remove one feature at a time for precision
-            cv=cv_splitter,
-            scoring='neg_mean_squared_error',
-            min_features_to_select=max(3, self.target_features//2),  # Don't go below minimum
-            n_jobs=-1
-        )
-        rfe_cv.fit(X, y)
-        rfe_selected = [feature_cols[i] for i, selected in enumerate(rfe_cv.support_) if selected]
-        
-        self.logger.info(f"    RFECV selected {len(rfe_selected)} optimal features")
-        self.logger.info(f"    Optimal number of features: {rfe_cv.n_features_}")
-        
-        # Method 5: Statistical Significance Testing
-        self.logger.info("  📊 Method 5: Statistical Significance Testing")
-        from scipy.stats import f_oneway
-        
-        stat_significant_features = []
-        significance_scores = []
-        
-        for feature in feature_cols:
-            # Group by scaling action and test if feature values differ significantly
-            groups = [X[y == action][feature].values for action in [0, 1, 2] if (y == action).sum() > 0]
-            
-            if len(groups) >= 2 and all(len(group) > 0 for group in groups):
-                try:
-                    f_stat, p_value = f_oneway(*groups)
-                    if p_value < self.significance_threshold:  # p < 0.05
-                        stat_significant_features.append(feature)
-                        significance_scores.append((feature, f_stat, p_value))
-                except:
-                    continue
-        
-        # Sort by F-statistic (higher = more discriminative)
-        significance_scores.sort(key=lambda x: x[1], reverse=True)
-        self.logger.info(f"    Found {len(stat_significant_features)} statistically significant features")
-        
-        # Method 6: Variance Inflation Factor (VIF) for Multicollinearity
-        self.logger.info("  🔍 Method 6: Variance Inflation Factor Analysis")
-        
-        def calculate_vif(X_df):
-            """Calculate VIF for each feature to detect multicollinearity."""
-            from statsmodels.stats.outliers_influence import variance_inflation_factor
-            vif_data = []
-            
-            for i in range(X_df.shape[1]):
-                try:
-                    vif = variance_inflation_factor(X_df.values, i)
-                    if not np.isnan(vif) and not np.isinf(vif):
-                        vif_data.append((X_df.columns[i], vif))
-                except:
-                    continue
-            
-            return vif_data
-        
-        try:
-            # Calculate VIF for correlation-filtered features
-            vif_results = calculate_vif(X)
-            vif_results.sort(key=lambda x: x[1])  # Sort by VIF (lower is better)
-            
-            # Keep features with VIF < 10 (rule of thumb for low multicollinearity)
-            low_vif_features = [feat for feat, vif in vif_results if vif < 10]
-            self.logger.info(f"    {len(low_vif_features)} features with low multicollinearity (VIF < 10)")
-            
-            # Log high VIF features
-            high_vif = [(feat, vif) for feat, vif in vif_results if vif >= 10]
-            if high_vif:
-                self.logger.warning(f"    High VIF features (>10): {high_vif[:5]}")
-                
-        except Exception as e:
-            self.logger.warning(f"    VIF calculation failed: {e}")
-            low_vif_features = feature_cols  # Fallback to all features
-        
-        # Advanced Ensemble Scoring with Multiple Methods + Real-time Bias
-        feature_scores = {}
-        total_weight = 0
-        
-        # Score from mutual information (weight: 0.20) - reduced to make room for real-time bias
-        mi_weight = 0.20
-        for i, (feature, score) in enumerate(mi_ranking):
-            feature_scores[feature] = feature_scores.get(feature, 0) + (len(feature_cols) - i) * mi_weight
-        total_weight += mi_weight
-        
-        # Score from random forest (weight: 0.20) - reduced to make room for real-time bias
-        rf_weight = 0.20
-        for i, (feature, score) in enumerate(rf_ranking):
-            feature_scores[feature] = feature_scores.get(feature, 0) + (len(feature_cols) - i) * rf_weight
-        total_weight += rf_weight
-        
-        # Score from correlation (weight: 0.15)
-        corr_weight = 0.15
-        for i, (feature, corr, p_val) in enumerate(corr_ranking):
-            if p_val < self.significance_threshold:  # Only significant correlations
-                feature_scores[feature] = feature_scores.get(feature, 0) + (len(feature_cols) - i) * corr_weight
-        total_weight += corr_weight
-        
-        # Score from RFECV (weight: 0.15) - reduced to make room for real-time bias
-        rfecv_weight = 0.15
-        for feature in rfe_selected:
-            feature_scores[feature] = feature_scores.get(feature, 0) + len(feature_cols) * rfecv_weight
-        total_weight += rfecv_weight
-        
-        # Score from statistical significance (weight: 0.10)
-        stat_weight = 0.10
-        for i, (feature, f_stat, p_val) in enumerate(significance_scores):
-            feature_scores[feature] = feature_scores.get(feature, 0) + (len(significance_scores) - i) * stat_weight
-        total_weight += stat_weight
-        
-        # Score from low multicollinearity (weight: 0.05)
-        vif_weight = 0.05
-        for feature in low_vif_features:
-            if feature in feature_scores:
-                feature_scores[feature] = feature_scores.get(feature, 0) + len(feature_cols) * vif_weight
-        total_weight += vif_weight
-        
-        # NEW: Real-time metric bias (weight: 0.15) - prioritize gauge/current state metrics
-        realtime_weight = 0.15
-        for feature in feature_cols:
-            if feature in feature_scores:
-                realtime_score = real_time_scores.get(feature, 1.0)
-                feature_scores[feature] = feature_scores.get(feature, 0) + realtime_score * len(feature_cols) * realtime_weight
-        total_weight += realtime_weight
-        
-        # Select top features
-        final_ranking = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
-        selected_features = [feature for feature, score in final_ranking[:self.target_features]]
-        
-        # Create comprehensive analysis report
-        analysis_report = {
-            'selection_methods': {
-                'mutual_information': dict(mi_ranking[:10]),
-                'random_forest': dict(rf_ranking[:10]),
-                'correlation': {feat: (corr, p_val) for feat, corr, p_val in corr_ranking[:10]},
-                'rfecv_selected': rfe_selected,
-                'statistical_significance': {feat: (f_stat, p_val) for feat, f_stat, p_val in significance_scores[:10]},
-                'low_vif_features': low_vif_features[:20] if len(low_vif_features) > 20 else low_vif_features,
-                'real_time_scores': real_time_scores
-            },
-            'advanced_metrics': {
-                'rfecv_optimal_features': len(rfe_selected),
-                'statistically_significant_count': len(stat_significant_features),
-                'low_multicollinearity_count': len(low_vif_features),
-                'real_time_preferred_count': len([f for f in feature_cols if real_time_scores.get(f, 1.0) > 1.5]),
-                'ensemble_weights': {
-                    'mutual_information': mi_weight,
-                    'random_forest': rf_weight,
-                    'correlation': corr_weight,
-                    'rfecv': rfecv_weight,
-                    'statistical_significance': stat_weight,
-                    'vif_bonus': vif_weight,
-                    'real_time_bias': realtime_weight  # NEW
-                }
-            },
-            'final_scores': dict(final_ranking[:self.target_features]),
-            'selected_features': selected_features
-        }
-        
-        # Log comprehensive results
-        real_time_selected = len([f for f in selected_features if real_time_scores.get(f, 1.0) > 1.5])
-        direct_selected = len([f for f in selected_features if not any(suffix in f.lower() for suffix in ['_ma_', '_dev_', '_volatility', '_log', '_sin', '_cos'])])
-        derived_selected = len(selected_features) - direct_selected
-        
-        self.logger.info(f"  ✅ Selected {len(selected_features)} optimal features using advanced methods")
-        self.logger.info(f"  📊 Method contributions:")
-        self.logger.info(f"    - RFECV selected: {len(rfe_selected)} features")
-        self.logger.info(f"    - Statistically significant: {len(stat_significant_features)} features")
-        self.logger.info(f"    - Low multicollinearity: {len(low_vif_features)} features")
-        self.logger.info(f"    - Real-time preferred: {real_time_selected}/{len(selected_features)} features ⭐")
-        self.logger.info(f"    - Direct metrics: {direct_selected}/{len(selected_features)} features 🎯")
-        self.logger.info(f"    - Derived features: {derived_selected}/{len(selected_features)} features ⚠️")
-        self.logger.info(f"  🎯 Final selected features:")
-        
-        for i, feature in enumerate(selected_features, 1):
-            score = final_ranking[i-1][1]
-            rt_score = real_time_scores.get(feature, 1.0)
-            rt_indicator = " ⭐" if rt_score > 1.5 else ""
-            
-            # Determine if direct or derived
-            is_derived = any(suffix in feature.lower() for suffix in ['_ma_', '_dev_', '_volatility', '_log', '_sin', '_cos'])
-            direct_indicator = " 🎯" if not is_derived else " ⚠️"
-            
-            self.logger.info(f"    {i:2d}. {feature:<40} (score: {score:.2f}){rt_indicator}{direct_indicator}")
-        
-        return selected_features, analysis_report
+        return pd.Series(actions, index=df.index)
     
-    def create_final_dataset(self, df: pd.DataFrame, selected_features: List[str]) -> pd.DataFrame:
-        """Create the final dataset with selected features and comprehensive validation."""
-        self.logger.info("🎯 Creating final dataset...")
-        
-        # Create final feature set
-        final_cols = selected_features + ['scaling_action']
-        if 'timestamp' in df.columns:
-            final_cols = ['timestamp'] + final_cols
-        
-        final_df = df[final_cols].copy()
-        
-        # Comprehensive data cleaning
-        self.logger.info("  🧹 Performing comprehensive data cleaning...")
-        
-        # Handle infinite values first
-        for feature in selected_features:
-            # Replace infinite values with NaN
-            final_df[feature] = final_df[feature].replace([np.inf, -np.inf], np.nan)
-            
-            # Fill NaN with median (robust to outliers)
-            if final_df[feature].isnull().sum() > 0:
-                median_val = final_df[feature].median()
-                if pd.isna(median_val):  # If all values are NaN, use 0
-                    median_val = 0
-                final_df[feature] = final_df[feature].fillna(median_val)
-                self.logger.debug(f"    Filled {feature} NaN values with {median_val}")
-            
-            # Cap extreme outliers (beyond 99.9th percentile)
-            if final_df[feature].std() > 0:
-                lower_bound = final_df[feature].quantile(0.001)
-                upper_bound = final_df[feature].quantile(0.999)
-                final_df[feature] = final_df[feature].clip(lower=lower_bound, upper=upper_bound)
-        
-        # Advanced data validation
-        self.logger.info("  🔍 Performing final validation...")
-        
-        # Check for multicollinearity
-        feature_corr_matrix = final_df[selected_features].corr()
-        high_corr_pairs = []
-        for i in range(len(feature_corr_matrix.columns)):
-            for j in range(i+1, len(feature_corr_matrix.columns)):
-                corr_val = abs(feature_corr_matrix.iloc[i, j])
-                if corr_val > 0.8:  # High correlation threshold
-                    high_corr_pairs.append((
-                        feature_corr_matrix.columns[i], 
-                        feature_corr_matrix.columns[j], 
-                        corr_val
-                    ))
-        
-        if high_corr_pairs:
-            self.logger.warning(f"  ⚠️ Found {len(high_corr_pairs)} highly correlated feature pairs:")
-            for feat1, feat2, corr in high_corr_pairs:
-                self.logger.warning(f"    {feat1} ↔ {feat2}: {corr:.3f}")
-        
-        # Final check for any remaining infinite or NaN values
-        for feature in selected_features:
-            inf_count = np.isinf(final_df[feature]).sum()
-            nan_count = final_df[feature].isnull().sum()
-            if inf_count > 0 or nan_count > 0:
-                self.logger.warning(f"  ⚠️ {feature}: {inf_count} infinite, {nan_count} NaN values remaining")
-                # Force clean any remaining issues
-                final_df[feature] = pd.to_numeric(final_df[feature], errors='coerce').fillna(0)
-        
-        # Remove any rows where scaling_action is invalid
-        initial_rows = len(final_df)
-        final_df = final_df[final_df['scaling_action'].isin([0, 1, 2])]
-        final_rows = len(final_df)
-        
-        if initial_rows != final_rows:
-            self.logger.info(f"  📊 Removed {initial_rows - final_rows} rows with invalid scaling actions")
-        
-        # If we have a very large dataset, we can optionally sample it down
-        # but let's keep as much data as possible for better DQN training
-        max_samples = 50000  # Increased from implicit ~1000 limit
-        if len(final_df) > max_samples:
-            self.logger.info(f"  📊 Large dataset detected: {len(final_df):,} samples")
-            self.logger.info(f"  📊 Sampling to {max_samples:,} for computational efficiency")
-            # Stratified sampling to maintain class distribution
-            from sklearn.model_selection import train_test_split
-            final_df, _ = train_test_split(
-                final_df, 
-                train_size=max_samples, 
-                stratify=final_df['scaling_action'], 
-                random_state=42
-            )
-            self.logger.info(f"  ✅ Sampled dataset maintains class distribution")
-        
-        self.logger.info(f"  ✅ Final dataset: {final_df.shape}")
-        self.logger.info(f"  📊 Action distribution: {dict(final_df['scaling_action'].value_counts().sort_index())}")
-        
-        return final_df
-    
-    def create_feature_scaler(self, df: pd.DataFrame, selected_features: List[str]) -> Tuple[any, Dict]:
-        """Create an advanced feature scaler with detailed statistics."""
-        self.logger.info("⚖️ Creating feature scaler...")
-        
-        # Use RobustScaler for better handling of outliers
-        scaler = RobustScaler()
-        
-        # Fit scaler on selected features
-        X = df[selected_features].values
-        scaler.fit(X)
-        
-        # Generate scaler statistics
-        scaler_stats = {
-            'scaler_type': 'RobustScaler',
-            'features': selected_features,
-            'n_features': len(selected_features),
-            'n_samples': len(df),
-            'feature_statistics': {}
-        }
-        
-        for i, feature in enumerate(selected_features):
-            scaler_stats['feature_statistics'][feature] = {
-                'median': float(scaler.center_[i]),
-                'scale': float(scaler.scale_[i]),
-                'original_mean': float(df[feature].mean()),
-                'original_std': float(df[feature].std()),
-                'original_min': float(df[feature].min()),
-                'original_max': float(df[feature].max())
-            }
-        
-        self.logger.info(f"  ✅ Created RobustScaler for {len(selected_features)} features")
-        return scaler, scaler_stats
-    
-    def save_results(self, df: pd.DataFrame, scaler: any, 
-                    selected_features: List[str], analysis_report: Dict, 
-                    scaler_stats: Dict, output_dir: Path) -> None:
-        """Save results with comprehensive documentation."""
+    def run(self, output_dir: Path):
+        """Execute intelligent feature selection pipeline."""
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True)
         
-        # Save dataset
-        dataset_path = output_dir / "dqn_features.parquet"
-        df.to_parquet(dataset_path, index=False)
-        self.logger.info(f"  💾 Saved dataset: {dataset_path}")
+        logger.info("🚀 Starting intelligent consumer pod feature selection...")
         
-        # Save scaler
-        scaler_path = output_dir / "feature_scaler.gz"
-        joblib.dump(scaler, scaler_path)
-        self.logger.info(f"  💾 Saved scaler: {scaler_path}")
+        # Load and analyze data
+        feature_df = self.load_and_analyze_data()
         
-        # Save comprehensive metadata
+        # Rank features intelligently
+        ranked_features = self.rank_features_intelligently(feature_df)
+        
+        # Ensure category diversity
+        selected_features = self.ensure_category_diversity(ranked_features)
+        
+        # Generate scaling actions
+        scaling_actions = self.generate_scaling_actions(feature_df)
+        
+        # Create final dataset
+        final_df = feature_df[selected_features].copy()
+        final_df['scaling_action'] = scaling_actions
+        
+        # Scale features
+        scaler = RobustScaler()
+        final_df[selected_features] = scaler.fit_transform(final_df[selected_features])
+        
+        # Save outputs
+        final_df.to_parquet(output_dir / 'dqn_features.parquet')
+        joblib.dump(scaler, output_dir / 'feature_scaler.gz')
+        
+        # Create comprehensive metadata
         metadata = {
-            'methodology': {
-                'approach': 'Advanced multi-method feature selection',
-                'target_features': self.target_features,
-                'selection_methods': ['mutual_information', 'random_forest', 'correlation', 'rfe'],
-                'statistical_validation': True,
-                'scaler_type': 'RobustScaler'
-            },
-            'dataset_info': {
-                'n_samples': len(df),
-                'n_features': len(selected_features),
-                'time_range': [str(df['timestamp'].min()), str(df['timestamp'].max())] if 'timestamp' in df.columns else None,
-                'action_distribution': df['scaling_action'].value_counts().to_dict()
-            },
+            'timestamp': datetime.now().isoformat(),
+            'methodology': 'Intelligent data-driven feature selection',
+            'discovered_metrics': len(self.consumer_metrics),
+            'analyzed_metrics': len(self.metric_analysis),
             'selected_features': selected_features,
-            'feature_analysis': analysis_report,
-            'scaler_statistics': scaler_stats,
-            'quality_metrics': {
-                'missing_data_percentage': (df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100,
-                'feature_stability': {feat: float(df[feat].std() / (abs(df[feat].mean()) + 1e-6)) 
-                                   for feat in selected_features}
-            },
-            'created_at': datetime.now().isoformat(),
-            'research_grade': True
+            'metric_analysis': self.metric_analysis,
+            'dataset_shape': list(final_df.shape),
+            'scaling_action_distribution': scaling_actions.value_counts().to_dict()
         }
         
-        # Save metadata
-        import json
-        metadata_path = output_dir / "metadata.json"
-        with open(metadata_path, 'w') as f:
-            json.dump(metadata, f, indent=2, default=str)
-        self.logger.info(f"  💾 Saved metadata: {metadata_path}")
+        with open(output_dir / 'metadata.json', 'w') as f:
+            json.dump(metadata, f, indent=2)
         
-        # Create research summary
-        self._create_research_summary(metadata, output_dir)
-        
-        self.logger.info("\n" + "="*70)
-        self.logger.info("🎓 ADVANCED DQN FEATURE ENGINEERING COMPLETE")
-        self.logger.info("="*70)
-        self.logger.info(f"📊 Features: {len(selected_features)} (target: {self.target_features})")
-        self.logger.info(f"📈 Samples: {len(df):,}")
-        self.logger.info(f"🎯 Action distribution: {dict(df['scaling_action'].value_counts().sort_index())}")
-        self.logger.info(f"📁 Output: {output_dir}")
-        self.logger.info("="*70)
-    
-    def _create_research_summary(self, metadata: Dict, output_dir: Path) -> None:
-        """Create a research-grade summary document."""
-        summary_md = f"""# Advanced DQN Feature Engineering - Research Summary
+        # Create summary
+        summary = f"""# Intelligent Consumer Pod Feature Selection Results
 
-## Methodology Overview
-This analysis employed advanced statistical and machine learning techniques to identify the {self.target_features} most critical features for DQN-based Kubernetes pod autoscaling.
+## Methodology
+- **Auto-discovered**: {len(self.consumer_metrics)} consumer pod metrics
+- **Auto-analyzed**: {len(self.metric_analysis)} metric characteristics  
+- **Auto-calculated**: Rate metrics from counters
+- **Auto-ensured**: Category diversity
 
-## Advanced Feature Selection Methods Applied
+## Dataset Summary
+- **Samples**: {len(final_df)}
+- **Features**: {len(selected_features)}
+- **Scaling Actions**: {scaling_actions.value_counts().to_dict()}
 
-### 1. Mutual Information Analysis (Weight: 25%)
-- **Purpose**: Captures non-linear relationships between features and target
-- **Method**: Information-theoretic measure of dependency
-- **Top Features**: {list(metadata['feature_analysis']['selection_methods']['mutual_information'].keys())[:5]}
-
-### 2. Random Forest Feature Importance (Weight: 25%)
-- **Purpose**: Ensemble-based importance scoring with Gini impurity
-- **Model**: 100 trees with random_state=42
-- **Top Features**: {list(metadata['feature_analysis']['selection_methods']['random_forest'].keys())[:5]}
-
-### 3. Correlation Analysis (Weight: 15%)
-- **Purpose**: Linear relationship strength with target variable
-- **Significance Level**: p < 0.05
-- **Method**: Pearson correlation coefficient with p-value testing
-
-### 4. Recursive Feature Elimination with Cross-Validation (Weight: 20%)
-- **Purpose**: Optimal feature subset selection with cross-validation
-- **Method**: RFECV with 5-fold stratified cross-validation
-- **Base Estimator**: Random Forest (100 trees)
-- **Selected Features**: {metadata['feature_analysis']['advanced_metrics']['rfecv_optimal_features']} features
-
-### 5. Statistical Significance Testing (Weight: 10%)
-- **Purpose**: ANOVA F-test for feature discrimination between scaling actions
-- **Method**: One-way ANOVA with F-statistic ranking
-- **Significant Features**: {metadata['feature_analysis']['advanced_metrics']['statistically_significant_count']} features (p < 0.05)
-
-### 6. Variance Inflation Factor Analysis (Weight: 5%)
-- **Purpose**: Multicollinearity detection and removal
-- **Threshold**: VIF < 10 (low multicollinearity)
-- **Low VIF Features**: {metadata['feature_analysis']['advanced_metrics']['low_multicollinearity_count']} features
-
-## Final Selected Features
-
-The following {len(metadata['selected_features'])} features were selected through ensemble ranking:
-
-"""
-        for i, feature in enumerate(metadata['selected_features'], 1):
-            summary_md += f"{i:2d}. `{feature}`\n"
-        
-        summary_md += f"""
-
-## Dataset Statistics
-- **Total Samples**: {metadata['dataset_info']['n_samples']:,}
-- **Features**: {metadata['dataset_info']['n_features']}
-- **Time Range**: {metadata['dataset_info']['time_range'][0] if metadata['dataset_info']['time_range'] else 'N/A'} to {metadata['dataset_info']['time_range'][1] if metadata['dataset_info']['time_range'] else 'N/A'}
-- **Missing Data**: {metadata['quality_metrics']['missing_data_percentage']:.3f}%
-
-## Scaling Action Distribution
-- **Scale Down**: {metadata['dataset_info']['action_distribution'].get(0, 0)} ({metadata['dataset_info']['action_distribution'].get(0, 0)/metadata['dataset_info']['n_samples']*100:.1f}%)
-- **Keep Same**: {metadata['dataset_info']['action_distribution'].get(1, 0)} ({metadata['dataset_info']['action_distribution'].get(1, 0)/metadata['dataset_info']['n_samples']*100:.1f}%)
-- **Scale Up**: {metadata['dataset_info']['action_distribution'].get(2, 0)} ({metadata['dataset_info']['action_distribution'].get(2, 0)/metadata['dataset_info']['n_samples']*100:.1f}%)
-
-## Quality Assurance
-- ✅ **Statistical Significance**: All correlations tested at p < 0.05
-- ✅ **Multicollinearity Check**: Features tested for high correlation (>0.8)
-- ✅ **Outlier Handling**: RobustScaler used for outlier-resistant normalization
-- ✅ **Missing Data**: Advanced imputation and validation
-- ✅ **Feature Stability**: Coefficient of variation calculated for all features
-
-## Research Impact
-This advanced feature engineering approach provides:
-1. **Reduced Dimensionality**: From 100+ raw metrics to {len(metadata['selected_features'])} optimal features
-2. **Statistical Rigor**: Multiple validation methods ensure feature quality
-3. **Domain Knowledge**: Features aligned with autoscaling theory
-4. **Reproducibility**: Comprehensive documentation and metadata
-
----
-*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} using advanced statistical methods*
+## Selected Features (Top {len(selected_features)})
 """
         
-        with open(output_dir / "research_summary.md", 'w') as f:
-            f.write(summary_md)
-    
-    def run_pipeline(self, output_dir: str = "dqn_data") -> None:
-        """Execute the complete feature engineering pipeline."""
-        self.logger.info("🚀 Starting Advanced DQN Feature Engineering Pipeline")
-        self.logger.info("="*70)
+        for i, feature in enumerate(selected_features, 1):
+            analysis = self.metric_analysis.get(feature, {})
+            category = analysis.get('category', 'unknown')
+            metric_type = analysis.get('type', 'unknown')
+            relevance = analysis.get('scaling_relevance', 0)
+            summary += f"{i}. **`{feature}`** (category: {category}, type: {metric_type}, relevance: {relevance:.1f})\n"
         
-        try:
-            # Step 1: Load and prepare data
-            raw_df = self.load_and_prepare_data()
+        # Category breakdown
+        categories = {}
+        for feature in selected_features:
+            category = self.metric_analysis.get(feature, {}).get('category', 'unknown')
+            categories[category] = categories.get(category, 0) + 1
             
-            # Step 2: Create time-series features
-            ts_df = self.create_time_series_features(raw_df)
-            
-            # Step 3: Engineer domain-specific features
-            domain_df = self.engineer_domain_features(ts_df)
-            
-            # Step 4: Apply statistical transformations
-            transformed_df = self.apply_statistical_transformations(domain_df)
-            
-            # Step 5: Create scaling target
-            target_df = self.create_scaling_target(transformed_df)
-            
-            # Step 6: Select optimal features
-            selected_features, analysis_report = self.select_optimal_features(target_df)
-            
-            # Step 7: Create final dataset
-            final_df = self.create_final_dataset(target_df, selected_features)
-            
-            # Step 8: Create feature scaler
-            scaler, scaler_stats = self.create_feature_scaler(final_df, selected_features)
-            
-            # Step 9: Save results
-            self.save_results(
-                final_df, scaler, selected_features, 
-                analysis_report, scaler_stats, Path(output_dir)
-            )
-            
-            self.logger.info("✅ Pipeline completed successfully!")
-            
-        except Exception as e:
-            self.logger.error(f"❌ Pipeline failed: {e}")
-            raise
+        summary += f"""
+## Category Distribution
+"""
+        for category, count in categories.items():
+            summary += f"- **{category.upper()}**: {count} features\n"
+        
+        with open(output_dir / 'summary.md', 'w') as f:
+            f.write(summary)
+        
+        logger.info(f"✅ Intelligent feature selection complete! Output saved to {output_dir}")
+        logger.info(f"Selected features: {selected_features}")
 
-    def expand_multi_dimensional_metrics(self, validated_metrics: Dict[str, List[str]]) -> Dict[str, List[str]]:
-        """Expand multi-dimensional metrics into separate features using Prometheus API."""
-        self.logger.info("🔄 Expanding multi-dimensional metrics...")
-        
-        expanded_metrics = validated_metrics.copy()
-        
-        for category, metrics in validated_metrics.items():
-            for metric in metrics[:]:  # Copy to avoid modification during iteration
-                if metric in self.multi_dimensional_metrics:
-                    metric_config = self.multi_dimensional_metrics[metric]
-                    self.logger.info(f"  📊 Expanding {metric} into {len(metric_config['dimensions'])} dimensions")
-                    
-                    # Remove the original multi-dimensional metric
-                    expanded_metrics[category].remove(metric)
-                    
-                    # Add each dimension as a separate feature
-                    for dimension in metric_config['dimensions']:
-                        expanded_feature_name = f"{metric}{dimension['suffix']}"
-                        expanded_metrics[category].append(expanded_feature_name)
-                        
-                        self.logger.info(f"    ➕ {expanded_feature_name} ({dimension['unit']})")
-                        
-                        # Create synthetic CSV data for this dimension using Prometheus API
-                        self._create_dimension_csv(metric, dimension, expanded_feature_name)
-        
-        return expanded_metrics
-    
-    def _create_dimension_csv(self, base_metric: str, dimension: Dict, feature_name: str) -> bool:
-        """Create CSV data for a specific dimension of a multi-dimensional metric."""
-        try:
-            # Construct Prometheus query matching DQN adapter logic
-            if base_metric == 'kube_pod_container_resource_limits':
-                # Match the exact query pattern from main.py
-                if dimension['suffix'] == '_cpu':
-                    query = f'sum({base_metric}{{resource="cpu",namespace="nimbusguard",pod=~"consumer-.*"}}) or sum({base_metric}{{resource="cpu",namespace="nimbusguard"}}) or 0.5'
-                elif dimension['suffix'] == '_memory':
-                    query = f'sum({base_metric}{{resource="memory",namespace="nimbusguard",pod=~"consumer-.*"}}) or sum({base_metric}{{resource="memory",namespace="nimbusguard"}}) or 536870912'
-                else:
-                    query = f'sum({base_metric}{{{dimension["filter"]},namespace="nimbusguard"}})'
-            else:
-                # Generic pattern for future multi-dimensional metrics
-                query = f'{dimension["aggregation"]}({base_metric}{{{dimension["filter"]},namespace="nimbusguard"}})'
-            
-            self.logger.debug(f"      🔍 Query: {query}")
-            
-            # Check if we already have a CSV file for this dimension
-            csv_file = self.data_dir / f"{feature_name}.csv"
-            if csv_file.exists():
-                self.logger.debug(f"      ✅ CSV already exists: {feature_name}")
-                return True
-            
-            # For now, we'll use the original CSV but create a note about the dimension
-            # In a real implementation, you'd query Prometheus API for time series data
-            original_csv = self.data_dir / f"{base_metric}.csv"
-            if original_csv.exists():
-                # Load original data
-                df = pd.read_csv(original_csv)
-                
-                # For CPU/memory split, we need to simulate the separation
-                # In practice, this would be queried from Prometheus with the proper filter
-                if dimension['suffix'] == '_cpu':
-                    # CPU values are much smaller (cores), simulate realistic CPU limits
-                    df['value'] = df['value'] / 1000000  # Convert from bytes to reasonable CPU cores
-                    df['value'] = df['value'].clip(0.1, 4.0)  # Reasonable CPU limits range
-                elif dimension['suffix'] == '_memory':
-                    # Memory values stay as bytes but ensure they're realistic
-                    df['value'] = df['value'].clip(50000000, 2000000000)  # 50MB to 2GB range
-                
-                # Save the dimension-specific CSV
-                df.to_csv(csv_file, index=False)
-                self.logger.debug(f"      💾 Created dimension CSV: {feature_name}")
-                return True
-            else:
-                self.logger.warning(f"      ⚠️ Original CSV not found for: {base_metric}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"      ❌ Failed to create dimension CSV for {feature_name}: {e}")
-            return False
-
-def main():
-    """Main execution function."""
+if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Advanced DQN Feature Engineering with Consumer Pod Focus")
-    parser.add_argument("--data-dir", type=str, default="prometheus_data",
-                        help="Directory containing Prometheus CSV files")
-    parser.add_argument("--output-dir", type=str, default="dqn_data",
-                        help="Output directory for processed features")
-    parser.add_argument("--target-features", type=int, default=9,
-                        help="Number of features to select for DQN")
-    parser.add_argument("--prometheus-url", type=str, default="http://localhost:9090",
-                        help="Prometheus server URL for dynamic metric discovery")
+    parser = argparse.ArgumentParser(description="Intelligent Consumer Pod DQN Feature Selector")
+    parser.add_argument("--data-dir", required=True, help="Directory containing CSV files")
+    parser.add_argument("--output-dir", required=True, help="Output directory")
+    parser.add_argument("--target-features", type=int, default=9, help="Number of features to select")
     
     args = parser.parse_args()
     
-    # Initialize feature engineer
-    engineer = AdvancedDQNFeatureEngineer(
-        data_dir=Path(args.data_dir),
-        target_features=args.target_features,
-        prometheus_url=args.prometheus_url
+    selector = IntelligentConsumerFeatureSelector(
+        data_dir=args.data_dir,
+        target_features=args.target_features
     )
     
-    # Run the pipeline
-    engineer.run_pipeline(args.output_dir)
-
-if __name__ == "__main__":
-    main() 
+    selector.run(output_dir=args.output_dir) 

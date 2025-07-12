@@ -267,15 +267,15 @@ def memory_intensive_task(size_mb: int = 50, duration: int = 10, task_id: str = 
                     memory_stats["total_cleaned"] += 1
                     memory_stats["memory_freed_mb"] += old_obj.get("size_mb", 0)
                 
-                # Store the memory object
-                memory_store[memory_object['task_id']] = memory_object
-                memory_stats["total_processed"] += 1
-                memory_stats["current_objects"] = len(memory_store)
-            
-            # Keep the memory allocated for the specified duration
-            time.sleep(duration)
-            
-            span.set_attribute("cleanup_mode", "temporary_storage")
+                    # Store the memory object
+                    memory_store[memory_object['task_id']] = memory_object
+                    memory_stats["total_processed"] += 1
+                    memory_stats["current_objects"] = len(memory_store)
+        
+        # Keep the memory allocated for the specified duration
+        time.sleep(duration)
+        
+        span.set_attribute("cleanup_mode", "temporary_storage")
         
         # Calculate actual memory usage for tracing
         actual_size = sum(len(chunk) for chunk in memory_object.get('data', []))

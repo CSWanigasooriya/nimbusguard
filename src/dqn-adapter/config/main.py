@@ -26,15 +26,15 @@ class DQNAdapterConfig(BaseSettings):
     
     # === FEATURE CONFIGURATION ===
     base_features: List[str] = Field(default=[
-        'kube_deployment_status_replicas_unavailable',
-        'kube_pod_container_status_ready',
-        'kube_deployment_spec_replicas',
-        'kube_pod_container_resource_limits_cpu',
-        'kube_pod_container_resource_limits_memory',
-        'kube_pod_container_status_running',
-        'kube_deployment_status_observed_generation',
-        'node_network_up',
-        'kube_pod_container_status_last_terminated_exitcode'
+        'process_cpu_seconds_total_rate',
+        'python_gc_collections_total_rate',
+        'python_gc_objects_collected_total_rate',
+        'http_request_duration_seconds_sum_rate',
+        'http_requests_total_rate',
+        'http_request_duration_seconds_count_rate',
+        'process_open_fds',
+        'http_response_size_bytes_sum_rate',
+        'http_request_size_bytes_count_rate'
     ])
     
 

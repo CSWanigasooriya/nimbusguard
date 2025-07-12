@@ -90,7 +90,18 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         except Exception as e:
             logger.error(f"LLM: initialization_failed error={e}")
             logger.warning("LLM: consider_disabling_validation ENABLE_LLM_VALIDATION=false")
-            raise kopf.PermanentError(f"LLM initialization failed but validation is enabled: {e}")
+            
+            # Check if this is an API key issue (graceful fallback)
+            error_str = str(e).lower()
+            if 'api_key' in error_str or 'openai_api_key' in error_str:
+                logger.warning("LLM: api_key_missing - automatically_disabling_llm_validation")
+                logger.info("LLM: dqn_will_operate_without_llm_safety_monitor")
+                services.llm = None
+                # Update config to reflect the actual state
+                config.ai.enable_llm_validation = False
+            else:
+                # For other errors (network issues, etc.), still fail hard
+                raise kopf.PermanentError(f"LLM initialization failed with non-API-key error: {e}")
     else:
         services.llm = None
         logger.info("LLM: skipped_initialization validation_disabled")
@@ -186,8 +197,8 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         buffer = BytesIO(response.read())
         checkpoint = torch.load(buffer, map_location=device)
         
-        # Initialize model with scientifically-validated architecture (9 base features)
-        state_dim = len(config.feature_order)  # 9 scientifically-selected features
+        # Initialize model with scientifically-validated architecture (9 consumer performance features)
+        state_dim = len(config.feature_order)  # 9 scientifically-selected consumer performance features
         action_dim = 3
         services.dqn_model = EnhancedQNetwork(state_dim, action_dim, config.dqn.hidden_dims).to(device)
         logger.info(f"DQN_MODEL: architecture_initialized input_features={state_dim} output_actions={action_dim}")
@@ -220,7 +231,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         
         # Even without a pre-trained model, we can start with a fresh model
         try:
-            state_dim = len(config.feature_order)  # Scientifically-validated: 9 base features
+            state_dim = len(config.feature_order)  # Scientifically-validated: 9 consumer performance features
             action_dim = 3
             services.dqn_model = EnhancedQNetwork(state_dim, action_dim, config.dqn.hidden_dims).to(device)
             logger.info(f"DQN_MODEL: fresh_model_created input_features={state_dim} output_actions={action_dim}")
@@ -252,7 +263,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         logger.error(f"REDIS: connection_failed error={e}")
         # Not raising a permanent error, as the operator might still function for decision-making
         
-    # Initialize MCP validation with LLM supervisor (only if LLM validation is enabled)
+    # Initialize MCP validation with LLM supervisor (only if LLM validation is enabled and LLM is available)
     if config.ai.enable_llm_validation and services.llm is not None:
         if config.ai.mcp_server_url:
             try:
@@ -276,7 +287,10 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
             services.validator_agent = create_react_agent(services.llm, tools=[])
     else:
         services.validator_agent = None
-        logger.info("VALIDATOR: skipped_initialization llm_validation_disabled")
+        if not config.ai.enable_llm_validation:
+            logger.info("VALIDATOR: skipped_initialization llm_validation_disabled")
+        else:
+            logger.info("VALIDATOR: skipped_initialization llm_unavailable")
     
     # Initialize evaluator
     if config.enable_evaluation_outputs:

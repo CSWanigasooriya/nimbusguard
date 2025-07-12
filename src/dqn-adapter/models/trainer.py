@@ -49,25 +49,35 @@ class DQNTrainer:
     def _dict_to_feature_vector(self, state_dict):
         """Convert state dictionary to feature vector using only base features."""
         if not self.services or not self.services.scaler:
+            logger.warning(f"TRAINING: scaler_not_available services={self.services is not None} scaler={getattr(self.services, 'scaler', None) is not None}")
             return np.zeros(len(self.feature_order))
 
         try:
             # Scale the 9 scientifically-selected base features from Prometheus
             raw_features = [state_dict.get(feat, 0.0) for feat in self.services.config.base_features]
+            logger.debug(f"TRAINING: raw_features_extracted count={len(raw_features)} features={self.services.config.base_features[:3]}...")
 
-            # Transform numpy array to maintain consistency with how scaler was fitted
-            raw_features_array = np.array([raw_features])
-            scaled_raw_features = self.services.scaler.transform(raw_features_array)
+            # Check for any missing features
+            missing_features = [feat for feat in self.services.config.base_features if feat not in state_dict]
+            if missing_features:
+                logger.warning(f"TRAINING: missing_features_in_state missing={missing_features[:3]}... total_missing={len(missing_features)}")
+
+            # Transform with feature names to match how scaler was fitted
+            import pandas as pd
+            raw_features_df = pd.DataFrame([raw_features], columns=self.services.config.base_features)
+            scaled_raw_features = self.services.scaler.transform(raw_features_df)
 
             # Use only the scaled raw features (9 scientifically-selected features)
             final_feature_vector = scaled_raw_features[0].tolist()
+            logger.debug(f"TRAINING: feature_scaling_successful vector_length={len(final_feature_vector)}")
 
             return np.array(final_feature_vector)
 
         except Exception as e:
-            logger.warning(f"Feature scaling failed: {e}")
+            logger.warning(f"TRAINING: feature_scaling_failed error={e}")
             # Fallback: Return unscaled features in correct order
             raw_features = [state_dict.get(feat, 0.0) for feat in self.services.config.base_features]
+            logger.warning(f"TRAINING: using_unscaled_fallback features_count={len(raw_features)}")
             return np.array(raw_features)
 
     async def add_experience_for_training(self, experience_dict):
@@ -88,16 +98,26 @@ class DQNTrainer:
                     experience_dict = await asyncio.wait_for(
                         self.training_queue.get(), timeout=5.0
                     )
+                    logger.info(f"TRAINING: received_experience action={experience_dict.get('action')} reward={experience_dict.get('reward')}")
                 except asyncio.TimeoutError:
+                    # Log buffer status periodically during timeouts
+                    if len(self.memory) > 0:
+                        logger.debug(f"TRAINING: waiting_for_experience buffer_size={len(self.memory)} min_required={self.services.config.dqn.min_batch_size}")
                     continue
 
                 # Validate and convert experience
                 if not self._validate_experience(experience_dict):
+                    logger.warning(f"TRAINING: experience_validation_failed keys={list(experience_dict.keys())}")
                     continue
 
                 # Convert to training format
-                state_vec = self._dict_to_feature_vector(experience_dict['state'])
-                next_state_vec = self._dict_to_feature_vector(experience_dict['next_state'])
+                try:
+                    state_vec = self._dict_to_feature_vector(experience_dict['state'])
+                    next_state_vec = self._dict_to_feature_vector(experience_dict['next_state'])
+                    logger.debug(f"TRAINING: feature_vectors_created state_dim={len(state_vec)} next_state_dim={len(next_state_vec)}")
+                except Exception as e:
+                    logger.error(f"TRAINING: feature_vector_conversion_failed error={e}")
+                    continue
 
                 action_map = {"Scale Down": 0, "Keep Same": 1, "Scale Up": 2}
                 action_idx = action_map.get(experience_dict['action'], 1)
@@ -112,10 +132,14 @@ class DQNTrainer:
 
                 # Add to replay buffer
                 self.memory.push(training_exp)
+                logger.info(f"TRAINING: experience_added_to_buffer buffer_size={len(self.memory)} min_required={self.services.config.dqn.min_batch_size}")
 
                 # Train if we have enough experiences
                 if len(self.memory) >= self.services.config.dqn.min_batch_size:
+                    logger.info(f"TRAINING: starting_training_step buffer_size={len(self.memory)}")
                     await self._async_train_step()
+                else:
+                    logger.info(f"TRAINING: waiting_for_more_experiences buffer_size={len(self.memory)} needed={self.services.config.dqn.min_batch_size - len(self.memory)}")
 
                 # Periodic saves
                 if time.time() - self.last_save_time > self.services.config.save_interval_seconds:
@@ -129,36 +153,74 @@ class DQNTrainer:
                     self.last_research_time = time.time()
 
             except Exception as e:
-                logger.error(f"Error in training loop: {e}")
+                logger.error(f"Error in training loop: {e}", exc_info=True)
                 await asyncio.sleep(5)
 
     def _validate_experience(self, exp_dict):
         """Validate experience structure."""
         required_keys = ['state', 'action', 'reward', 'next_state']
-        return all(key in exp_dict for key in required_keys)
+        missing_keys = [key for key in required_keys if key not in exp_dict]
+        
+        if missing_keys:
+            logger.warning(f"TRAINING: experience_missing_keys missing={missing_keys} available={list(exp_dict.keys())}")
+            return False
+            
+        # Validate data types
+        try:
+            if not isinstance(exp_dict['state'], dict):
+                logger.warning(f"TRAINING: invalid_state_type type={type(exp_dict['state'])}")
+                return False
+            if not isinstance(exp_dict['next_state'], dict):
+                logger.warning(f"TRAINING: invalid_next_state_type type={type(exp_dict['next_state'])}")
+                return False
+            if not isinstance(exp_dict['action'], str):
+                logger.warning(f"TRAINING: invalid_action_type type={type(exp_dict['action'])}")
+                return False
+            if not isinstance(exp_dict['reward'], (int, float)):
+                logger.warning(f"TRAINING: invalid_reward_type type={type(exp_dict['reward'])}")
+                return False
+                
+            logger.debug(f"TRAINING: experience_validation_passed action={exp_dict['action']} reward={exp_dict['reward']}")
+            return True
+        except Exception as e:
+            logger.warning(f"TRAINING: experience_validation_error error={e}")
+            return False
 
     async def _async_train_step(self):
         """Async training step that doesn't block inference."""
         try:
+            logger.info(f"TRAINING: async_step_starting buffer_size={len(self.memory)}")
             # Run training in thread pool to avoid blocking event loop
             loop = asyncio.get_event_loop()
             loss = await loop.run_in_executor(None, self._sync_train_step)
 
+            if loss > 0:
+                logger.info(f"TRAINING: step_completed batch={self.batches_trained} loss={loss:.4f} buffer_size={len(self.memory)}")
+            else:
+                logger.warning(f"TRAINING: step_failed_or_skipped loss={loss}")
+
             if self.batches_trained % 10 == 0:  # Log every 10 steps
-                logger.info(f"TRAINING: batch={self.batches_trained} loss={loss:.4f} buffer_size={len(self.memory)}")
+                logger.info(f"TRAINING: milestone_reached batch={self.batches_trained} loss={loss:.4f} buffer_size={len(self.memory)}")
 
         except Exception as e:
-            logger.error(f"Training step error: {e}")
+            logger.error(f"TRAINING: async_step_error error={e}", exc_info=True)
 
     def _sync_train_step(self):
         """Synchronous training step (runs in thread pool)."""
         try:
+            logger.info(f"TRAINING: sync_step_starting memory_size={len(self.memory)}")
+            
             # Progressive batch sizing
             current_batch_size = min(self.services.config.dqn.target_batch_size, max(self.services.config.dqn.min_batch_size, len(self.memory) // 4))
+            logger.info(f"TRAINING: calculated_batch_size={current_batch_size} target={self.services.config.dqn.target_batch_size} min={self.services.config.dqn.min_batch_size}")
+            
             batch = self.memory.sample(current_batch_size)
 
             if not batch:
+                logger.warning(f"TRAINING: empty_batch_sampled batch_size={current_batch_size}")
                 return 0.0
+                
+            logger.info(f"TRAINING: batch_sampled successfully batch_size={len(batch)}")
 
             # Prepare batch tensors (optimized to avoid slow list-to-tensor conversion)
             states_array = np.array([e.state for e in batch], dtype=np.float32)

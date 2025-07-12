@@ -14,7 +14,7 @@ class DecisionReasoning:
         self.reasoning_logger.setLevel(logging.INFO)
 
     def analyze_metrics(self, metrics: Dict[str, float], current_replicas: int) -> Dict[str, Any]:
-        """Analyze current metrics and provide detailed insights."""
+        """Analyze current metrics and provide detailed insights using consumer performance features."""
         analysis = {
             'timestamp': datetime.now().isoformat(),
             'current_replicas': current_replicas,
@@ -24,74 +24,89 @@ class DecisionReasoning:
             'performance_indicators': {}
         }
 
-        # Analyze key performance indicators using actual Kubernetes metrics
-        unavailable_replicas = metrics.get('kube_deployment_status_replicas_unavailable', 0)
-        pods_ready = metrics.get('kube_pod_container_status_ready', 0)
-        desired_replicas = metrics.get('kube_deployment_spec_replicas', 1)
-        cpu_limits = metrics.get('kube_pod_container_resource_limits_cpu', 0)
-        memory_limits = metrics.get('kube_pod_container_resource_limits_memory', 0)
-        containers_running = metrics.get('kube_pod_container_status_running', 0)
-        exit_code = metrics.get('kube_pod_container_status_last_terminated_exitcode', 0)
+        # Analyze consumer performance indicators using the 9 scientifically-selected features
+        cpu_rate = metrics.get('process_cpu_seconds_total_rate', 0.01)
+        gc_collections_rate = metrics.get('python_gc_collections_total_rate', 0.1)
+        gc_objects_rate = metrics.get('python_gc_objects_collected_total_rate', 1.0)
+        http_duration_rate = metrics.get('http_request_duration_seconds_sum_rate', 0.05)
+        http_requests_rate = metrics.get('http_requests_total_rate', 1.0)
+        http_count_rate = metrics.get('http_request_duration_seconds_count_rate', 1.0)
+        open_fds = metrics.get('process_open_fds', 10.0)
+        response_size_rate = metrics.get('http_response_size_bytes_sum_rate', 1024.0)
+        request_count_rate = metrics.get('http_request_size_bytes_count_rate', 1.0)
 
-        memory_mb = memory_limits / 1000000  # Convert to MB
+        # Calculate derived metrics
+        cpu_per_replica = cpu_rate / max(current_replicas, 1)
+        gc_pressure = gc_collections_rate + gc_objects_rate
+        gc_per_replica = gc_pressure / max(current_replicas, 1)
+        http_per_replica = http_requests_rate / max(current_replicas, 1)
+        latency_per_request = http_duration_rate / max(http_requests_rate, 0.1)
+        fds_per_replica = open_fds / max(current_replicas, 1)
 
-        # Availability analysis (replica readiness)
-        if unavailable_replicas > 0:
-            analysis['insights']['availability'] = "PODS UNAVAILABLE"
-            analysis['risk_factors'].append(
-                f"Unavailable replicas {unavailable_replicas:.0f} - service degradation")
-            analysis['performance_indicators']['availability_severity'] = 'critical'
-        elif pods_ready < desired_replicas:
-            analysis['insights']['availability'] = "PODS NOT READY"
-            analysis['risk_factors'].append(
-                f"Only {pods_ready:.0f}/{desired_replicas:.0f} pods ready - potential instability")
-            analysis['performance_indicators']['availability_severity'] = 'warning'
-        else:
-            analysis['insights']['availability'] = "PODS HEALTHY"
-            analysis['performance_indicators']['availability_severity'] = 'normal'
-
-        # Memory analysis (resource limits)
-        if memory_mb > 2000:
-            analysis['insights']['memory'] = "HIGH MEMORY LIMITS"
-            analysis['risk_factors'].append(f"Memory limits {memory_mb:.1f}MB exceeds 2GB")
-            analysis['performance_indicators']['memory_severity'] = 'critical'
-        elif memory_mb > 1000:
-            analysis['insights']['memory'] = "ELEVATED MEMORY LIMITS"
-            analysis['risk_factors'].append(f"Memory limits {memory_mb:.1f}MB approaching 2GB")
-            analysis['performance_indicators']['memory_severity'] = 'warning'
-        else:
-            analysis['insights']['memory'] = "MEMORY LIMITS NORMAL"
-            analysis['performance_indicators']['memory_severity'] = 'normal'
-
-        # Container health analysis
-        if containers_running < desired_replicas:
-            analysis['insights']['health'] = "CONTAINERS NOT RUNNING"
-            analysis['risk_factors'].append(f"Only {containers_running:.0f}/{desired_replicas:.0f} containers running")
-            analysis['performance_indicators']['health_severity'] = 'critical'
-        elif exit_code == 137:  # SIGKILL/OOMKilled - predictable system response
-            analysis['insights']['health'] = "OOM KILLED"
-            analysis['risk_factors'].append(f"Container OOMKilled (exit code 137) - memory limit exceeded")
-            analysis['performance_indicators']['health_severity'] = 'warning'
-        elif exit_code not in [0, 130, 143]:  # 0=success, 130=SIGINT, 143=SIGTERM (normal)
-            analysis['insights']['health'] = "ABNORMAL EXIT CODE"
-            analysis['risk_factors'].append(f"Last exit code {exit_code:.0f} indicates potential issues")
-            analysis['performance_indicators']['health_severity'] = 'warning'
-        else:
-            analysis['insights']['health'] = "CONTAINERS HEALTHY"
-            analysis['performance_indicators']['health_severity'] = 'normal'
-
-        # CPU analysis (resource limits)
-        if cpu_limits > 2.0:
-            analysis['insights']['cpu'] = "HIGH CPU LIMITS"
-            analysis['risk_factors'].append(f"CPU limits {cpu_limits:.1f} cores exceeds 2.0")
+        # CPU performance analysis
+        if cpu_per_replica > 0.1:
+            analysis['insights']['cpu'] = "HIGH CPU UTILIZATION"
+            analysis['risk_factors'].append(f"CPU rate per replica {cpu_per_replica:.4f}/sec indicates high load")
             analysis['performance_indicators']['cpu_severity'] = 'critical'
-        elif cpu_limits > 1.0:
-            analysis['insights']['cpu'] = "ELEVATED CPU LIMITS"
-            analysis['risk_factors'].append(f"CPU limits {cpu_limits:.1f} cores approaching 2.0")
+        elif cpu_per_replica > 0.05:
+            analysis['insights']['cpu'] = "ELEVATED CPU UTILIZATION"
+            analysis['risk_factors'].append(f"CPU rate per replica {cpu_per_replica:.4f}/sec approaching limits")
             analysis['performance_indicators']['cpu_severity'] = 'warning'
         else:
-            analysis['insights']['cpu'] = "CPU LIMITS NORMAL"
+            analysis['insights']['cpu'] = "CPU UTILIZATION NORMAL"
             analysis['performance_indicators']['cpu_severity'] = 'normal'
+
+        # Memory pressure analysis (garbage collection activity)
+        if gc_per_replica > 2.0:
+            analysis['insights']['memory'] = "HIGH MEMORY PRESSURE"
+            analysis['risk_factors'].append(f"GC activity {gc_per_replica:.2f}/sec per replica indicates memory pressure")
+            analysis['performance_indicators']['memory_severity'] = 'critical'
+        elif gc_per_replica > 1.0:
+            analysis['insights']['memory'] = "ELEVATED MEMORY PRESSURE"
+            analysis['risk_factors'].append(f"GC activity {gc_per_replica:.2f}/sec per replica approaching limits")
+            analysis['performance_indicators']['memory_severity'] = 'warning'
+        else:
+            analysis['insights']['memory'] = "MEMORY PRESSURE NORMAL"
+            analysis['performance_indicators']['memory_severity'] = 'normal'
+
+        # HTTP performance analysis
+        if latency_per_request > 0.1:
+            analysis['insights']['http'] = "HIGH HTTP LATENCY"
+            analysis['risk_factors'].append(f"Average latency {latency_per_request:.3f}s per request indicates performance issues")
+            analysis['performance_indicators']['http_severity'] = 'critical'
+        elif latency_per_request > 0.05:
+            analysis['insights']['http'] = "ELEVATED HTTP LATENCY"
+            analysis['risk_factors'].append(f"Average latency {latency_per_request:.3f}s per request approaching limits")
+            analysis['performance_indicators']['http_severity'] = 'warning'
+        else:
+            analysis['insights']['http'] = "HTTP PERFORMANCE NORMAL"
+            analysis['performance_indicators']['http_severity'] = 'normal'
+
+        # Load distribution analysis
+        if http_per_replica > 5.0:
+            analysis['insights']['load'] = "HIGH LOAD PER REPLICA"
+            analysis['risk_factors'].append(f"HTTP requests {http_per_replica:.2f}/sec per replica indicates high load")
+            analysis['performance_indicators']['load_severity'] = 'critical'
+        elif http_per_replica > 2.0:
+            analysis['insights']['load'] = "ELEVATED LOAD PER REPLICA"
+            analysis['risk_factors'].append(f"HTTP requests {http_per_replica:.2f}/sec per replica approaching limits")
+            analysis['performance_indicators']['load_severity'] = 'warning'
+        else:
+            analysis['insights']['load'] = "LOAD DISTRIBUTION NORMAL"
+            analysis['performance_indicators']['load_severity'] = 'normal'
+
+        # I/O resource analysis
+        if fds_per_replica > 20:
+            analysis['insights']['io'] = "HIGH I/O LOAD"
+            analysis['risk_factors'].append(f"File descriptors {fds_per_replica:.1f} per replica indicates high I/O activity")
+            analysis['performance_indicators']['io_severity'] = 'critical'
+        elif fds_per_replica > 15:
+            analysis['insights']['io'] = "ELEVATED I/O LOAD"
+            analysis['risk_factors'].append(f"File descriptors {fds_per_replica:.1f} per replica approaching limits")
+            analysis['performance_indicators']['io_severity'] = 'warning'
+        else:
+            analysis['insights']['io'] = "I/O LOAD NORMAL"
+            analysis['performance_indicators']['io_severity'] = 'normal'
 
         return analysis
 
@@ -134,13 +149,15 @@ class DecisionReasoning:
             'exploration_probability': epsilon
         }
 
-        # Reasoning factors based on metrics
+        # Reasoning factors based on consumer performance metrics
         analysis = self.analyze_metrics(metrics, current_replicas)
         explanation['reasoning_factors'] = [
             f"Current system state: {len(analysis['risk_factors'])} risk factors detected",
-            f"Availability status: {analysis['insights'].get('availability', 'unknown')}",
-            f"Memory status: {analysis['insights'].get('memory', 'unknown')}",
-            f"Container health: {analysis['insights'].get('health', 'unknown')}",
+            f"CPU performance: {analysis['insights'].get('cpu', 'unknown')}",
+            f"Memory pressure: {analysis['insights'].get('memory', 'unknown')}",
+            f"HTTP performance: {analysis['insights'].get('http', 'unknown')}",
+            f"Load distribution: {analysis['insights'].get('load', 'unknown')}",
+            f"I/O load: {analysis['insights'].get('io', 'unknown')}",
             f"Decision confidence: {explanation['confidence_metrics']['decision_confidence']}",
             f"Exploration strategy: {exploration_type} (epsilon={epsilon:.3f})"
         ]
@@ -196,25 +213,25 @@ class DecisionReasoning:
             clean_factor = factor.lstrip('•').strip()
             self.reasoning_logger.info(f"AI_REASONING: factor_{i + 1}={clean_factor}")
 
-        # Key metrics at time of decision (actual Kubernetes metrics being used)
+        # Log actual consumer performance features being used (9 scientifically-selected features)
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=unavailable_replicas value={metrics.get('kube_deployment_status_replicas_unavailable', 'N/A')}")
+            f"AI_REASONING: consumer_feature name=cpu_rate value={metrics.get('process_cpu_seconds_total_rate', 'N/A')}")
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=pods_ready value={metrics.get('kube_pod_container_status_ready', 'N/A')}")
+            f"AI_REASONING: consumer_feature name=gc_collections_rate value={metrics.get('python_gc_collections_total_rate', 'N/A')}")
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=desired_replicas value={metrics.get('kube_deployment_spec_replicas', 'N/A')}")
+            f"AI_REASONING: consumer_feature name=gc_objects_rate value={metrics.get('python_gc_objects_collected_total_rate', 'N/A')}")
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=cpu_limits value={metrics.get('kube_pod_container_resource_limits_cpu', 'N/A')}")
+            f"AI_REASONING: consumer_feature name=http_duration_rate value={metrics.get('http_request_duration_seconds_sum_rate', 'N/A')}")
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=memory_limits value={metrics.get('kube_pod_container_resource_limits_memory', 'N/A')}")
+            f"AI_REASONING: consumer_feature name=http_requests_rate value={metrics.get('http_requests_total_rate', 'N/A')}")
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=containers_running value={metrics.get('kube_pod_container_status_running', 'N/A')}")
+            f"AI_REASONING: consumer_feature name=http_count_rate value={metrics.get('http_request_duration_seconds_count_rate', 'N/A')}")
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=deployment_generation value={metrics.get('kube_deployment_status_observed_generation', 'N/A')}")
+            f"AI_REASONING: consumer_feature name=open_fds value={metrics.get('process_open_fds', 'N/A')}")
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=network_up value={metrics.get('node_network_up', 'N/A')}")
+            f"AI_REASONING: consumer_feature name=response_size_rate value={metrics.get('http_response_size_bytes_sum_rate', 'N/A')}")
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=exit_code value={metrics.get('kube_pod_container_status_last_terminated_exitcode', 'N/A')}")
+            f"AI_REASONING: consumer_feature name=request_count_rate value={metrics.get('http_request_size_bytes_count_rate', 'N/A')}")
 
         self.reasoning_logger.info("AI_REASONING: analysis_end")
 

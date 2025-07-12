@@ -1,396 +1,541 @@
 {
-  "methodology": {
-    "approach": "Advanced multi-method feature selection",
-    "target_features": 9,
-    "selection_methods": [
-      "mutual_information",
-      "random_forest",
-      "correlation",
-      "rfe"
-    ],
-    "statistical_validation": true,
-    "scaler_type": "RobustScaler"
-  },
-  "dataset_info": {
-    "n_samples": 894,
-    "n_features": 9,
-    "time_range": null,
-    "action_distribution": {
-      "0": 781,
-      "2": 113
-    }
-  },
+  "timestamp": "2025-07-12T13:36:52.950010",
+  "methodology": "Intelligent data-driven feature selection",
+  "discovered_metrics": 31,
+  "analyzed_metrics": 41,
   "selected_features": [
-    "kube_deployment_status_replicas_unavailable",
-    "kube_pod_container_status_ready",
-    "kube_deployment_spec_replicas",
-    "kube_pod_container_resource_limits_cpu",
-    "kube_pod_container_resource_limits_memory",
-    "kube_pod_container_status_running",
-    "kube_deployment_status_observed_generation",
-    "node_network_up",
-    "kube_pod_container_status_last_terminated_exitcode"
+    "process_cpu_seconds_total_rate",
+    "python_gc_collections_total_rate",
+    "python_gc_objects_collected_total_rate",
+    "http_request_duration_seconds_sum_rate",
+    "http_requests_total_rate",
+    "http_request_duration_seconds_count_rate",
+    "process_open_fds",
+    "http_response_size_bytes_sum_rate",
+    "http_request_size_bytes_count_rate"
   ],
-  "feature_analysis": {
-    "selection_methods": {
-      "mutual_information": {
-        "kube_deployment_status_replicas_unavailable": 0.28741421852191973,
-        "kube_pod_container_status_ready": 0.2788930737978177,
-        "kube_pod_container_state_started": 0.17290671825428472,
-        "scrape_duration_seconds": 0.14278797757301298,
-        "kube_pod_container_status_running": 0.11671422025601963,
-        "kube_deployment_spec_replicas": 0.09740714214483326,
-        "memory_growth_rate_ma_10": 0.09540461468620531,
-        "memory_usage_mb": 0.0945532276413541,
-        "kube_deployment_status_observed_generation": 0.09302116407693006,
-        "kube_deployment_status_replicas_unavailable_ma_10": 0.08721114500137439
-      },
-      "random_forest": {
-        "kube_deployment_status_replicas_unavailable": 0.581898262747191,
-        "kube_pod_container_status_ready": 0.18331234161085053,
-        "kube_deployment_spec_replicas": 0.08032761295989879,
-        "memory_usage_mb_ma_10": 0.027994309485514228,
-        "health_ratio_ma_10": 0.013719943434070134,
-        "health_ratio_volatility": 0.010845108336916896,
-        "kube_deployment_spec_replicas_ma_10": 0.008819946995165225,
-        "memory_growth_rate_ma_10": 0.005603679667870433,
-        "kube_deployment_status_observed_generation": 0.005413774471180732,
-        "kube_pod_container_state_started_volatility": 0.004572121667933472
-      },
-      "correlation": {
-        "kube_pod_container_status_ready": [
-          0.5760750644589407,
-          3.59218048509557e-80
-        ],
-        "kube_deployment_status_replicas_unavailable": [
-          0.5725921728736281,
-          5.179970947074807e-79
-        ],
-        "health_ratio_ma_10": [
-          0.3999544200936551,
-          1.145723419184738e-35
-        ],
-        "kube_pod_container_status_ready_ma_10": [
-          0.2743039826407419,
-          6.77665333595147e-17
-        ],
-        "kube_deployment_status_replicas_unavailable_ma_10": [
-          0.2655091281563599,
-          6.864717755317171e-16
-        ],
-        "memory_usage_mb_ma_10": [
-          0.1882036352718394,
-          1.4269133974540894e-08
-        ],
-        "kube_pod_container_status_waiting": [
-          0.18136934763109583,
-          4.743256150414974e-08
-        ],
-        "kube_pod_container_state_started_volatility": [
-          0.18094143520919595,
-          5.106117382763588e-08
-        ],
-        "kube_pod_container_status_running_dev_10": [
-          0.1775511691608336,
-          9.099993360755941e-08
-        ],
-        "health_ratio_volatility": [
-          0.1688234765594474,
-          3.83003317840558e-07
-        ]
-      },
-      "rfecv_selected": [
-        "kube_deployment_spec_replicas",
-        "kube_deployment_status_replicas_unavailable",
-        "kube_pod_container_status_ready",
-        "memory_usage_mb_ma_10",
-        "health_ratio_ma_10",
-        "health_ratio_volatility"
-      ],
-      "statistical_significance": {
-        "kube_pod_container_status_ready": [
-          443.05449574958226,
-          3.5921804850939275e-80
-        ],
-        "kube_deployment_status_replicas_unavailable": [
-          435.1080192590967,
-          5.179970947076777e-79
-        ],
-        "health_ratio_ma_10": [
-          169.8586698465029,
-          1.1457234191840137e-35
-        ],
-        "kube_pod_container_status_ready_ma_10": [
-          72.57738239205382,
-          6.776653335946891e-17
-        ],
-        "kube_deployment_status_replicas_unavailable_ma_10": [
-          67.65066698408734,
-          6.864717755312892e-16
-        ],
-        "memory_usage_mb_ma_10": [
-          32.75539878083951,
-          1.426913397453254e-08
-        ],
-        "kube_pod_container_status_waiting": [
-          30.340234685468882,
-          4.743256150411397e-08
-        ],
-        "kube_pod_container_state_started_volatility": [
-          30.19239739631815,
-          5.106117382760511e-08
-        ],
-        "kube_pod_container_status_running_dev_10": [
-          29.035095024633744,
-          9.099993360750553e-08
-        ],
-        "health_ratio_volatility": [
-          26.169073018144644,
-          3.8300331784033137e-07
-        ]
-      },
-      "low_vif_features": [
-        "is_business_hours_volatility",
-        "hour_sin_dev_10",
-        "hour_cos_dev_10",
-        "system_stability_dev_10",
-        "memory_growth_rate",
-        "is_business_hours_dev_10",
-        "kube_pod_container_status_last_terminated_exitcode_dev_10",
-        "kube_pod_container_status_last_terminated_timestamp_dev_10",
-        "hour_cos_volatility",
-        "day_sin_dev_10",
-        "hour_sin_volatility",
-        "day_sin_volatility",
-        "kube_pod_container_status_terminated_volatility",
-        "memory_usage_mb",
-        "up_dev_10",
-        "kube_deployment_status_observed_generation_dev_10",
-        "memory_growth_rate_ma_10",
-        "kube_deployment_status_observed_generation_volatility",
-        "kube_pod_container_state_started_dev_10",
-        "system_stability_volatility"
-      ],
-      "real_time_scores": {
-        "kube_deployment_spec_replicas": 7.0,
-        "kube_deployment_status_observed_generation": 6.0,
-        "kube_deployment_status_replicas_unavailable": 7.0,
-        "kube_pod_container_resource_limits_cpu": 7.0,
-        "kube_pod_container_resource_limits_memory": 7.0,
-        "kube_pod_container_state_started": 6.0,
-        "kube_pod_container_status_last_terminated_exitcode": 6.0,
-        "kube_pod_container_status_ready": 7.0,
-        "kube_pod_container_status_running": 6.0,
-        "kube_pod_container_status_terminated": 6.0,
-        "kube_pod_container_status_waiting": 6.0,
-        "kube_pod_status_phase": 6.0,
-        "node_network_up": 6.0,
-        "scrape_duration_seconds": 5.0,
-        "scrape_samples_scraped": 6.0,
-        "hour": 4.0,
-        "day_of_week": 4.0,
-        "is_business_hours": 4.0,
-        "hour_sin": -1.0,
-        "hour_cos": -1.0,
-        "memory_usage_mb": 5.0,
-        "memory_growth_rate": 5.0,
-        "kube_deployment_spec_replicas_ma_10": 2.0,
-        "kube_deployment_spec_replicas_dev_10": 2.0,
-        "kube_deployment_spec_replicas_volatility": 2.0,
-        "kube_deployment_status_observed_generation_dev_10": 1.0,
-        "kube_deployment_status_observed_generation_volatility": 1.0,
-        "kube_deployment_status_replicas_unavailable_ma_10": 2.0,
-        "kube_deployment_status_replicas_unavailable_volatility": 2.0,
-        "kube_pod_container_resource_limits_cpu_ma_10": 2.0,
-        "kube_pod_container_resource_limits_cpu_dev_10": 2.0,
-        "kube_pod_container_resource_limits_cpu_volatility": 2.0,
-        "kube_pod_container_resource_limits_memory_volatility": 2.0,
-        "kube_pod_container_state_started_dev_10": 1.0,
-        "kube_pod_container_state_started_volatility": 1.0,
-        "kube_pod_container_status_last_terminated_exitcode_dev_10": 1.0,
-        "kube_pod_container_status_last_terminated_exitcode_volatility": 1.0,
-        "kube_pod_container_status_last_terminated_timestamp_dev_10": 1.0,
-        "kube_pod_container_status_last_terminated_timestamp_volatility": 1.0,
-        "kube_pod_container_status_ready_ma_10": 2.0,
-        "kube_pod_container_status_ready_volatility": 2.0,
-        "kube_pod_container_status_running_ma_10": 1.0,
-        "kube_pod_container_status_running_dev_10": 1.0,
-        "kube_pod_container_status_running_volatility": 1.0,
-        "kube_pod_container_status_terminated_ma_10": 1.0,
-        "kube_pod_container_status_terminated_dev_10": 1.0,
-        "kube_pod_container_status_terminated_volatility": 1.0,
-        "kube_pod_container_status_waiting_ma_10": 1.0,
-        "kube_pod_status_phase_ma_10": 1.0,
-        "kube_pod_status_phase_dev_10": 1.0,
-        "node_network_up_ma_10": 1.0,
-        "node_network_up_dev_10": 1.0,
-        "node_network_up_volatility": 1.0,
-        "scrape_duration_seconds_ma_10": 0.0,
-        "scrape_duration_seconds_dev_10": 0.0,
-        "scrape_duration_seconds_volatility": 0.0,
-        "scrape_samples_scraped_dev_10": 1.0,
-        "scrape_samples_scraped_volatility": 1.0,
-        "up_dev_10": 1.0,
-        "up_volatility": 1.0,
-        "is_business_hours_dev_10": -1.0,
-        "is_business_hours_volatility": -1.0,
-        "hour_sin_dev_10": -1.0,
-        "hour_sin_volatility": -1.0,
-        "hour_cos_dev_10": -1.0,
-        "hour_cos_volatility": -1.0,
-        "day_sin_dev_10": -1.0,
-        "day_sin_volatility": -1.0,
-        "memory_usage_mb_ma_10": 0.0,
-        "memory_usage_mb_volatility": 0.0,
-        "memory_growth_rate_ma_10": 0.0,
-        "health_ratio_ma_10": 1.0,
-        "health_ratio_volatility": 1.0,
-        "system_stability_dev_10": -1.0,
-        "system_stability_volatility": -1.0
+  "metric_analysis": {
+    "http_request_duration_highr_seconds_bucket": {
+      "type": "histogram",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 4.763563149014986,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1061.3070552819797,
+        "std": 1148.0122692404166,
+        "min": 7.5,
+        "max": 3915.090909090909,
+        "samples": 45
       }
     },
-    "advanced_metrics": {
-      "rfecv_optimal_features": 6,
-      "statistically_significant_count": 38,
-      "low_multicollinearity_count": 30,
-      "real_time_preferred_count": 31,
-      "ensemble_weights": {
-        "mutual_information": 0.2,
-        "random_forest": 0.2,
-        "correlation": 0.15,
-        "rfecv": 0.15,
-        "statistical_significance": 0.1,
-        "vif_bonus": 0.05,
-        "real_time_bias": 0.15
+    "http_request_duration_highr_seconds_count": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 4.7336131553470615,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1117.8790364573697,
+        "std": 1204.606913061776,
+        "min": 7.5,
+        "max": 4094.5,
+        "samples": 45
       }
     },
-    "final_scores": {
-      "kube_deployment_status_replicas_unavailable": 138.55,
-      "kube_pod_container_status_ready": 138.4,
-      "kube_deployment_spec_replicas": 130.4,
-      "kube_pod_container_resource_limits_cpu": 109.1,
-      "kube_pod_container_resource_limits_memory": 109.0,
-      "kube_pod_container_status_running": 105.15,
-      "kube_deployment_status_observed_generation": 102.1,
-      "node_network_up": 98.55,
-      "kube_pod_container_status_last_terminated_exitcode": 87.7
-    },
-    "selected_features": [
-      "kube_deployment_status_replicas_unavailable",
-      "kube_pod_container_status_ready",
-      "kube_deployment_spec_replicas",
-      "kube_pod_container_resource_limits_cpu",
-      "kube_pod_container_resource_limits_memory",
-      "kube_pod_container_status_running",
-      "kube_deployment_status_observed_generation",
-      "node_network_up",
-      "kube_pod_container_status_last_terminated_exitcode"
-    ]
-  },
-  "scaler_statistics": {
-    "scaler_type": "RobustScaler",
-    "features": [
-      "kube_deployment_status_replicas_unavailable",
-      "kube_pod_container_status_ready",
-      "kube_deployment_spec_replicas",
-      "kube_pod_container_resource_limits_cpu",
-      "kube_pod_container_resource_limits_memory",
-      "kube_pod_container_status_running",
-      "kube_deployment_status_observed_generation",
-      "node_network_up",
-      "kube_pod_container_status_last_terminated_exitcode"
-    ],
-    "n_features": 9,
-    "n_samples": 894,
-    "feature_statistics": {
-      "kube_deployment_status_replicas_unavailable": {
-        "median": 0.0,
-        "scale": 0.07407407407407407,
-        "original_mean": 0.040535440448192135,
-        "original_std": 0.08757000018411402,
-        "original_min": 0.0,
-        "original_max": 1.3241538461538591
-      },
-      "kube_pod_container_status_ready": {
-        "median": 0.9473684210526315,
-        "scale": 0.030612244897959107,
-        "original_mean": 0.9405031017180199,
-        "original_std": 0.02832926138273111,
-        "original_min": 0.7009722222222222,
-        "original_max": 0.9775280898876404
-      },
-      "kube_deployment_spec_replicas": {
-        "median": 1.9807692307692308,
-        "scale": 1.193019943019943,
-        "original_mean": 2.1303402869398393,
-        "original_std": 0.967620075186619,
-        "original_min": 1.0,
-        "original_max": 4.846153846153846
-      },
-      "kube_pod_container_resource_limits_cpu": {
-        "median": 2.1027027027027025,
-        "scale": 0.019078461021505344,
-        "original_mean": 2.102809041976298,
-        "original_std": 0.020775032615996076,
-        "original_min": 1.927027027027027,
-        "original_max": 2.142857142857143
-      },
-      "kube_pod_container_resource_limits_memory": {
-        "median": 367219034.6666667,
-        "scale": 76071791.38784695,
-        "original_mean": 359505394.3223358,
-        "original_std": 64477955.210933656,
-        "original_min": 227846562.38753247,
-        "original_max": 463174185.46478873
-      },
-      "kube_pod_container_status_running": {
-        "median": 0.9565217391304348,
-        "scale": 0.014729950900163713,
-        "original_mean": 0.9531287871091075,
-        "original_std": 0.017621035517297778,
-        "original_min": 0.726233552631579,
-        "original_max": 0.9777777777777777
-      },
-      "kube_deployment_status_observed_generation": {
-        "median": 8.296296296296296,
-        "scale": 2.064814814814815,
-        "original_mean": 7.694438070836282,
-        "original_std": 2.39222954456768,
-        "original_min": 1.2307692307692308,
-        "original_max": 12.76923076923077
-      },
-      "node_network_up": {
-        "median": 0.5652173913043478,
-        "scale": 0.12616822429906538,
-        "original_mean": 0.5670338059384659,
-        "original_std": 0.08460087745971087,
-        "original_min": 0.3411801242236025,
-        "original_max": 0.7504487179487234
-      },
-      "kube_pod_container_status_last_terminated_exitcode": {
-        "median": 125.125,
-        "scale": 45.23106060606061,
-        "original_mean": 137.7826911961893,
-        "original_std": 25.5342781194769,
-        "original_min": 69.1590909090909,
-        "original_max": 204.1
+    "http_request_duration_highr_seconds_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 1.0223022058750168e-06,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298671.3026123,
+        "std": 450.7668580711219,
+        "min": 1752298150.600287,
+        "max": 1752299491.212226,
+        "samples": 45
       }
+    },
+    "http_request_duration_highr_seconds_sum": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 4.398650920069199,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 546.6764328294465,
+        "std": 583.3128100444136,
+        "min": 0.02282029299749405,
+        "max": 1821.348804494417,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_bucket": {
+      "type": "histogram",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 4.112318354135516,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 246.25141304160027,
+        "std": 226.6642055831899,
+        "min": 3.75,
+        "max": 789.75,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_count": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 75.0,
+      "variability": 4.096185073138938,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 256.4271449228613,
+        "std": 235.2230433810692,
+        "min": 3.75,
+        "max": 818.9,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 9.710503988251958e-07,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298674.7307525,
+        "std": 417.08309331939574,
+        "min": 1752298162.2701163,
+        "max": 1752299446.75735,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_sum": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 80.0,
+      "variability": 3.800116092993896,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 125.5351332721411,
+        "std": 112.78972943159222,
+        "min": 0.011410146498747026,
+        "max": 364.2697608988834,
+        "samples": 45
+      }
+    },
+    "http_request_size_bytes_count": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 70.0,
+      "variability": 4.096185073138938,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 256.4271449228613,
+        "std": 235.2230433810692,
+        "min": 3.75,
+        "max": 818.9,
+        "samples": 45
+      }
+    },
+    "http_request_size_bytes_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 9.710504209113435e-07,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298674.7307,
+        "std": 417.0831005496197,
+        "min": 1752298162.270041,
+        "max": 1752299446.757306,
+        "samples": 45
+      }
+    },
+    "http_request_size_bytes_sum": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 70.0,
+      "variability": 0,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "samples": 45
+      }
+    },
+    "http_requests_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 9.710504469339704e-07,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298674.7306685,
+        "std": 417.08310537942685,
+        "min": 1752298162.2699733,
+        "max": 1752299446.7572792,
+        "samples": 45
+      }
+    },
+    "http_requests_total": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 85.0,
+      "variability": 4.096185073138938,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 256.4271449228613,
+        "std": 235.2230433810692,
+        "min": 3.75,
+        "max": 818.9,
+        "samples": 45
+      }
+    },
+    "http_response_size_bytes_count": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 70.0,
+      "variability": 4.096185073138938,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 256.4271449228613,
+        "std": 235.2230433810692,
+        "min": 3.75,
+        "max": 818.9,
+        "samples": 45
+      }
+    },
+    "http_response_size_bytes_created": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 0.0,
+      "variability": 9.710504124594019e-07,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298674.7307258,
+        "std": 417.08309694499206,
+        "min": 1752298162.270073,
+        "max": 1752299446.7573268,
+        "samples": 45
+      }
+    },
+    "http_response_size_bytes_sum": {
+      "type": "counter",
+      "category": "network",
+      "scaling_relevance": 70.0,
+      "variability": 4.437847129009329,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 2102980.518725263,
+        "std": 2089287.7073874588,
+        "min": 19822.75,
+        "max": 7263241.1,
+        "samples": 45
+      }
+    },
+    "process_cpu_seconds_total": {
+      "type": "counter",
+      "category": "cpu",
+      "scaling_relevance": 95.0,
+      "variability": 4.042350827264386,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 91.95806441459776,
+        "std": 89.6967577603852,
+        "min": 0.46,
+        "max": 282.48999999999995,
+        "samples": 45
+      }
+    },
+    "process_max_fds": {
+      "type": "gauge",
+      "category": "io",
+      "scaling_relevance": 40.0,
+      "variability": 0.0,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 1048576.0,
+        "std": 0.0,
+        "min": 1048576.0,
+        "max": 1048576.0,
+        "samples": 45
+      }
+    },
+    "process_open_fds": {
+      "type": "gauge",
+      "category": "io",
+      "scaling_relevance": 90.0,
+      "variability": 0.21854757113350415,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 10.501364869698202,
+        "std": 0.37838111921443784,
+        "min": 10.083333333333334,
+        "max": 12.0,
+        "samples": 45
+      }
+    },
+    "process_resident_memory_bytes": {
+      "type": "gauge",
+      "category": "memory",
+      "scaling_relevance": 100.0,
+      "variability": 1.5673609608372536,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 113541220.69579607,
+        "std": 40838284.7643976,
+        "min": 58990592.0,
+        "max": 196112384.0,
+        "samples": 45
+      }
+    },
+    "process_start_time_seconds": {
+      "type": "info",
+      "category": "performance",
+      "scaling_relevance": 0.0,
+      "variability": 1.0221923179215669e-06,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1752298670.1779127,
+        "std": 450.6845725757535,
+        "min": 1752298149.5,
+        "max": 1752299490.0016668,
+        "samples": 45
+      }
+    },
+    "process_virtual_memory_bytes": {
+      "type": "gauge",
+      "category": "memory",
+      "scaling_relevance": 95.0,
+      "variability": 1.7224872296161813,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 613129632.7598288,
+        "std": 215920058.52806416,
+        "min": 224792576.0,
+        "max": 1064980480.0,
+        "samples": 45
+      }
+    },
+    "python_gc_collections_total": {
+      "type": "counter",
+      "category": "memory",
+      "scaling_relevance": 65.0,
+      "variability": 0.6546775910378525,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 62.95156133989467,
+        "std": 9.546309863472654,
+        "min": 53.333333333333336,
+        "max": 85.0,
+        "samples": 45
+      }
+    },
+    "python_gc_objects_collected_total": {
+      "type": "counter",
+      "category": "memory",
+      "scaling_relevance": 65.0,
+      "variability": 2.9688073570342635,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 816.8816611783278,
+        "std": 567.8309521995537,
+        "min": 287.6666666666667,
+        "max": 2145.0,
+        "samples": 45
+      }
+    },
+    "python_gc_objects_uncollectable_total": {
+      "type": "counter",
+      "category": "memory",
+      "scaling_relevance": 65.0,
+      "variability": 0,
+      "is_consumer_performance": true,
+      "stats": {
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "samples": 45
+      }
+    },
+    "python_info": {
+      "type": "info",
+      "category": "other",
+      "scaling_relevance": 0.0,
+      "variability": 0.0,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1.0,
+        "std": 0.0,
+        "min": 1.0,
+        "max": 1.0,
+        "samples": 45
+      }
+    },
+    "scrape_duration_seconds": {
+      "type": "gauge",
+      "category": "io",
+      "scaling_relevance": 0.0,
+      "variability": 6.5529631536809125,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 0.06569953507142519,
+        "std": 0.08101307019231234,
+        "min": 0.0020846455,
+        "max": 0.3515982085,
+        "samples": 45
+      }
+    },
+    "scrape_samples_post_metric_relabeling": {
+      "type": "gauge",
+      "category": "monitoring",
+      "scaling_relevance": 0.0,
+      "variability": 0.8644283733848874,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 92.67210080043414,
+        "std": 14.90839335316605,
+        "min": 50.8,
+        "max": 116.0,
+        "samples": 45
+      }
+    },
+    "scrape_samples_scraped": {
+      "type": "gauge",
+      "category": "monitoring",
+      "scaling_relevance": 0.0,
+      "variability": 0.8644283733848874,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 92.67210080043414,
+        "std": 14.90839335316605,
+        "min": 50.8,
+        "max": 116.0,
+        "samples": 45
+      }
+    },
+    "scrape_series_added": {
+      "type": "gauge",
+      "category": "monitoring",
+      "scaling_relevance": 0.0,
+      "variability": 28.81752325735557,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 1.4216843033509698,
+        "std": 5.4694204793156755,
+        "min": 0.0,
+        "max": 35.5,
+        "samples": 45
+      }
+    },
+    "up": {
+      "type": "gauge",
+      "category": "other",
+      "scaling_relevance": 0.0,
+      "variability": 0.35902706698118847,
+      "is_consumer_performance": false,
+      "stats": {
+        "mean": 0.9360676977343644,
+        "std": 0.08607364004930525,
+        "min": 0.75,
+        "max": 1.0,
+        "samples": 45
+      }
+    },
+    "http_request_duration_seconds_count_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 95.0,
+      "variability": 1.3249357011357696,
+      "is_consumer_performance": true,
+      "derived_from": "http_request_duration_seconds_count"
+    },
+    "http_request_duration_seconds_sum_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 100.0,
+      "variability": 2.144095361522845,
+      "is_consumer_performance": true,
+      "derived_from": "http_request_duration_seconds_sum"
+    },
+    "http_request_size_bytes_count_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 90.0,
+      "variability": 1.3249357011357696,
+      "is_consumer_performance": true,
+      "derived_from": "http_request_size_bytes_count"
+    },
+    "http_request_size_bytes_sum_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 90.0,
+      "variability": 0.0,
+      "is_consumer_performance": true,
+      "derived_from": "http_request_size_bytes_sum"
+    },
+    "http_requests_total_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 105.0,
+      "variability": 1.3249357011357696,
+      "is_consumer_performance": true,
+      "derived_from": "http_requests_total"
+    },
+    "http_response_size_bytes_count_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 90.0,
+      "variability": 1.3249357011357696,
+      "is_consumer_performance": true,
+      "derived_from": "http_response_size_bytes_count"
+    },
+    "http_response_size_bytes_sum_rate": {
+      "type": "gauge",
+      "category": "network",
+      "scaling_relevance": 90.0,
+      "variability": 1.4994288983889748,
+      "is_consumer_performance": true,
+      "derived_from": "http_response_size_bytes_sum"
+    },
+    "process_cpu_seconds_total_rate": {
+      "type": "gauge",
+      "category": "cpu",
+      "scaling_relevance": 115.0,
+      "variability": 1.9513214797750098,
+      "is_consumer_performance": true,
+      "derived_from": "process_cpu_seconds_total"
+    },
+    "python_gc_collections_total_rate": {
+      "type": "gauge",
+      "category": "memory",
+      "scaling_relevance": 85.0,
+      "variability": 1.9177145414357266,
+      "is_consumer_performance": true,
+      "derived_from": "python_gc_collections_total"
+    },
+    "python_gc_objects_collected_total_rate": {
+      "type": "gauge",
+      "category": "memory",
+      "scaling_relevance": 85.0,
+      "variability": 1.7474971552814982,
+      "is_consumer_performance": true,
+      "derived_from": "python_gc_objects_collected_total"
     }
   },
-  "quality_metrics": {
-    "missing_data_percentage": 0.0,
-    "feature_stability": {
-      "kube_deployment_status_replicas_unavailable": 2.160278485626616,
-      "kube_pod_container_status_ready": 0.030121358674546996,
-      "kube_deployment_spec_replicas": 0.4542089481711971,
-      "kube_pod_container_resource_limits_cpu": 0.009879652560756718,
-      "kube_pod_container_resource_limits_memory": 0.17935184347504382,
-      "kube_pod_container_status_running": 0.018487550966949946,
-      "kube_deployment_status_observed_generation": 0.310903695843767,
-      "node_network_up": 0.14919873802048703,
-      "kube_pod_container_status_last_terminated_exitcode": 0.1853228276532625
-    }
-  },
-  "created_at": "2025-07-06T21:22:41.853609",
-  "research_grade": true
+  "dataset_shape": [
+    45,
+    10
+  ],
+  "scaling_action_distribution": {
+    "scale_up": 44,
+    "keep_same": 1
+  }
 }

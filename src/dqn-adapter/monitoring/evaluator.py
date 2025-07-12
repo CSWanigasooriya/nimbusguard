@@ -1015,16 +1015,16 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
             self._plot_feature_architecture(axes[0, 0])
             
             # 2. Feature Type Comparison
-            base_count = 5
-            total_count = 5
+            consumer_count = 9
+            total_count = 9
             
-            categories = ['Base\nFeatures', 'Total\nFeatures']
-            values = [base_count, total_count]
-            colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
+            categories = ['Consumer\nPerformance', 'Total\nFeatures']
+            values = [consumer_count, total_count]
+            colors = ['#FF6B6B', '#4ECDC4']
             
             bars = axes[0, 1].bar(categories, values, color=colors, alpha=0.8, edgecolor='black')
             axes[0, 1].set_ylabel('Feature Count')
-            axes[0, 1].set_title('Feature Count Comparison', fontweight='bold')
+            axes[0, 1].set_title('Feature Count: Consumer Performance Focus', fontweight='bold')
             
             # Add value labels on bars
             for bar, value in zip(bars, values):
@@ -1035,52 +1035,54 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
             axes[0, 1].grid(True, alpha=0.3)
             
             # 3. Data Flow Diagram
-            axes[1, 0].text(0.5, 0.9, 'DATA FLOW ARCHITECTURE', ha='center', fontweight='bold', 
+            axes[1, 0].text(0.5, 0.9, 'CONSUMER PERFORMANCE DATA FLOW', ha='center', fontweight='bold', 
                            fontsize=14, transform=axes[1, 0].transAxes)
             
             flow_text = """
-            ┌─────────────────┐
-            │   PROMETHEUS    │
-            │  (9 Features)   │
-            │                 │
-            │ • Unavailable   │
-            │ • Pod Ready     │
-            │ • Desired Rep.  │
-            │ • CPU Limits    │
-            │ • Memory Limits │
-            │ • Running       │
-            │ • Generation    │
-            │ • Network       │
-            │ • Exit Code     │
-            └─────────────────┘
+            ┌─────────────────────┐
+            │  CONSUMER PODS      │
+            │   (Port 8000)       │
+            │                     │
+            │ • CPU Rate          │
+            │ • GC Activity       │
+            │ • HTTP Metrics      │
+            │ • File Descriptors  │
+            │ • Response Sizes    │
+            └─────────────────────┘
                     │
                     ▼
-            ┌─────────────────┐
-            │ ROBUST SCALER   │
-            │  (9 Features)   │
-            └─────────────────┘
+            ┌─────────────────────┐
+            │   PROMETHEUS        │
+            │ (Scrape & Store)    │
+            └─────────────────────┘
                     │
                     ▼
-            ┌─────────────────┐
-            │   DQN MODEL     │
-            │  (9 Features)   │
-            │ Scientifically  │
-            │   Selected      │
-            └─────────────────┘
+            ┌─────────────────────┐
+            │  ROBUST SCALER      │
+            │ (9 Features)        │
+            └─────────────────────┘
+                    │
+                    ▼
+            ┌─────────────────────┐
+            │   DQN MODEL         │
+            │ (Consumer Focused)  │
+            │ Scientifically      │
+            │   Selected          │
+            └─────────────────────┘
             """
             
             axes[1, 0].text(0.5, 0.5, flow_text, ha='center', va='center',
                            transform=axes[1, 0].transAxes, fontsize=9, family='monospace',
-                           bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.8))
+                           bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgreen', alpha=0.8))
             axes[1, 0].axis('off')
             
-            # 4. Benefits of Clean Architecture
+            # 4. Benefits of Consumer Performance Focus
             benefits = [
-                'Zero Feature Overlap',
-                'Clear Separation of Concerns', 
-                'Optimal DQN Performance',
-                'Easy Feature Addition',
-                'Reduced Training Complexity'
+                'Direct Performance Impact',
+                'Real-time Consumer Metrics', 
+                'Optimal Scaling Decisions',
+                'Scientific Feature Selection',
+                'Efficient Resource Usage'
             ]
             
             y_positions = np.arange(len(benefits))
@@ -1089,8 +1091,8 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
             bars = axes[1, 1].barh(y_positions, [1]*len(benefits), color=colors_benefits, alpha=0.8)
             axes[1, 1].set_yticks(y_positions)
             axes[1, 1].set_yticklabels(benefits)
-            axes[1, 1].set_xlabel('Architecture Benefits')
-            axes[1, 1].set_title('Clean Architecture Benefits', fontweight='bold')
+            axes[1, 1].set_xlabel('Consumer Performance Benefits')
+            axes[1, 1].set_title('Benefits of Consumer-Focused Architecture', fontweight='bold')
             axes[1, 1].set_xlim(0, 1.2)
             
             # Remove x-axis ticks for cleaner look
@@ -1104,7 +1106,7 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
             plt.tight_layout()
             
             # Save to MinIO
-            filename = f"feature_architecture_{self.timestamp}.png"
+            filename = f"consumer_feature_architecture_{self.timestamp}.png"
             return self._save_plot_to_minio(fig, filename)
             
         except Exception as e:
@@ -1164,10 +1166,10 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
             return None
     
     def _plot_model_architecture(self, ax, model_state):
-        """Plot model architecture diagram for clean 5-feature architecture."""
-        layers = ['Input\n(9)\n9 Base Features', 'Hidden 1\n(64)', 'Hidden 2\n(32)', 'Output\n(3)']
-        sizes = [5, 64, 32, 3]
-        colors = ['red', 'orange', 'yellow', 'green', 'blue']
+        """Plot model architecture diagram for consumer performance features."""
+        layers = ['Input\n(9)\nConsumer Performance\nFeatures', 'Hidden 1\n(64)', 'Hidden 2\n(32)', 'Output\n(3)\nScaling Actions']
+        sizes = [9, 64, 32, 3]
+        colors = ['red', 'orange', 'yellow', 'green']
         
         for i, (layer, size, color) in enumerate(zip(layers, sizes, colors)):
             # Draw nodes
@@ -1187,46 +1189,63 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
         ax.set_ylim(-0.6, 0.6)
         ax.set_aspect('equal')
         ax.axis('off')
-        ax.set_title('DQN Architecture', fontsize=14, fontweight='bold')
+        ax.set_title('DQN Architecture: Consumer Performance Focus', fontsize=14, fontweight='bold')
     
     def _plot_feature_architecture(self, ax):
-        """Plot feature architecture breakdown showing 9 scientifically-selected base features."""
-        # Define feature groups (scientifically-selected Kubernetes state features)
-        base_features = [
-            'kube_deployment_status_replicas_unavailable',
-            'kube_pod_container_status_ready',
-            'kube_deployment_spec_replicas', 
-            'kube_pod_container_resource_limits_cpu',
-            'kube_pod_container_resource_limits_memory',
-            'kube_pod_container_status_running',
-            'kube_deployment_status_observed_generation',
-            'node_network_up',
-            'kube_pod_container_status_last_terminated_exitcode'
+        """Plot feature architecture breakdown showing 9 scientifically-selected consumer performance features."""
+        # Define feature groups (scientifically-selected consumer performance features)
+        consumer_features = [
+            'process_cpu_seconds_total_rate',
+            'python_gc_collections_total_rate',
+            'python_gc_objects_collected_total_rate',
+            'http_request_duration_seconds_sum_rate',
+            'http_requests_total_rate',
+            'http_request_duration_seconds_count_rate',
+            'process_open_fds',
+            'http_response_size_bytes_sum_rate',
+            'http_request_size_bytes_count_rate'
         ]
         
         # Create bar chart showing feature list
-        y_positions = range(len(base_features))
+        y_positions = range(len(consumer_features))
         colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98FB98', '#F0E68C', '#FFB6C1']
         
-        bars = ax.barh(y_positions, [1]*len(base_features), color=colors, alpha=0.8)
+        bars = ax.barh(y_positions, [1]*len(consumer_features), color=colors, alpha=0.8)
+        
+        # Create readable labels
+        feature_labels = [
+            'CPU Usage Rate',
+            'GC Collections Rate', 
+            'GC Objects Rate',
+            'HTTP Duration Rate',
+            'HTTP Requests Rate',
+            'HTTP Count Rate',
+            'Open File Descriptors',
+            'Response Size Rate',
+            'Request Count Rate'
+        ]
         
         ax.set_yticks(y_positions)
-        ax.set_yticklabels([f.replace('kube_', '').replace('_', ' ').title() for f in base_features], fontsize=10)
+        ax.set_yticklabels(feature_labels, fontsize=10)
         ax.set_xlabel('Feature Importance')
-        ax.set_title('Feature Architecture: 9 Scientifically-Selected Kubernetes Features', 
+        ax.set_title('Consumer Performance Features: 9 Scientifically-Selected Metrics', 
                     fontsize=14, fontweight='bold', pad=20)
         ax.set_xlim(0, 1.2)
         ax.set_xticks([])
         
         # Add checkmarks for each feature
-        for i in range(len(base_features)):
+        for i in range(len(consumer_features)):
             ax.text(1.05, i, '✓', fontsize=16, fontweight='bold', 
                    color='green', ha='center', va='center')
         
         # Add feature description text below
         feature_text = (
-            "Base Features (Scientifically Selected Kubernetes State):\n" + 
-            "\n".join([f"• {f}" for f in base_features])
+            "Consumer Performance Features (Scientifically Selected):\n" + 
+            "• CPU utilization rate (current usage)\n" +
+            "• Memory pressure rates (GC activity)\n" +
+            "• HTTP performance rates (request processing)\n" +
+            "• I/O load indicators (file descriptors)\n" +
+            "• Network payload rates (response/request sizes)"
         )
         
         ax.text(0.5, -0.3, feature_text, transform=ax.transAxes, fontsize=9,
@@ -1351,12 +1370,12 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
         total_training_steps = len(self.training_metrics)
         avg_reward = np.mean([exp['reward'] for exp in self.experiences]) if self.experiences else 0
         
-        # Create table data with new architecture info
+        # Create table data with consumer performance architecture info
         data = [
-            ['Feature Architecture', '9 Base Features (Scientifically Selected)'],
-            ['Base Features', '9 (Kubernetes State Metrics)'],
-            ['Feature Selection', 'DQN-Optimized'],
-            ['Architecture', 'Simplified & Efficient'],
+            ['Feature Architecture', '9 Consumer Performance Metrics (Scientifically Selected)'],
+            ['Consumer Features', '9 (CPU, Memory, HTTP, I/O Performance)'],
+            ['Feature Source', 'Consumer Pod Metrics (Port 8000)'],
+            ['Architecture Focus', 'Direct Performance Impact'],
             ['Total Experiences', f'{total_experiences:,}'],
             ['Training Steps', f'{total_training_steps:,}'],
             ['Average Reward', f'{avg_reward:.3f}'],
@@ -1383,7 +1402,7 @@ Reward: {best_run['performance'].get('avg_reward', 0):.3f}"""
                     cell.set_facecolor('#F0F0F0' if i % 2 == 0 else 'white')
         
         ax.axis('off')
-        ax.set_title('Performance Summary', fontsize=14, fontweight='bold', pad=20)
+        ax.set_title('Performance Summary: Consumer-Focused DQN', fontsize=14, fontweight='bold', pad=20)
     
     def generate_summary_report(self) -> str:
         """Generate comprehensive summary report."""

@@ -9,18 +9,18 @@ The adapter uses **9 scientifically selected raw features** identified through a
 The system uses a **scientifically optimized** approach with **9 carefully selected features**:
 
 ### 📊 BASE FEATURES (9)
-Current system state observations that provide comprehensive scaling intelligence:
-1. **Scaling Issues** (`kube_deployment_status_replicas_unavailable`) - Critical scaling failures
-2. **Pod Health** (`kube_pod_container_status_ready`) - Container readiness status  
-3. **Desired Replicas** (`kube_deployment_spec_replicas`) - Target replica configuration
-4. **Resource Limits CPU** (`kube_pod_container_resource_limits_cpu`) - CPU allocation limits
-5. **Resource Limits Memory** (`kube_pod_container_resource_limits_memory`) - Memory allocation limits
-6. **Container Running Status** (`kube_pod_container_status_running`) - Active container count
-7. **Deployment Generation** (`kube_deployment_status_observed_generation`) - Configuration version
-8. **Network Status** (`node_network_up`) - Cluster network health
-9. **Exit Code** (`kube_pod_container_status_last_terminated_exitcode`) - Container termination health
+Consumer pod performance metrics that provide comprehensive scaling intelligence:
+1. **CPU Utilization Rate** (`process_cpu_seconds_total_rate`) - Per-second CPU usage rate from consumer pods
+2. **GC Collections Rate** (`python_gc_collections_total_rate`) - Garbage collection activity indicating memory pressure
+3. **GC Objects Rate** (`python_gc_objects_collected_total_rate`) - Objects collected per second (memory pressure indicator)
+4. **HTTP Duration Rate** (`http_request_duration_seconds_sum_rate`) - Request latency accumulation rate
+5. **HTTP Requests Rate** (`http_requests_total_rate`) - Request processing rate (primary load indicator)
+6. **HTTP Count Rate** (`http_request_duration_seconds_count_rate`) - Request count accumulation rate
+7. **File Descriptors** (`process_open_fds`) - Current I/O resource usage (connection load)
+8. **Response Size Rate** (`http_response_size_bytes_sum_rate`) - Network payload rate (bandwidth usage)
+9. **Request Count Rate** (`http_request_size_bytes_count_rate`) - Request payload rate
 
-**Total: 9 features providing comprehensive, scientifically-validated input for DQN decision making!**
+**Total: 9 scientifically-selected consumer performance features providing real-time scaling intelligence!**
 
 ### ✅ Architecture Benefits
 - **Scientific Selection**: Features chosen through 6 rigorous statistical methods
