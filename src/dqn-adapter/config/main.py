@@ -25,8 +25,8 @@ class DQNAdapterConfig(BaseSettings):
     # === FEATURE CONFIGURATION ===
     base_features: List[str] = Field(default=[
         'process_cpu_seconds_total_rate',
-        'python_gc_collections_total_rate',
-        'python_gc_objects_collected_total_rate',
+        'process_resident_memory_bytes',
+        'process_virtual_memory_bytes',
         'http_request_duration_seconds_sum_rate',
         'http_requests_total_rate',
         'http_request_duration_seconds_count_rate',

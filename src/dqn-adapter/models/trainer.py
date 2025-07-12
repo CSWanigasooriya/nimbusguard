@@ -43,9 +43,6 @@ class DQNTrainer:
 
         logger.info(f"TRAINER: initialized device={device}")
 
-        # Try to initialize replay buffer with historical data
-        asyncio.create_task(self._load_historical_data())
-
     def _dict_to_feature_vector(self, state_dict):
         """Convert state dictionary to feature vector using only base features."""
         if not self.services or not self.services.scaler:
@@ -55,9 +52,10 @@ class DQNTrainer:
             # Scale the 9 scientifically-selected base features from Prometheus
             raw_features = [state_dict.get(feat, 0.0) for feat in self.services.config.base_features]
 
-            # Transform numpy array to maintain consistency with how scaler was fitted
-            raw_features_array = np.array([raw_features])
-            scaled_raw_features = self.services.scaler.transform(raw_features_array)
+            # Create pandas DataFrame with feature names to match how scaler was fitted
+            import pandas as pd
+            raw_features_df = pd.DataFrame([raw_features], columns=self.services.config.base_features)
+            scaled_raw_features = self.services.scaler.transform(raw_features_df)
 
             # Use only the scaled raw features (9 scientifically-selected features)
             final_feature_vector = scaled_raw_features[0].tolist()
@@ -289,116 +287,5 @@ class DQNTrainer:
         except Exception as e:
             logger.error(f"MODEL_SAVE: failed error={e}")
 
-    async def _load_historical_data(self):
-        """Load historical training data to initialize replay buffer with validation."""
-        try:
-            if not self.services or not self.services.minio_client:
-                logger.info("HISTORICAL_DATA: minio_client_not_available")
-                return
-
-            # Skip historical data loading to avoid reward poisoning
-            # Historical data has zero rewards which biases learning toward conservative actions
-            logger.info("HISTORICAL_DATA: skipping_to_avoid_reward_poisoning")
-            logger.info("HISTORICAL_DATA: model_will_learn_from_live_experiences_only")
-            return
-            
-            # DISABLED CODE BELOW - keeping for future reward reconstruction
-            logger.info("HISTORICAL_DATA: loading_from_minio")
-
-            # Try to load the dataset from MinIO
-            response = self.services.minio_client.get_object(self.services.config.minio.bucket_name, "dqn_features.parquet")
-            dataset_bytes = response.read()
-
-            # Load dataset using pandas
-            import pandas as pd
-            from io import BytesIO
-            df = pd.read_parquet(BytesIO(dataset_bytes))
-
-            logger.info(f"HISTORICAL_DATA: dataset_loaded rows={len(df)} columns={len(df.columns)}")
-
-            # Validate dataset structure
-            required_columns = set(self.services.config.base_features)
-            available_columns = set(df.columns)
-            missing_columns = required_columns - available_columns
-
-            if missing_columns:
-                logger.warning(f"HISTORICAL_DATA: missing_columns {missing_columns}")
-
-            # Convert to training experiences (sample a subset to avoid overwhelming the buffer)
-            max_historical = min(1000, len(df))  # Limit to 1000 historical experiences
-            sampled_df = df.sample(n=max_historical, random_state=42) if len(df) > max_historical else df
-
-            action_map = {0: "Scale Down", 1: "Keep Same", 2: "Scale Up"}
-            loaded_count = 0
-            validation_failures = 0
-
-            for _, row in sampled_df.iterrows():
-                try:
-                    # Validate row data
-                    if row.isnull().sum() > len(row) * 0.5:  # More than 50% null values
-                        validation_failures += 1
-                        continue
-
-                    # Create state from features (adapt to current feature order)
-                    state_dict = {}
-                    for feat in self.feature_order:
-                        if feat in row and pd.notna(row[feat]):
-                            value = float(row[feat])
-                            # Validate feature values
-                            if not np.isfinite(value):
-                                validation_failures += 1
-                                continue
-                            state_dict[feat] = value
-                        else:
-                            state_dict[feat] = 0.0  # Default value for missing features
-
-                    # Validate scaling action
-                    scaling_action = row.get('scaling_action', 1)
-                    if not isinstance(scaling_action, (int, float)) or scaling_action not in [0, 1, 2]:
-                        scaling_action = 1  # Default to "Keep Same"
-
-                    # Create a simple next state (assume minimal change)
-                    next_state_dict = state_dict.copy()
-
-                    experience_dict = {
-                        'state': state_dict,
-                        'action': action_map.get(int(scaling_action), "Keep Same"),
-                        'reward': 0.0,  # Historical reward unknown, use neutral
-                        'next_state': next_state_dict
-                    }
-
-                    # Convert and add to replay buffer
-                    state_vec = self._dict_to_feature_vector(state_dict)
-                    next_state_vec = self._dict_to_feature_vector(next_state_dict)
-
-                    # Validate feature vectors
-                    if not (np.isfinite(state_vec).all() and np.isfinite(next_state_vec).all()):
-                        validation_failures += 1
-                        continue
-
-                    training_exp = TrainingExperience(
-                        state=state_vec,
-                        action=int(scaling_action),
-                        reward=0.0,
-                        next_state=next_state_vec,
-                        done=False
-                    )
-
-                    self.memory.push(training_exp)
-                    loaded_count += 1
-
-                except Exception as exp_error:
-                    validation_failures += 1
-                    logger.debug(f"HISTORICAL_DATA: experience_validation_failed error={exp_error}")
-                    continue  # Skip malformed experiences
-
-            logger.info(f"HISTORICAL_DATA: loading_complete "
-                        f"loaded_experiences={loaded_count} "
-                        f"validation_failures={validation_failures} "
-                        f"success_rate={loaded_count / (loaded_count + validation_failures) * 100:.1f}%")
-
-        except Exception as e:
-            logger.warning(f"HISTORICAL_DATA: load_failed error={e}")
-            # Don't raise - historical data is optional
 
 

@@ -1,12 +1,12 @@
 {
-  "timestamp": "2025-07-12T13:36:52.950010",
+  "timestamp": "2025-07-13T02:36:33.823867",
   "methodology": "Intelligent data-driven feature selection",
   "discovered_metrics": 31,
   "analyzed_metrics": 41,
   "selected_features": [
     "process_cpu_seconds_total_rate",
-    "python_gc_collections_total_rate",
-    "python_gc_objects_collected_total_rate",
+    "process_resident_memory_bytes",
+    "process_virtual_memory_bytes",
     "http_request_duration_seconds_sum_rate",
     "http_requests_total_rate",
     "http_request_duration_seconds_count_rate",
@@ -284,7 +284,7 @@
     "process_resident_memory_bytes": {
       "type": "gauge",
       "category": "memory",
-      "scaling_relevance": 100.0,
+      "scaling_relevance": 120.0,
       "variability": 1.5673609608372536,
       "is_consumer_performance": true,
       "stats": {
@@ -312,7 +312,7 @@
     "process_virtual_memory_bytes": {
       "type": "gauge",
       "category": "memory",
-      "scaling_relevance": 95.0,
+      "scaling_relevance": 115.0,
       "variability": 1.7224872296161813,
       "is_consumer_performance": true,
       "stats": {
@@ -326,7 +326,7 @@
     "python_gc_collections_total": {
       "type": "counter",
       "category": "memory",
-      "scaling_relevance": 65.0,
+      "scaling_relevance": 55.0,
       "variability": 0.6546775910378525,
       "is_consumer_performance": true,
       "stats": {
@@ -340,7 +340,7 @@
     "python_gc_objects_collected_total": {
       "type": "counter",
       "category": "memory",
-      "scaling_relevance": 65.0,
+      "scaling_relevance": 55.0,
       "variability": 2.9688073570342635,
       "is_consumer_performance": true,
       "stats": {
@@ -354,7 +354,7 @@
     "python_gc_objects_uncollectable_total": {
       "type": "counter",
       "category": "memory",
-      "scaling_relevance": 65.0,
+      "scaling_relevance": 55.0,
       "variability": 0,
       "is_consumer_performance": true,
       "stats": {
@@ -516,7 +516,7 @@
     "python_gc_collections_total_rate": {
       "type": "gauge",
       "category": "memory",
-      "scaling_relevance": 85.0,
+      "scaling_relevance": 75.0,
       "variability": 1.9177145414357266,
       "is_consumer_performance": true,
       "derived_from": "python_gc_collections_total"
@@ -524,7 +524,7 @@
     "python_gc_objects_collected_total_rate": {
       "type": "gauge",
       "category": "memory",
-      "scaling_relevance": 85.0,
+      "scaling_relevance": 75.0,
       "variability": 1.7474971552814982,
       "is_consumer_performance": true,
       "derived_from": "python_gc_objects_collected_total"

@@ -26,8 +26,8 @@ class DecisionReasoning:
 
         # Analyze key performance indicators using consumer pod metrics
         cpu_rate = metrics.get('process_cpu_seconds_total_rate', 0.0)
-        gc_collections_rate = metrics.get('python_gc_collections_total_rate', 0.0)
-        gc_objects_rate = metrics.get('python_gc_objects_collected_total_rate', 0.0)
+        resident_memory = metrics.get('process_resident_memory_bytes', 0.0)
+        virtual_memory = metrics.get('process_virtual_memory_bytes', 0.0)
         http_duration_rate = metrics.get('http_request_duration_seconds_sum_rate', 0.0)
         http_requests_rate = metrics.get('http_requests_total_rate', 0.0)
         http_count_rate = metrics.get('http_request_duration_seconds_count_rate', 0.0)
@@ -51,17 +51,20 @@ class DecisionReasoning:
             analysis['insights']['cpu'] = "CPU USAGE NORMAL"
             analysis['performance_indicators']['cpu_severity'] = 'normal'
 
-        # Memory pressure analysis (via GC metrics)
-        if gc_collections_rate > 0.1:
-            analysis['insights']['memory'] = "HIGH GC PRESSURE"
-            analysis['risk_factors'].append(f"GC collections rate {gc_collections_rate:.4f} - high memory pressure")
+        # Memory usage analysis (using actual memory metrics)
+        resident_memory_mb = resident_memory / 1000000 if resident_memory > 0 else 0
+        virtual_memory_mb = virtual_memory / 1000000 if virtual_memory > 0 else 0
+        
+        if resident_memory_mb > 500:  # High memory usage threshold
+            analysis['insights']['memory'] = "HIGH MEMORY USAGE"
+            analysis['risk_factors'].append(f"Resident memory {resident_memory_mb:.1f}MB - high memory usage")
             analysis['performance_indicators']['memory_severity'] = 'critical'
-        elif gc_collections_rate > 0.05:
-            analysis['insights']['memory'] = "ELEVATED GC PRESSURE"
-            analysis['risk_factors'].append(f"GC collections rate {gc_collections_rate:.4f} - moderate memory pressure")
+        elif resident_memory_mb > 200:  # Moderate memory usage threshold
+            analysis['insights']['memory'] = "ELEVATED MEMORY USAGE"
+            analysis['risk_factors'].append(f"Resident memory {resident_memory_mb:.1f}MB - moderate memory usage")
             analysis['performance_indicators']['memory_severity'] = 'warning'
         else:
-            analysis['insights']['memory'] = "GC PRESSURE NORMAL"
+            analysis['insights']['memory'] = "MEMORY USAGE NORMAL"
             analysis['performance_indicators']['memory_severity'] = 'normal'
 
         # Network/HTTP performance analysis
@@ -228,10 +231,17 @@ class DecisionReasoning:
         # Key metrics at time of decision (actual consumer pod metrics being used)
         self.reasoning_logger.info(
             f"AI_REASONING: raw_feature name=cpu_rate value={metrics.get('process_cpu_seconds_total_rate', 'N/A')}")
+        
+        # Convert memory values to MB for better readability
+        resident_memory_raw = metrics.get('process_resident_memory_bytes', 0)
+        virtual_memory_raw = metrics.get('process_virtual_memory_bytes', 0)
+        resident_memory_mb = resident_memory_raw / 1000000 if resident_memory_raw > 0 else 0
+        virtual_memory_mb = virtual_memory_raw / 1000000 if virtual_memory_raw > 0 else 0
+        
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=gc_collections_rate value={metrics.get('python_gc_collections_total_rate', 'N/A')}")
+            f"AI_REASONING: raw_feature name=resident_memory_mb value={resident_memory_mb:.1f}MB")
         self.reasoning_logger.info(
-            f"AI_REASONING: raw_feature name=gc_objects_rate value={metrics.get('python_gc_objects_collected_total_rate', 'N/A')}")
+            f"AI_REASONING: raw_feature name=virtual_memory_mb value={virtual_memory_mb:.1f}MB")
         self.reasoning_logger.info(
             f"AI_REASONING: raw_feature name=http_duration_rate value={metrics.get('http_request_duration_seconds_sum_rate', 'N/A')}")
         self.reasoning_logger.info(

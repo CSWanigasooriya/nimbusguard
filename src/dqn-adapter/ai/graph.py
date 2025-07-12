@@ -12,6 +12,7 @@ from langgraph.graph import StateGraph, END
 from models.models import ScalingState
 from monitoring.metrics import *
 from .reasoning import DecisionReasoning
+from .rewards import calculate_stable_reward
 from core.services import ServiceContainer
 
 logger = logging.getLogger("LangGraph")
@@ -81,33 +82,34 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
     # FIXED: Multi-dimensional consumer pod queries with proper target deployment scoping
     # These queries target consumer pod metrics with rate calculations where needed
     # Using job=prometheus.scrape.nimbusguard_consumer to target specifically the consumer deployment
+    # FIXED: Changed rate window from [2m] to [30s] to match stabilization period
     queries = {
         # 1. CPU rate (process CPU seconds total rate across consumer pods)
-        "process_cpu_seconds_total_rate": f'sum(rate(process_cpu_seconds_total{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
+        "process_cpu_seconds_total_rate": f'sum(rate(process_cpu_seconds_total{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
 
-        # 2. Python GC collections rate (memory pressure indicator)
-        "python_gc_collections_total_rate": f'sum(rate(python_gc_collections_total{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
+        # 2. Process resident memory bytes (actual physical memory usage - CRITICAL for scaling)
+        "process_resident_memory_bytes": f'sum(process_resident_memory_bytes{{job="prometheus.scrape.nimbusguard_consumer"}}) or vector(0)',
 
-        # 3. Python GC objects collected rate (memory churn indicator)
-        "python_gc_objects_collected_total_rate": f'sum(rate(python_gc_objects_collected_total{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
+        # 3. Process virtual memory bytes (virtual memory usage - CRITICAL for scaling)
+        "process_virtual_memory_bytes": f'sum(process_virtual_memory_bytes{{job="prometheus.scrape.nimbusguard_consumer"}}) or vector(0)',
 
         # 4. HTTP request duration sum rate (latency indicator)
-        "http_request_duration_seconds_sum_rate": f'sum(rate(http_request_duration_seconds_sum{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
+        "http_request_duration_seconds_sum_rate": f'sum(rate(http_request_duration_seconds_sum{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
 
         # 5. HTTP requests total rate (throughput indicator)
-        "http_requests_total_rate": f'sum(rate(http_requests_total{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
+        "http_requests_total_rate": f'sum(rate(http_requests_total{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
 
         # 6. HTTP request duration count rate (request count indicator)
-        "http_request_duration_seconds_count_rate": f'sum(rate(http_request_duration_seconds_count{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
+        "http_request_duration_seconds_count_rate": f'sum(rate(http_request_duration_seconds_count{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
 
         # 7. Process open file descriptors (system resource indicator)
         "process_open_fds": f'sum(process_open_fds{{job="prometheus.scrape.nimbusguard_consumer"}}) or vector(0)',
 
         # 8. HTTP response size bytes sum rate (response size indicator)
-        "http_response_size_bytes_sum_rate": f'sum(rate(http_response_size_bytes_sum{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
+        "http_response_size_bytes_sum_rate": f'sum(rate(http_response_size_bytes_sum{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
 
         # 9. HTTP request size bytes count rate (request size indicator)
-        "http_request_size_bytes_count_rate": f'sum(rate(http_request_size_bytes_count{{job="prometheus.scrape.nimbusguard_consumer"}}[2m])) or vector(0)',
+        "http_request_size_bytes_count_rate": f'sum(rate(http_request_size_bytes_count{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
 
         # AUXILIARY: Current replica count for scaling decisions
         "current_replicas": f'kube_deployment_status_replicas{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}}',
@@ -132,7 +134,8 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
     # Log key queries for debugging consumer pod metrics
     logger.debug(f"CPU_RATE_QUERY: {queries['process_cpu_seconds_total_rate']}")
     logger.debug(f"HTTP_REQUESTS_QUERY: {queries['http_requests_total_rate']}")
-    logger.debug(f"GC_COLLECTIONS_QUERY: {queries['python_gc_collections_total_rate']}")
+    logger.debug(f"RESIDENT_MEMORY_QUERY: {queries['process_resident_memory_bytes']}")
+    logger.debug(f"VIRTUAL_MEMORY_QUERY: {queries['process_virtual_memory_bytes']}")
     logger.debug(f"OPEN_FDS_QUERY: {queries['process_open_fds']}")
 
     tasks = {name: services.prometheus_client.query(query) for name, query in queries.items()}
@@ -165,8 +168,8 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
 
     # Enhanced logging with consumer pod metrics
     cpu_rate = metrics.get('process_cpu_seconds_total_rate', 0.0)
-    gc_collections_rate = metrics.get('python_gc_collections_total_rate', 0.0)
-    gc_objects_rate = metrics.get('python_gc_objects_collected_total_rate', 0.0)
+    resident_memory = metrics.get('process_resident_memory_bytes', 0.0)
+    virtual_memory = metrics.get('process_virtual_memory_bytes', 0.0)
     http_duration_rate = metrics.get('http_request_duration_seconds_sum_rate', 0.0)
     http_requests_rate = metrics.get('http_requests_total_rate', 0.0)
     http_count_rate = metrics.get('http_request_duration_seconds_count_rate', 0.0)
@@ -184,8 +187,8 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
     memory_limits = metrics.get('pod_resource_limits_memory', 0)
     network_up = metrics.get('node_network_up', 0)
 
-    logger.info(f"CONSUMER_METRICS: cpu_rate={cpu_rate:.4f} gc_collections_rate={gc_collections_rate:.4f} "
-                f"gc_objects_rate={gc_objects_rate:.4f} http_requests_rate={http_requests_rate:.4f} "
+    logger.info(f"CONSUMER_METRICS: cpu_rate={cpu_rate:.4f} resident_memory={resident_memory:.0f}bytes "
+                f"virtual_memory={virtual_memory:.0f}bytes http_requests_rate={http_requests_rate:.4f} "
                 f"current_replicas={current_replicas}")
 
     logger.info(f"NETWORK_METRICS: http_duration_rate={http_duration_rate:.4f} "
@@ -217,13 +220,16 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
         # Analyze system load patterns
         if http_requests_rate > 0:
             avg_request_duration = http_duration_rate / http_requests_rate if http_requests_rate > 0 else 0
+            # Convert memory from bytes to MB for readability
+            resident_memory_mb = resident_memory / 1000000 if resident_memory > 0 else 0
+            virtual_memory_mb = virtual_memory / 1000000 if virtual_memory > 0 else 0
             logger.info(f"PERFORMANCE_ANALYSIS: avg_request_duration={avg_request_duration:.4f}s "
-                        f"gc_pressure={gc_collections_rate:.4f} fds_usage={open_fds:.0f}")
+                        f"resident_memory={resident_memory_mb:.1f}MB virtual_memory={virtual_memory_mb:.1f}MB fds_usage={open_fds:.0f}")
         
         # Load distribution analysis
         logger.info(f"SCALING_INDICATORS: replicas={current_replicas} "
                     f"total_cpu_rate={cpu_rate:.4f} total_http_rate={http_requests_rate:.4f} "
-                    f"memory_pressure={gc_collections_rate:.4f}")
+                    f"memory_usage_mb={resident_memory / 1000000:.1f}")
 
     # Log feature availability for debugging (clean architecture: consumer metrics only)
     # Check if features exist (not None) rather than > 0, since 0 can be a valid value
@@ -252,8 +258,8 @@ def _ensure_raw_features(metrics: Dict[str, float]) -> Dict[str, float]:
     # Consumer pod metric defaults (application performance indicators)
     feature_defaults = {
         'process_cpu_seconds_total_rate': 0.0,  # Default: no CPU usage rate
-        'python_gc_collections_total_rate': 0.0,  # Default: no GC collections rate
-        'python_gc_objects_collected_total_rate': 0.0,  # Default: no GC objects rate
+        'process_resident_memory_bytes': 0.0,  # Default: no resident memory usage
+        'process_virtual_memory_bytes': 0.0,  # Default: no virtual memory usage
         'http_request_duration_seconds_sum_rate': 0.0,  # Default: no HTTP latency rate
         'http_requests_total_rate': 0.0,  # Default: no HTTP requests rate
         'http_request_duration_seconds_count_rate': 0.0,  # Default: no HTTP request count rate
@@ -301,9 +307,10 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
     # Scale the 9 scientifically-selected base features from Prometheus with proper feature names
     raw_features = [metrics.get(feat, 0.0) for feat in services.config.base_features]
 
-    # Transform numpy array to maintain consistency with how scaler was fitted (no feature names)
-    raw_features_array = np.array([raw_features])
-    scaled_raw_features = services.scaler.transform(raw_features_array)
+    # Create pandas DataFrame with feature names to match how scaler was fitted
+    import pandas as pd
+    raw_features_df = pd.DataFrame([raw_features], columns=services.config.base_features)
+    scaled_raw_features = services.scaler.transform(raw_features_df)
 
     # Use only the scaled raw features for DQN (9 scientifically-selected features)
     final_feature_vector = scaled_raw_features[0].tolist()
@@ -486,8 +493,8 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
 
             # Get current consumer pod metrics for fallback decision
             cpu_rate = metrics.get('process_cpu_seconds_total_rate', 0.0)
-            gc_collections_rate = metrics.get('python_gc_collections_total_rate', 0.0)
-            gc_objects_rate = metrics.get('python_gc_objects_collected_total_rate', 0.0)
+            resident_memory = metrics.get('process_resident_memory_bytes', 0.0)
+            virtual_memory = metrics.get('process_virtual_memory_bytes', 0.0)
             http_duration_rate = metrics.get('http_request_duration_seconds_sum_rate', 0.0)
             http_requests_rate = metrics.get('http_requests_total_rate', 0.0)
             http_count_rate = metrics.get('http_request_duration_seconds_count_rate', 0.0)
@@ -504,10 +511,14 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
             # Decision logic based on consumer application metrics
             avg_request_duration = http_duration_rate / http_requests_rate if http_requests_rate > 0 else 0
             
-            if cpu_rate > 0.8 or gc_collections_rate > 0.1 or avg_request_duration > 1.0:  # High load/pressure
+            # Memory pressure indicators (convert to MB for thresholds)
+            resident_memory_mb = resident_memory / 1000000 if resident_memory > 0 else 0
+            virtual_memory_mb = virtual_memory / 1000000 if virtual_memory > 0 else 0
+            
+            if cpu_rate > 0.8 or avg_request_duration > 1.0 or resident_memory_mb > 500:  # High load/pressure
                 action_name = "Scale Up"
                 reasoning_factors.append(
-                    f"High load detected: CPU rate {cpu_rate:.4f}, GC rate {gc_collections_rate:.4f}, avg duration {avg_request_duration:.4f}s")
+                    f"High load detected: CPU rate {cpu_rate:.4f}, avg duration {avg_request_duration:.4f}s, memory {resident_memory_mb:.1f}MB")
                 reasoning_factors.append("Scaling up to handle increased load and reduce latency")
                 risk_level = "high"
             elif http_requests_rate > 10.0 or response_size_rate > 1000000:  # High traffic
@@ -516,25 +527,25 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
                     f"High traffic: {http_requests_rate:.4f} req/s, response size rate {response_size_rate:.0f} bytes/s")
                 reasoning_factors.append("Scaling up to handle high traffic volume")
                 risk_level = "medium"
-            elif cpu_rate < 0.1 and http_requests_rate < 1.0 and current_replicas > 1:  # Low utilization
+            elif cpu_rate < 0.1 and http_requests_rate < 1.0 and resident_memory_mb < 100 and current_replicas > 1:  # Low utilization
                 action_name = "Scale Down"
                 reasoning_factors.append(
-                    f"Low utilization: CPU rate {cpu_rate:.4f}, HTTP rate {http_requests_rate:.4f}")
+                    f"Low utilization: CPU rate {cpu_rate:.4f}, HTTP rate {http_requests_rate:.4f}, memory {resident_memory_mb:.1f}MB")
                 reasoning_factors.append(
                     f"System has excess capacity with {current_replicas} replicas - can optimize costs")
                 risk_level = "low"
             # ENHANCED: Add explicit scale-down for high replica counts with low load
-            elif current_replicas >= 8 and cpu_rate < 0.2 and http_requests_rate < 2.0:  # Over-provisioned
+            elif current_replicas >= 8 and cpu_rate < 0.2 and http_requests_rate < 2.0 and resident_memory_mb < 200:  # Over-provisioned
                 action_name = "Scale Down"
                 reasoning_factors.append(
                     f"Over-provisioned: {current_replicas} replicas with low load - cost optimization opportunity")
                 reasoning_factors.append(
-                    f"Low load indicators: CPU rate {cpu_rate:.4f}, HTTP rate {http_requests_rate:.4f}")
+                    f"Low load indicators: CPU rate {cpu_rate:.4f}, HTTP rate {http_requests_rate:.4f}, memory {resident_memory_mb:.1f}MB")
                 risk_level = "low"
             else:
                 action_name = "Keep Same"
                 reasoning_factors.append(
-                    f"Balanced state: CPU rate {cpu_rate:.4f}, HTTP rate {http_requests_rate:.4f}, {current_replicas} replicas")
+                    f"Balanced state: CPU rate {cpu_rate:.4f}, HTTP rate {http_requests_rate:.4f}, memory {resident_memory_mb:.1f}MB, {current_replicas} replicas")
                 reasoning_factors.append("System operating within acceptable parameters")
                 risk_level = "low"
 
@@ -642,7 +653,7 @@ CURRENT SYSTEM METRICS:
 
 🔍 EXTREME DECISION CRITERIA (Block these ONLY):
 
-1. **RUNAWAY SCALING**: Scaling to >15 replicas without clear justification
+1. **RUNAWAY SCALING**: Scaling to >50 replicas without clear justification
 2. **RESOURCE EXHAUSTION**: Scaling up when cluster resources are constrained  
 3. **MASSIVE OVER-SCALING**: Requesting 3x+ more replicas than needed (consider system capacity)
 4. **DANGEROUS DOWN-SCALING**: Scaling to 0 or very low when system shows stress
@@ -1175,478 +1186,6 @@ async def observe_next_state_and_calculate_reward(state: ScalingState, services:
     return {"experience": experience}
 
 
-def calculate_stable_reward(current_state, next_state, action, current_replicas, config=None):
-    """
-    RESEARCH-BASED: Reward function using ONLY the metrics DQN actually sees.
-    Fixes the fundamental issue where reward used different metrics than DQN input.
-    """
-
-    # === USE ONLY ACTUAL DQN INPUT FEATURES ===
-    # These are the 5 base metrics the DQN uses for decisions
-
-    # Current state metrics (what DQN saw when making decision)
-    curr_unavailable = current_state.get('kube_deployment_status_replicas_unavailable', 0)
-    curr_ready = current_state.get('kube_pod_container_status_ready', 1.0)
-    curr_desired = current_state.get('kube_deployment_spec_replicas', 1)
-    curr_running = current_state.get('kube_pod_container_status_running', 1.0)
-    curr_generation = current_state.get('kube_deployment_status_observed_generation', 1)
-    curr_cpu_limits = current_state.get('kube_pod_container_resource_limits_cpu', 0.5)
-    curr_memory_limits = current_state.get('kube_pod_container_resource_limits_memory', 536870912)
-    curr_network_up = current_state.get('node_network_up', 1)
-    curr_exit_code = current_state.get('kube_pod_container_status_last_terminated_exitcode', 0)
-
-    # Next state metrics (outcome after DQN action)
-    next_unavailable = next_state.get('kube_deployment_status_replicas_unavailable', 0)
-    next_ready = next_state.get('kube_pod_container_status_ready', 1.0)
-    next_desired = next_state.get('kube_deployment_spec_replicas', 1)
-    next_running = next_state.get('kube_pod_container_status_running', 1.0)
-    next_generation = next_state.get('kube_deployment_status_observed_generation', 1)
-    next_cpu_limits = next_state.get('kube_pod_container_resource_limits_cpu', 0.5)
-    next_memory_limits = next_state.get('kube_pod_container_resource_limits_memory', 536870912)
-    next_network_up = next_state.get('node_network_up', 1)
-    next_exit_code = next_state.get('kube_pod_container_status_last_terminated_exitcode', 0)
-
-    # Convert to more interpretable units
-    curr_memory_mb = curr_memory_limits / 1000000
-    next_memory_mb = next_memory_limits / 1000000
-
-    # === PERFORMANCE COMPONENT (40%) ===
-    # Reward system stability and health improvements with accurate scaling
-
-    # FIXED: Use normalized absolute improvements instead of ratios
-    readiness_improvement = (next_ready - curr_ready) / max(1, next_desired)  # Normalize by target
-    availability_improvement = max(0, curr_unavailable - next_unavailable) / max(1, next_desired)  # Normalize by target
-
-    # Container health improvement (normalized)
-    running_improvement = (next_running - curr_running) / max(1, next_desired)  # Normalize by target
-    exit_code_improvement = max(0, abs(curr_exit_code) - abs(next_exit_code)) * 0.1  # Better exit codes
-
-    # FIXED: Component-wise clipping to prevent extreme values
-    performance_score = np.clip(
-        readiness_improvement * 3.0 +  # Readiness is critical
-        availability_improvement * 2.0 +  # Availability is key
-        running_improvement * 1.0 +  # More running containers
-        exit_code_improvement,  # Healthier exits
-        -5.0, 5.0  # Bound performance component
-    )
-
-    # === RESOURCE EFFICIENCY COMPONENT (30%) ===
-    # FIXED: Measure total resource efficiency changes, not per-replica (which never changes)
-    
-    # Get actual deployment resource specifications (per-replica basis)
-    actual_cpu_limit_per_replica = current_state.get('deployment_cpu_limits_per_replica', next_state.get('deployment_cpu_limits_per_replica', 0.25))
-    actual_memory_limit_per_replica = current_state.get('deployment_memory_limits_per_replica', next_state.get('deployment_memory_limits_per_replica', 268435456))
-    actual_cpu_request_per_replica = current_state.get('deployment_cpu_requests_per_replica', next_state.get('deployment_cpu_requests_per_replica', 0.1))
-    actual_memory_request_per_replica = current_state.get('deployment_memory_requests_per_replica', next_state.get('deployment_memory_requests_per_replica', 134217728))
-    
-    # Convert memory to MB for easier interpretation
-    actual_memory_limit_mb_per_replica = actual_memory_limit_per_replica / 1000000
-    actual_memory_request_mb_per_replica = actual_memory_request_per_replica / 1000000
-    
-    # FIXED: Calculate TOTAL resource allocation (this changes with scaling)
-    curr_total_cpu = curr_desired * actual_cpu_limit_per_replica
-    next_total_cpu = next_desired * actual_cpu_limit_per_replica
-    curr_total_memory_mb = curr_desired * actual_memory_limit_mb_per_replica  
-    next_total_memory_mb = next_desired * actual_memory_limit_mb_per_replica
-
-    # Define optimal total resource ranges based on system load patterns
-    def total_resource_efficiency_score(total_cpu, total_memory_mb, replicas):
-        """
-        Evaluate total resource allocation efficiency.
-        Rewards right-sizing for typical workloads, penalizes waste and under-provisioning.
-        """
-        # Ideal total resource ranges for most applications
-        ideal_cpu_range = (1.0, 4.0)        # 1-4 total CPU cores  
-        ideal_memory_range = (800, 3200)     # 800MB-3.2GB total memory
-        
-        # Scale efficiency based on replica count (more replicas = higher tolerance)
-        cpu_efficiency = 1.0 if ideal_cpu_range[0] <= total_cpu <= ideal_cpu_range[1] + replicas * 0.5 else \
-                        max(-1.0, 1.0 - abs(total_cpu - np.mean(ideal_cpu_range)) / np.mean(ideal_cpu_range))
-        
-        memory_efficiency = 1.0 if ideal_memory_range[0] <= total_memory_mb <= ideal_memory_range[1] + replicas * 100 else \
-                           max(-1.0, 1.0 - abs(total_memory_mb - np.mean(ideal_memory_range)) / np.mean(ideal_memory_range))
-        
-        # Combine and normalize
-        efficiency = (cpu_efficiency + memory_efficiency) / 2.0
-        
-        # Bonus for efficient small deployments, penalty for waste
-        if replicas <= 3 and total_cpu <= 2.0 and total_memory_mb <= 1200:
-            efficiency += 0.5  # Reward efficient small deployments
-        elif replicas >= 8 and total_cpu >= 6.0:
-            efficiency -= 0.3  # Penalize potential over-provisioning
-            
-        return np.clip(efficiency, -2.0, 2.0)
-
-    curr_total_efficiency = total_resource_efficiency_score(curr_total_cpu, curr_total_memory_mb, current_replicas)
-    next_total_efficiency = total_resource_efficiency_score(next_total_cpu, next_total_memory_mb, next_desired)
-    resource_score = next_total_efficiency - curr_total_efficiency
-    
-    # Debug log to show the fix working
-    logger.debug(f"RESOURCE_EFFICIENCY_FIX: curr_total={curr_total_cpu:.1f}cpu+{curr_total_memory_mb:.0f}mb->efficiency={curr_total_efficiency:.2f} "
-                f"next_total={next_total_cpu:.1f}cpu+{next_total_memory_mb:.0f}mb->efficiency={next_total_efficiency:.2f} "
-                f"resource_score={resource_score:.2f}")
-
-    # === SYSTEM HEALTH COMPONENT (20%) ===
-    # Reward network stability and deployment health
-
-    network_health = next_network_up / max(0.1, curr_network_up) - 1.0  # Network improvement
-    deployment_stability = max(0, 2.0 - abs(next_generation - curr_generation) * 0.1)  # Stable deployments
-
-    health_score = network_health + deployment_stability
-
-    # === COST OPTIMIZATION COMPONENT (10%) ===
-    # FIXED: Smooth cost function eliminates discontinuities that confuse learning
-
-    def smooth_cost_function(replicas):
-        """Smooth cost function prevents learning discontinuities."""
-        if replicas <= 3:
-            return 2.0  # Reward very efficient sizing
-        elif replicas <= 12:
-            # Linear decay from 2.0 to 0.0 (smooth transition)
-            return 2.0 - (replicas - 3) * (2.0 / 9.0)
-        else:
-            # Gentle penalty for over-provisioning (no sudden jumps)
-            return -0.1 * (replicas - 12)
-
-    cost_score = smooth_cost_function(next_desired)
-
-    # === LOAD AWARENESS COMPONENT (NEW) ===
-    # CRITICAL: Evaluate if pod states are appropriate for actual resource demand
-    
-    def calculate_load_awareness_score(cpu_per_replica, memory_per_replica):
-        """
-        Assess if current resource allocation matches actual demand.
-        Prevents rewarding over-provisioning during low load periods.
-        """
-        # Ideal resource pressure ranges per replica
-        ideal_cpu_range = (0.3, 1.2)    # 30% to 120% of 1 core per replica
-        ideal_memory_range = (150, 600)  # 150MB to 600MB per replica
-        
-        # Calculate efficiency scores
-        cpu_efficiency = 1.0 if ideal_cpu_range[0] <= cpu_per_replica <= ideal_cpu_range[1] else \
-                        max(0, 1.0 - abs(cpu_per_replica - np.mean(ideal_cpu_range)) / np.mean(ideal_cpu_range))
-        
-        memory_efficiency = 1.0 if ideal_memory_range[0] <= memory_per_replica <= ideal_memory_range[1] else \
-                           max(0, 1.0 - abs(memory_per_replica - np.mean(ideal_memory_range)) / np.mean(ideal_memory_range))
-        
-        # Combined load awareness score
-        load_score = (cpu_efficiency + memory_efficiency) / 2.0
-        
-        # Penalty for wasteful over-provisioning (very low resource usage)
-        if cpu_per_replica < 0.2 and memory_per_replica < 100:
-            load_score -= 0.5  # Significant penalty for waste
-        
-        return np.clip(load_score, -1.0, 1.0)
-    
-    # Use ACTUAL deployment resource specifications for load awareness
-    load_awareness_score = calculate_load_awareness_score(actual_cpu_limit_per_replica, actual_memory_limit_mb_per_replica)
-
-    # === ACTION APPROPRIATENESS PENALTY (SIMPLIFIED) ===
-    # FIXED: Simplified logic, easier to debug and understand
-    
-    action_penalty = 0.0
-    
-    # Define system state using actual deployment specifications
-    is_healthy = (next_unavailable == 0 and next_ready >= 0.95 and next_running > 0)
-    is_overprovisioned = (actual_cpu_limit_per_replica < 0.3 and actual_memory_limit_mb_per_replica < 150)
-    is_underprovisioned = (actual_cpu_limit_per_replica > 1.2 or actual_memory_limit_mb_per_replica > 600)
-    
-    if action == "Scale Down":
-        if current_replicas <= 1:
-            action_penalty = -1.0  # Prevent scaling below minimum
-        elif not is_healthy:
-            action_penalty = -0.5  # Light penalty for scaling down unhealthy systems
-        elif is_overprovisioned:
-            action_penalty = +0.5  # Reward scaling down when over-provisioned
-    
-    elif action == "Scale Up":
-        if is_underprovisioned and is_healthy:
-            action_penalty = +0.2  # Light reward for scaling up when under-provisioned
-        elif current_replicas >= 12:
-            action_penalty = -0.5  # Prevent excessive scaling
-        elif is_overprovisioned:
-            action_penalty = -0.3  # Discourage scaling up when over-provisioned
-
-    # === FINAL REWARD CALCULATION (IMPROVED) ===
-    if config:
-        total_reward = (
-                performance_score * config.reward.performance_weight +
-                resource_score * config.reward.resource_weight +
-                health_score * config.reward.health_weight +
-                cost_score * config.reward.cost_weight +
-                load_awareness_score * 0.15 +  # NEW: Load awareness component (15% weight)
-                action_penalty
-        )
-        
-        # Enhanced logging with config values
-        logger.info(f"REWARD_BREAKDOWN: performance={performance_score:.2f}({config.reward.performance_weight:.0%}) "
-                    f"resource={resource_score:.2f}({config.reward.resource_weight:.0%}) health={health_score:.2f}({config.reward.health_weight:.0%}) "
-                    f"cost={cost_score:.2f}({config.reward.cost_weight:.0%}) load_awareness={load_awareness_score:.2f}(15%) "
-                    f"action_penalty={action_penalty:.2f} total={total_reward:.2f}")
-    else:
-        # Fallback to defaults if config not available
-        total_reward = (
-                performance_score * 0.35 +  # ADJUSTED: Reduced from 40% to make room for load awareness
-                resource_score * 0.25 +     # ADJUSTED: Reduced from 30% to make room for load awareness
-                health_score * 0.15 +       # ADJUSTED: Reduced from 20% to make room for load awareness
-                cost_score * 0.10 +         # UNCHANGED: 10%
-                load_awareness_score * 0.15 +  # NEW: Load awareness component (15% weight)
-                action_penalty
-        )
-        
-        logger.info(f"REWARD_BREAKDOWN: performance={performance_score:.2f}(35%) "
-                    f"resource={resource_score:.2f}(25%) health={health_score:.2f}(15%) "
-                    f"cost={cost_score:.2f}(10%) load_awareness={load_awareness_score:.2f}(15%) "
-                    f"action_penalty={action_penalty:.2f} total={total_reward:.2f}")
-
-    # Clip to reasonable range
-    total_reward = np.clip(total_reward, -10.0, 10.0)
-
-    # Enhanced logging with fixed resource calculations
-    logger.info(f"REWARD_STATE_ANALYSIS: curr_replicas={current_replicas} next_replicas={next_desired} "
-                f"readiness={curr_ready:.2f}=>{next_ready:.2f} unavailable={curr_unavailable}=>{next_unavailable} "
-                f"cpu_total={curr_total_cpu:.1f}=>{next_total_cpu:.1f} "
-                f"memory_total_mb={curr_total_memory_mb:.0f}=>{next_total_memory_mb:.0f} "
-                f"resource_efficiency={curr_total_efficiency:.2f}=>{next_total_efficiency:.2f} "
-                f"load_awareness={load_awareness_score:.2f}")
-    
-    # Log actual deployment resource specifications being used
-    logger.info(f"RESOURCE_SPECS_ACTUAL: cpu_limit_per_replica={actual_cpu_limit_per_replica:.3f}cores "
-                f"memory_limit_per_replica={actual_memory_limit_mb_per_replica:.0f}MB "
-                f"cpu_request_per_replica={actual_cpu_request_per_replica:.3f}cores "
-                f"memory_request_per_replica={actual_memory_request_mb_per_replica:.0f}MB")
-    
-    # Compare with total resource allocation
-    total_cpu_allocated = actual_cpu_limit_per_replica * next_desired
-    total_memory_allocated = actual_memory_limit_mb_per_replica * next_desired
-    logger.info(f"RESOURCE_ALLOCATION_TOTAL: replicas={next_desired} "
-                f"cpu_total={total_cpu_allocated:.2f}cores "
-                f"memory_total={total_memory_allocated:.0f}MB "
-                f"efficient={'YES' if total_cpu_allocated <= 2.0 and total_memory_allocated <= 1000 else 'NO'}")
-
-
-
-    return total_reward
-
-
-def calculate_response_efficiency(http_bucket_count, response_size_sum):
-    """Calculate response efficiency score (higher is better)."""
-    # Normalize metrics and combine for efficiency score
-    bucket_score = max(0, 5.0 - http_bucket_count * 0.002)  # Lower bucket count = better
-    size_score = max(0, 3.0 - response_size_sum * 0.00001)  # Reasonable response size
-    return (bucket_score + size_score) / 2.0
-
-
-def calculate_cpu_efficiency(current_cpu, next_cpu, replicas):
-    """Calculate CPU utilization efficiency."""
-    cpu_usage_rate = max(0.1, next_cpu - current_cpu)  # CPU usage in time period
-    cpu_per_replica = cpu_usage_rate / max(1, replicas)
-
-    # Optimal CPU usage per replica (not too low, not too high)
-    if 0.5 <= cpu_per_replica <= 2.0:  # Sweet spot
-        return 2.0
-    elif cpu_per_replica < 0.5:  # Under-utilized
-        return 1.0 - (0.5 - cpu_per_replica)
-    else:  # Over-utilized
-        return max(0, 2.0 - (cpu_per_replica - 2.0) * 0.5)
-
-
-def calculate_health_score(current_scrape, next_scrape, memory_mb, http_buckets):
-    """Calculate overall system health score."""
-    # Scrape sample health (monitoring effectiveness)
-    scrape_health = min(3.0, next_scrape / 100.0)  # 300+ samples = full score
-
-    # System stress indicators
-    memory_stress = max(0, 2.0 - max(0, memory_mb - 500) * 0.002)  # Penalty for >500MB
-    traffic_stress = max(0, 2.0 - max(0, http_buckets - 100) * 0.001)  # Penalty for high traffic
-
-    return (scrape_health + memory_stress + traffic_stress) / 3.0
-
-
-def calculate_proactive_bonus(action, current_state, next_state):
-    """
-    Simple bonus function that doesn't rely on LSTM predictions.
-    Rewards sensible scaling decisions based on system state only.
-    """
-    # Since LSTM is removed, return 0 (no additional bonus)
-    return 0.0
-
-
-def calculate_action_penalty(action, current_replicas, current_state=None, next_state=None):
-    """
-    BALANCED: Much reduced penalties, focus on rewarding good decisions.
-    Addresses: Reduced harsh penalties + appropriate scale-down rewards + load context.
-    FIXED: Uses actual selected features (gauges), not cumulative counters.
-    """
-    penalty = 0.0
-
-    # FIXED: Get load context using actual available metrics from our feature set
-    if current_state:
-        unavailable_replicas = current_state.get('kube_deployment_status_replicas_unavailable', 0)
-        pod_readiness = current_state.get('kube_pod_container_status_ready', 1.0)
-        running_containers = current_state.get('kube_pod_container_status_running', 0)
-        cpu_limits = current_state.get('kube_pod_container_resource_limits_cpu', 0)
-        memory_limits = current_state.get('kube_pod_container_resource_limits_memory', 0)
-
-        memory_mb = memory_limits / 1000000 if memory_limits > 0 else 0
-
-        # Define load context using actual Kubernetes state metrics
-        is_no_load = (
-                unavailable_replicas == 0 and  # No failing pods
-                pod_readiness >= 0.95 and  # High readiness
-                cpu_limits <= 1.0 and  # Low CPU allocation
-                memory_mb <= 300  # Low memory allocation
-        )
-
-        is_low_load = (
-                unavailable_replicas == 0 and  # No failing pods
-                pod_readiness >= 0.90 and  # Good readiness
-                cpu_limits <= 2.0 and  # Moderate CPU
-                memory_mb <= 600  # Moderate memory
-        )
-    else:
-        is_no_load = False
-        is_low_load = False
-
-    # Scale Down penalties/rewards
-    if action == "Scale Down":
-        if current_replicas <= 1:
-            penalty = -1.0  # REDUCED: was -2.0, still prevent scaling below 1
-        elif current_state is not None:
-            is_underutilized = check_system_underutilized(current_state, next_state, current_replicas)
-
-            if is_underutilized or is_no_load or is_low_load:
-                # REWARD appropriate scale-down - this was the key missing piece!
-                if is_no_load:
-                    penalty = +2.5  # Strong reward for scaling down with no load
-                elif is_low_load:
-                    penalty = +2.0  # Good reward for scaling down with low load
-                elif current_replicas >= 8:
-                    penalty = +1.5  # Reward for reducing over-provisioning
-                elif current_replicas >= 5:
-                    penalty = +1.0  # Reward for right-sizing
-                else:
-                    penalty = +0.5  # Light reward for any appropriate scale-down
-            else:
-                # System is NOT underutilized - light penalty
-                penalty = -0.5  # REDUCED: was -1.0, less harsh
-
-    # Scale Up penalties
-    elif action == "Scale Up":
-        if current_state is not None:
-            is_overloaded = check_system_overloaded(current_state, next_state, current_replicas)
-
-            if is_overloaded and not is_no_load:
-                # System needs resources and has actual load - minimal penalty
-                if current_replicas >= 15:
-                    penalty = -1.0  # REDUCED: was -2.0
-                else:
-                    penalty = 0.0  # Neutral - system needs resources
-            else:
-                # Unnecessary scaling up - moderate penalties
-                if is_no_load:
-                    penalty = -1.5  # REDUCED: was much higher, but still discourage waste
-                elif current_replicas >= 10:
-                    penalty = -1.0  # REDUCED: was -3.0
-                elif current_replicas >= 5:
-                    penalty = -0.5  # REDUCED: was -1.0
-                else:
-                    penalty = -0.2  # REDUCED: was -0.5
-
-    # Keep Same - very light penalty for any action (encourage slight bias toward stability)
-    elif action != "Keep Same":
-        penalty = -0.1  # REDUCED: was -0.2, minimal stability bias
-
-    return penalty
-
-
-def check_system_underutilized(current_state, next_state, current_replicas):
-    """
-    FIXED: Check actual usage per replica, not total limits across all replicas.
-    This was the core bug - with 10 replicas, total limits are high even with zero load.
-    """
-    if not current_state:
-        return False
-
-    # FIXED: Calculate usage per replica instead of total limits
-    cpu_limits_total = current_state.get('kube_pod_container_resource_limits_cpu', 0)  # total cores
-    memory_bytes_total = current_state.get('kube_pod_container_resource_limits_memory', 0)
-    memory_mb_total = memory_bytes_total / 1000000 if memory_bytes_total > 0 else 0
-
-    # Per-replica resource usage (this is what matters for scaling decisions)
-    cpu_per_replica = cpu_limits_total / max(1, current_replicas)
-    memory_per_replica = memory_mb_total / max(1, current_replicas)
-
-    # Kubernetes health indicators (what actually matters for scaling)
-    unavailable_replicas = current_state.get('kube_deployment_status_replicas_unavailable', 0)
-    pod_readiness = current_state.get('kube_pod_container_status_ready', 1.0)
-    running_containers = current_state.get('kube_pod_container_status_running', 0)
-
-    # FIXED: Check per-replica usage, not total usage
-    underutilized_conditions = [
-        cpu_per_replica < 1.0,  # < 1 CPU core per replica = low utilization
-        memory_per_replica < 300,  # < 300MB per replica = low memory usage
-        unavailable_replicas == 0,  # No failing pods (absolute requirement)
-        pod_readiness >= 0.95,  # 95% readiness = healthy
-        running_containers > 0,  # At least some containers running
-        current_replicas > 1  # Don't scale below 1 replica (minimum viable)
-    ]
-
-    is_underutilized = all(underutilized_conditions)
-
-    # Enhanced logging to show the fix
-    if current_replicas >= 2:
-        logger.info(f"UNDERUTILIZATION_CHECK: {sum(underutilized_conditions)}/6 conditions_met "
-                    f"cpu_per_replica={cpu_per_replica:.1f}cores memory_per_replica={memory_per_replica:.0f}MB "
-                    f"(total: cpu={cpu_limits_total:.1f} memory={memory_mb_total:.0f}MB across {current_replicas} replicas) "
-                    f"unavailable={unavailable_replicas} readiness={pod_readiness:.2f} "
-                    f"running={running_containers} result={'SAFE_TO_SCALE_DOWN' if is_underutilized else 'NOT_SAFE'}")
-
-    return is_underutilized
-
-
-def check_system_overloaded(current_state, next_state, current_replicas):
-    """
-    HONEST: Simple overload detection based on operational experience.
-    Uses clear thresholds that make sense.
-    """
-    if not current_state:
-        return False
-
-    # Use the same metrics the DQN sees
-    cpu_limits = current_state.get('kube_pod_container_resource_limits_cpu', 0)
-    memory_bytes = current_state.get('kube_pod_container_resource_limits_memory', 0)
-    memory_mb = memory_bytes / 1000000 if memory_bytes > 0 else 0
-
-    # Kubernetes stress indicators
-    unavailable_replicas = current_state.get('kube_deployment_status_replicas_unavailable', 0)
-    pod_readiness = current_state.get('kube_pod_container_status_ready', 1.0)
-
-    # HONEST stress detection (when system actually needs help)
-    critical_conditions = [
-        unavailable_replicas > 0,  # Pods failing = immediate problem
-        pod_readiness < 0.8,  # Low readiness = stress
-    ]
-
-    # High utilization conditions
-    high_utilization_conditions = [
-        cpu_limits > 3.0,  # > 3 CPU cores = high load
-        memory_mb > 800,  # > 800MB = memory pressure
-    ]
-
-    # Overloaded if ANY critical condition OR multiple utilization conditions
-    is_overloaded = any(critical_conditions) or sum(high_utilization_conditions) >= 2
-
-    if current_replicas <= 15:
-        logger.info(
-            f"OVERLOAD_CHECK: critical={sum(critical_conditions)}/2 utilization={sum(high_utilization_conditions)}/2 "
-            f"cpu_limits={cpu_limits:.1f}cores memory={memory_mb:.0f}MB "
-            f"unavailable={unavailable_replicas} readiness={pod_readiness:.2f} "
-            f"result={'NEEDS_MORE_RESOURCES' if is_overloaded else 'ADEQUATE_RESOURCES'}")
-
-    return is_overloaded
-
-
 async def log_experience(state: ScalingState, services: ServiceContainer) -> Dict[str, Any]:
     logger.info("=" * 60)
     logger.info("NODE_START: log_experience")
@@ -1696,7 +1235,7 @@ def test_reward_function_accuracy():
         [2, 4.0, 3200000000, "Scale Up", "positive"],    # Under-provisioned  
         [5, 4.0, 2000000000, "Keep Same", "neutral"],    # Well-sized
         [1, 0.5, 500000000, "Scale Down", "negative"],   # Can't scale below 1
-        [15, 3.0, 3000000000, "Scale Up", "negative"],   # Already too many
+        [50, 3.0, 3000000000, "Scale Up", "negative"],   # Already too many
         [3, 0.6, 450000000, "Scale Down", "positive"],   # Low load, should scale down
         [12, 6.0, 6000000000, "Scale Up", "negative"],   # High resource usage but many replicas
     ]
