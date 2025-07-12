@@ -95,7 +95,7 @@ async def health_handler(request):
             "service": "dqn-adapter",
             "components": {
                 "dqn_trainer": _services and _services.dqn_trainer is not None,
-                "evaluator": _services and _services.evaluator is not None,
+                # Evaluator removed - not required
                 "redis": _services and _services.redis_client is not None,
                 "prometheus": _services and _services.prometheus_client is not None,
         
@@ -118,28 +118,11 @@ async def health_handler(request):
 
 
 async def evaluation_trigger_handler(request):
-    """Manual trigger for evaluation"""
-    try:
-        if not _services or not _services.evaluator:
-            return web.json_response({"error": "Evaluation not enabled or services not initialized"}, status=400)
-        
-        if not _services.dqn_trainer:
-            return web.json_response({"error": "DQN trainer not initialized"}, status=400)
-        
-        # Trigger evaluation
-        await _services.dqn_trainer._generate_evaluation_outputs()
-        
-        return web.json_response({
-            "message": "Evaluation triggered successfully",
-            "timestamp": datetime.now().isoformat(),
-            "experiences": len(_services.evaluator.experiences),
-            "training_metrics": len(_services.evaluator.training_metrics)
-        })
-        
-    except Exception as e:
-        logger = logging.getLogger("Controller")
-        logger.error(f"Evaluation trigger failed: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+    """Manual trigger for evaluation - disabled (evaluator removed)"""
+    return web.json_response({
+        "error": "Evaluator has been removed from the system",
+        "message": "Evaluation functionality is no longer available"
+    }, status=503)
 
 
 async def decision_trigger_handler(request):

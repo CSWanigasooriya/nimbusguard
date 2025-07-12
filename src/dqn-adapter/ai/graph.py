@@ -937,6 +937,22 @@ async def plan_final_action(state: ScalingState, services: ServiceContainer) -> 
         logger.error(f"SAFETY_BLOCK_REASON: {llm_reasoning}")
         logger.error("EXTREME_DECISION_BLOCKED: this_indicates_potentially_dangerous_scaling")
 
+    # CRITICAL FIX: Update experience with the ACTUAL action that was executed
+    # The DQN should learn based on what actually happened, not what it recommended
+    actual_action_executed = 'Scale Up' if final_decision > current_replicas else 'Scale Down' if final_decision < current_replicas else 'Keep Same'
+    
+    # Update experience object with the real action that was taken
+    experience = state.get('experience', {})
+    if experience:
+        original_dqn_action = experience.get('action', 'Unknown')
+        experience['action'] = actual_action_executed
+        experience['original_dqn_recommendation'] = original_dqn_action  # Keep for analysis
+        
+        if original_dqn_action != actual_action_executed:
+            logger.info(f"EXPERIENCE_CORRECTED: dqn_wanted={original_dqn_action} actually_executed={actual_action_executed}")
+        else:
+            logger.info(f"EXPERIENCE_CONSISTENT: action={actual_action_executed}")
+
     logger.info("=" * 60)
     logger.info("NODE_END: plan_final_action")
     logger.info("=" * 60)
@@ -944,7 +960,8 @@ async def plan_final_action(state: ScalingState, services: ServiceContainer) -> 
         "final_decision": final_decision,
         "decision_explanation": decision_explanation,
         "overall_confidence": overall_confidence,
-        "llm_approved": llm_approved
+        "llm_approved": llm_approved,
+        "experience": experience  # Pass the corrected experience forward
     }
 
 async def wait_for_system_to_stabilize(state: ScalingState, services: ServiceContainer) -> None:
@@ -1142,14 +1159,22 @@ async def calculate_llm_reward(current_state: Dict[str, Any], next_state: Dict[s
 
 🎯 MISSION: Calculate a balanced reward (-5.0 to +5.0) for action "{action}" using multi-dimensional analysis.
 
-🔍 **CLUSTER VERIFICATION TOOLS AVAILABLE**:
-You have access to MCP Kubernetes tools to verify actual cluster state and enhance reward accuracy. Use any tools that are relevant for your reward calculation:
+🧠 **CRITICAL DQN LEARNING PRINCIPLE**:
+- **GOOD DECISIONS GET POSITIVE REWARDS** (even if "Keep Same")
+- **BAD DECISIONS GET NEGATIVE REWARDS**  
+- **NEUTRAL REWARDS (0.0) PROVIDE NO LEARNING SIGNAL - AVOID THEM!**
+- Evaluate the QUALITY of the decision, not just the magnitude of change
 
-- **Target Deployment**: {services.config.kubernetes.target_deployment} in namespace {services.config.kubernetes.target_namespace}
-- **Available Tools**: You can use any MCP Kubernetes tools that provide valuable insights for reward calculation
-- **Common Examples**: `mcp_kubernetes_pods_top`, `mcp_kubernetes_resources_get`, `mcp_kubernetes_events_list`, etc.
+🔍 **MANDATORY CLUSTER VERIFICATION**:
+You MUST verify the actual state of the target deployment before calculating rewards. Use these specific MCP tools:
 
-⚠️ **INTELLIGENT CHOICE**: Use your judgment to select which tools (if any) provide the most valuable cluster insights for this specific reward calculation scenario.
+1. **Deployment Status**: `mcp_kubernetes_resources_get` with apiVersion="apps/v1", kind="Deployment", name="{services.config.kubernetes.target_deployment}", namespace="{services.config.kubernetes.target_namespace}"
+2. **Resource Usage**: `mcp_kubernetes_pods_top` with namespace="{services.config.kubernetes.target_namespace}"  
+3. **System Events**: `mcp_kubernetes_events_list` with namespace="{services.config.kubernetes.target_namespace}"
+
+🎯 **TARGET DEPLOYMENT**: {services.config.kubernetes.target_deployment} in namespace {services.config.kubernetes.target_namespace}
+
+⚠️ **CRITICAL**: You MUST check the actual replica count and resource usage of the {services.config.kubernetes.target_deployment} deployment. Do not give generic responses!
 
 📊 SYSTEM CONTEXT:
 - Action: {action}
@@ -1162,8 +1187,19 @@ You have access to MCP Kubernetes tools to verify actual cluster state and enhan
 
 🚨 CRITICAL SCALING SIGNALS TO PRIORITIZE:
 
-**OVER-PROVISIONING DETECTION (PRIORITY #1):**
-- Verify if actual resource usage is significantly below limits with many replicas
+**"KEEP SAME" DECISION QUALITY (PRIORITY #1):**
+- If system is stable + performance good + resources well-utilized: **Keep Same gets +2.0 to +4.0**
+- If system is stable + under-provisioned + needs more resources: **Keep Same gets -2.0 to -4.0**  
+- If system is stable + over-provisioned + wasting resources: **Keep Same gets -1.0 to -3.0**
+- **NEVER give 0.0 for Keep Same - always evaluate if it was the RIGHT decision!**
+
+**MINIMUM REPLICA SAFETY (PRIORITY #2):**
+- If deployment has only 1 replica: Scale Down MUST get -5.0 (service availability risk)
+- If deployment has 2 replicas: Scale Down gets -3.0 to -4.0 (reduces redundancy)
+- Scale Up from 1 replica should get +3.0 to +5.0 (improves availability)
+
+**OVER-PROVISIONING DETECTION (PRIORITY #2):**  
+- Verify if actual resource usage is significantly below limits with MANY replicas (3+)
 - Scale Up should get -4 to -5 if adding unnecessary replicas when resources are underutilized
 - Scale Down should get +4 to +5 if removing excess replicas while maintaining performance
 
@@ -1235,15 +1271,36 @@ You have access to MCP Kubernetes tools to verify actual cluster state and enhan
     "scaling_urgency": "<none|low|medium|high|critical>"
 }}
 
-**Example Response Structure:**
+**Example Response Structure (for Keep Same action with stable system):**
 {{
-    "reward": 2.5,
-    "cluster_findings": ["Example: CPU usage low via cluster verification", "Example: No system events detected"],
+    "reward": 3.2,
+    "cluster_findings": ["consumer deployment has 1 replica and is stable", "consumer pods CPU: 499m/500m (healthy utilization)", "No system events or performance issues"],
     "cluster_verification_performed": true,
-    "mcp_tools_used": ["example_tool_1", "example_tool_2"],
-    "reasoning": "Analysis based on Prometheus metrics and any cluster verification performed...",
-    ...
+    "mcp_tools_used": ["mcp_kubernetes_resources_get", "mcp_kubernetes_pods_top", "mcp_kubernetes_events_list"],
+    "reasoning": "EXCELLENT DECISION: Keep Same maintains optimal performance with good resource utilization. System is stable and handling load appropriately.",
+    "cpu_throttling_detected": false,
+    "memory_pressure_detected": false,
+    "scaling_urgency": "none"
 }}
+
+**Example Response Structure (for Scale Down action with 1 replica):**
+{{
+    "reward": -4.5,
+    "cluster_findings": ["consumer deployment has only 1 replica - cannot scale down further", "consumer pods CPU usage: 250m/500m (50%)", "No OOM events in namespace nimbusguard"],
+    "cluster_verification_performed": true,
+    "mcp_tools_used": ["mcp_kubernetes_resources_get", "mcp_kubernetes_pods_top", "mcp_kubernetes_events_list"],
+    "reasoning": "CRITICAL ERROR: Scale Down action is inappropriate when deployment only has 1 replica. This would make the service unavailable.",
+    "cpu_throttling_detected": false,
+    "memory_pressure_detected": false,
+    "scaling_urgency": "critical"
+}}
+
+🚨 **REWARD CALCULATION RULES**:
+1. **NEVER give 0.0 unless the action is truly neither good nor bad** (extremely rare)
+2. **Good decisions in stable systems deserve +2.0 to +4.0 rewards**
+3. **Bad decisions that risk system health deserve -2.0 to -5.0 rewards**  
+4. **Focus on decision QUALITY, not action TYPE**
+5. **The DQN needs clear learning signals to improve**
 
 GUIDANCE: You have access to MCP Kubernetes tools if you need real cluster verification. Use your judgment to decide which tools (if any) would enhance your reward calculation accuracy for this specific scenario."""
 

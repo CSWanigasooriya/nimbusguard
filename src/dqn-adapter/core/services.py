@@ -30,12 +30,17 @@ class ServiceContainer:
     dqn_trainer: Optional[Any] = None
     
     # Utilities
-    evaluator: Optional[Any] = None
+
     llm: Optional[Any] = None
     
     # DQN state management (eliminates global variables)
-    current_epsilon: float = 0.3
+    current_epsilon: float = None  # Will be initialized from config
     decision_count: int = 0
+    
+    def __post_init__(self):
+        """Initialize epsilon from configuration after dataclass creation."""
+        if self.current_epsilon is None:
+            self.current_epsilon = self.config.dqn.epsilon_start
     
     def get_epsilon(self) -> float:
         """Get current epsilon value for exploration."""
@@ -43,7 +48,15 @@ class ServiceContainer:
     
     def update_epsilon(self, decay_rate: float, min_epsilon: float) -> float:
         """Update epsilon with decay and return new value."""
+        previous_epsilon = self.current_epsilon
         self.current_epsilon = max(min_epsilon, self.current_epsilon * decay_rate)
+        
+        # Log epsilon decay for monitoring (every 10 decisions to avoid spam)
+        if self.decision_count % 10 == 0:
+            import logging
+            logger = logging.getLogger("ServiceContainer")
+            logger.info(f"EPSILON_DECAY: decision={self.decision_count} epsilon={previous_epsilon:.4f}→{self.current_epsilon:.4f} decay_rate={decay_rate}")
+        
         return self.current_epsilon
     
     def increment_decision_count(self) -> int:
@@ -83,7 +96,7 @@ class ServiceContainer:
         health["services"]["validator_agent"] = "healthy" if self.validator_agent else "disabled"
         health["services"]["redis"] = "healthy" if self.redis_client else "missing"
         health["services"]["minio"] = "healthy" if self.minio_client else "missing"
-        health["services"]["evaluator"] = "healthy" if self.evaluator else "disabled"
+        # Evaluator removed - not required
             
         # Overall status assessment
         if health["errors"]:

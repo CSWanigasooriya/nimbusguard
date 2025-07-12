@@ -17,8 +17,7 @@ from langgraph.prebuilt import create_react_agent
 from minio import Minio
 from config import get_config
 from monitoring.metrics import *
-# Import evaluator
-from monitoring.evaluator import DQNEvaluator
+# Evaluator removed - not required
 from ai.graph import create_graph
 from core.services import ServiceContainer
 
@@ -351,17 +350,9 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         services.reward_agent = None
         logger.info("LLM_FEATURES: safety_monitor=disabled rewards=disabled (no_api_key)")
     
-    # Initialize evaluator
-    if config.enable_evaluation_outputs:
-        try:
-            services.evaluator = DQNEvaluator(services.minio_client, bucket_name="evaluation-outputs")
-            logger.info("EVALUATOR: initialized")
-        except Exception as e:
-            logger.error(f"EVALUATOR: initialization_failed error={e}")
-            services.evaluator = None
-    else:
-        logger.info("EVALUATOR: disabled")
-        services.evaluator = None
+    # Evaluator removed - not required
+    services.evaluator = None
+    logger.info("EVALUATOR: removed_from_system")
 
 
     # Initialize gauges to a default value
@@ -370,7 +361,7 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
     
     # Initialize DQN metrics
     DQN_TRAINING_LOSS_GAUGE.set(0.0)
-    DQN_EPSILON_GAUGE.set(config.dqn.epsilon_start)
+    DQN_EPSILON_GAUGE.set(services.get_epsilon())  # Use actual initialized epsilon
     DQN_BUFFER_SIZE_GAUGE.set(0)
     DQN_TRAINING_STEPS_GAUGE.set(0)
     DQN_DECISION_CONFIDENCE_GAUGE.set(0.0)

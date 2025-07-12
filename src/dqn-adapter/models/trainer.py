@@ -174,11 +174,8 @@ class DQNTrainer:
                     await self._save_model()
                     self.last_save_time = time.time()
 
-                # Periodic evaluation
-                if (self.services.config.enable_evaluation_outputs and self.services and self.services.evaluator and
-                        time.time() - self.last_research_time > self.services.config.evaluation_interval):
-                    await self._generate_evaluation_outputs()
-                    self.last_research_time = time.time()
+                # Evaluator removed - not required
+                # Periodic evaluation functionality has been removed
 
             except Exception as e:
                 logger.error(f"Error in training loop: {e}", exc_info=True)
@@ -353,42 +350,22 @@ class DQNTrainer:
             if len(self.training_losses) > self.max_loss_history:
                 self.training_losses = self.training_losses[-self.max_loss_history:]
 
-            # Add training metrics to evaluator with validation
-            if self.services and self.services.evaluator:
-                try:
-                    # Validate all metrics before sending to evaluator
-                    loss_value = float(loss.item())
-                    # Get epsilon from services (no more global state)
-                    epsilon_value = float(self.services.get_epsilon()) if self.services else 0.0
-                    batch_size_value = int(current_batch_size) if current_batch_size is not None else 32
-                    buffer_size_value = int(len(self.memory))
-
-                    # Additional validation - allow higher losses during training
-                    if np.isfinite(loss_value) and 0 <= loss_value <= 10000:  # Increased from 1000 to 10000
-                        self.services.evaluator.add_training_metrics(
-                            loss=loss_value,
-                            epsilon=epsilon_value,
-                            batch_size=batch_size_value,
-                            buffer_size=buffer_size_value
-                        )
-                        logger.debug(
-                            f"TRAINER: metrics_sent_to_evaluator loss={loss_value:.4f} buffer_size={buffer_size_value}")
-
-                        # Update Prometheus training metrics
-                        DQN_TRAINING_LOSS_GAUGE.set(loss_value)
-                        DQN_BUFFER_SIZE_GAUGE.set(buffer_size_value)
-                        DQN_TRAINING_STEPS_GAUGE.inc()
-
-                        # Log warning for very high losses (but still accept them)
-                        if loss_value > 1000:
-                            logger.warning(f"TRAINER: high_loss_detected loss={loss_value:.4f} - model_may_need_tuning")
-
-                    else:
-                        logger.warning(
-                            f"TRAINER: invalid_metrics_not_sent loss={loss_value} finite={np.isfinite(loss_value)} threshold=10000")
-
-                except Exception as eval_error:
-                    logger.warning(f"TRAINER: evaluator_metrics_failed error={eval_error}")
+            # Update Prometheus training metrics (evaluator removed)
+            try:
+                loss_value = float(loss.item())
+                buffer_size_value = int(len(self.memory))
+                
+                # Update Prometheus training metrics
+                DQN_TRAINING_LOSS_GAUGE.set(loss_value)
+                DQN_BUFFER_SIZE_GAUGE.set(buffer_size_value)
+                DQN_TRAINING_STEPS_GAUGE.inc()
+                
+                # Log warning for very high losses
+                if loss_value > 1000:
+                    logger.warning(f"TRAINER: high_loss_detected loss={loss_value:.4f} - model_may_need_tuning")
+                    
+            except Exception as metrics_error:
+                logger.warning(f"TRAINER: prometheus_metrics_failed error={metrics_error}")
 
             return loss.item()
 
@@ -561,40 +538,4 @@ class DQNTrainer:
             logger.warning(f"HISTORICAL_DATA: load_failed error={e}")
             # Don't raise - historical data is optional
 
-    async def _generate_evaluation_outputs(self):
-        """Generate and save all evaluation outputs."""
-        try:
-            if not self.services or not self.services.evaluator:
-                return
-
-            logger.info("EVALUATION: generating_outputs")
-
-            # Get model state information
-            total_params = sum(p.numel() for p in self.policy_net.parameters())
-            current_lr = self.optimizer.param_groups[0]['lr']
-            
-            model_state = {
-                'total_params': total_params,
-                'batches_trained': self.batches_trained,
-                'device': str(self.device),
-                'architecture': 'Enhanced DQN with Huber Loss',
-                'training_losses': self.training_losses[-100:],  # Last 100 losses
-                'learning_rate': current_lr,
-                'loss_moving_avg': self.loss_moving_avg,
-                'loss_variance': self.loss_variance,
-                'convergence_patience': self.convergence_patience,
-                'tau': self.tau
-            }
-
-            # Generate all evaluation outputs
-            loop = asyncio.get_event_loop()
-            saved_files = await loop.run_in_executor(
-                None,
-                self.services.evaluator.generate_all_outputs,
-                model_state
-            )
-
-            logger.info(f"EVALUATION: completed files_generated={len(saved_files)}")
-
-        except Exception as e:
-            logger.error(f"Failed to generate evaluation outputs: {e}")
+    # Evaluation functionality removed - not required

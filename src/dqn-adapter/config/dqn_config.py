@@ -13,10 +13,10 @@ class DQNConfig(BaseSettings):
     # Architecture
     hidden_dims_str: str = Field(default="64,32", env="DQN_HIDDEN_DIMS")
     
-    # Training parameters
-    epsilon_start: float = Field(default=0.3, env="EPSILON_START")
-    epsilon_end: float = Field(default=0.05, env="EPSILON_END")
-    epsilon_decay: float = Field(default=0.995, env="EPSILON_DECAY")
+    # Training parameters  
+    epsilon_start: float = Field(default=1.0, env="EPSILON_START")  # Start with 100% exploration
+    epsilon_end: float = Field(default=0.05, env="EPSILON_END")     # End with 5% exploration
+    epsilon_decay: float = Field(default=0.995, env="EPSILON_DECAY") # Decay 0.5% per decision
     gamma: float = Field(default=0.99, env="GAMMA")
     learning_rate: float = Field(default=1e-4, env="LEARNING_RATE")
     
