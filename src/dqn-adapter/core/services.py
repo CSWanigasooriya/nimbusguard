@@ -32,11 +32,14 @@ class ServiceContainer:
     llm: Optional[Any] = None
     
     # DQN state management (eliminates global variables)
-    current_epsilon: float = 0.3
+    current_epsilon: float = None  # Will be initialized from config
     decision_count: int = 0
     
     def get_epsilon(self) -> float:
         """Get current epsilon value for exploration."""
+        if self.current_epsilon is None:
+            # Initialize from config if not set
+            self.current_epsilon = self.config.dqn.epsilon_start
         return self.current_epsilon
     
     def update_epsilon(self, decay_rate: float, min_epsilon: float) -> float:
@@ -48,6 +51,11 @@ class ServiceContainer:
         """Increment and return decision count."""
         self.decision_count += 1
         return self.decision_count
+    
+    def reset_epsilon_to_config(self) -> None:
+        """Reset epsilon to configuration values (used when loading models)."""
+        self.current_epsilon = self.config.dqn.epsilon_start
+        self.decision_count = 0
     
     def get_health_status(self) -> dict:
         """Get comprehensive health status of all services."""

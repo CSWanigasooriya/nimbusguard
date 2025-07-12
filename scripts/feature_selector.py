@@ -258,15 +258,16 @@ class IntelligentConsumerFeatureSelector:
         
         base_score = 0.0
         
-        # Critical resource usage (current state)
-        if 'resident_memory' in name_lower:
-            base_score = 100.0  # Physical memory is critical
-        elif 'virtual_memory' in name_lower:
-            base_score = 95.0   # Virtual memory is critical
-        elif 'open_fds' in name_lower:
-            base_score = 90.0   # I/O pressure is critical
+        # CRITICAL: Direct memory usage metrics (highest priority)
+        if 'process_resident_memory_bytes' in name_lower:
+            base_score = 120.0  # Physical memory is MOST critical for scaling
+        elif 'process_virtual_memory_bytes' in name_lower:
+            base_score = 115.0  # Virtual memory is also very critical
+        # CPU usage
         elif 'cpu_seconds_total' in name_lower:
             base_score = 95.0   # CPU usage is critical
+        elif 'open_fds' in name_lower:
+            base_score = 90.0   # I/O pressure is critical
             
         # HTTP performance metrics (counters, but meaningful)
         elif 'http_requests_total' in name_lower:
@@ -278,9 +279,9 @@ class IntelligentConsumerFeatureSelector:
         elif 'request_size_bytes' in name_lower or 'response_size_bytes' in name_lower:
             base_score = 70.0   # Payload size indicates load
             
-        # Memory pressure indicators
+        # Memory pressure indicators (secondary to direct memory usage)
         elif 'python_gc' in name_lower:
-            base_score = 65.0   # GC indicates memory pressure
+            base_score = 55.0   # GC indicates memory pressure (lower priority than direct memory)
             
         # Other process metrics
         elif 'max_fds' in name_lower:
@@ -352,7 +353,7 @@ class IntelligentConsumerFeatureSelector:
         # Intelligent category targets based on scaling importance
         category_targets = {
             'cpu': 2,           # Critical: CPU utilization + rate
-            'memory': 2,        # Critical: Physical + virtual memory
+            'memory': 2,        # Critical: Physical + virtual memory (prioritize direct usage)
             'network': 3,       # Important: Request rate + latency + throughput
             'io': 1,            # Important: File descriptors or I/O rate
             'performance': 1,   # Useful: Latency or performance indicators
@@ -360,31 +361,62 @@ class IntelligentConsumerFeatureSelector:
             'other': 1          # Backup: Other useful metrics
         }
         
-        # First pass: prioritize high-impact categories
+        # First pass: prioritize high-impact categories with intelligent sorting
         priority_categories = ['cpu', 'memory', 'network', 'io']
         
         for category in priority_categories:
             count = 0
             target = category_targets.get(category, 0)
             
-            for feature in ranked_features:
-                if len(selected) >= self.target_features:
-                    break
-                    
-                if feature in selected:
-                    continue
-                    
-                if feature in self.metric_analysis:
-                    feature_category = self.metric_analysis[feature]['category']
+            # For memory category, prioritize direct usage metrics over GC metrics
+            if category == 'memory':
+                # Sort memory features by scaling relevance (direct memory usage first)
+                memory_features = []
+                for feature in ranked_features:
+                    if (feature in self.metric_analysis and 
+                        self.metric_analysis[feature]['category'] == 'memory'):
+                        memory_features.append((feature, self.metric_analysis[feature]['scaling_relevance']))
+                
+                # Sort by relevance score (highest first)
+                memory_features.sort(key=lambda x: x[1], reverse=True)
+                memory_feature_order = [f[0] for f in memory_features]
+                
+                # Select from prioritized memory features
+                for feature in memory_feature_order:
+                    if len(selected) >= self.target_features or count >= target:
+                        break
+                        
+                    if feature in selected:
+                        continue
+                        
                     feature_type = self.metric_analysis[feature]['type']
                     
-                    if feature_category == category and count < target:
-                        # Extra validation: avoid counters even in priority categories
-                        if feature_type != 'counter' or 'rate' in feature:
-                            selected.append(feature)
-                            category_counts[category] = category_counts.get(category, 0) + 1
-                            count += 1
-                            logger.info(f"  ✓ Selected {feature} (category: {category}, type: {feature_type})")
+                    # Extra validation: avoid counters even in priority categories
+                    if feature_type != 'counter' or 'rate' in feature:
+                        selected.append(feature)
+                        category_counts[category] = category_counts.get(category, 0) + 1
+                        count += 1
+                        logger.info(f"  ✓ Selected {feature} (category: {category}, type: {feature_type}, relevance: {self.metric_analysis[feature]['scaling_relevance']:.1f})")
+            else:
+                # For other categories, use normal ranking order
+                for feature in ranked_features:
+                    if len(selected) >= self.target_features or count >= target:
+                        break
+                        
+                    if feature in selected:
+                        continue
+                        
+                    if feature in self.metric_analysis:
+                        feature_category = self.metric_analysis[feature]['category']
+                        feature_type = self.metric_analysis[feature]['type']
+                        
+                        if feature_category == category:
+                            # Extra validation: avoid counters even in priority categories
+                            if feature_type != 'counter' or 'rate' in feature:
+                                selected.append(feature)
+                                category_counts[category] = category_counts.get(category, 0) + 1
+                                count += 1
+                                logger.info(f"  ✓ Selected {feature} (category: {category}, type: {feature_type})")
         
         # Second pass: fill remaining slots with best available (avoid monitoring)
         for feature in ranked_features:

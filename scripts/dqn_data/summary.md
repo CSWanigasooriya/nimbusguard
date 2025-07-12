@@ -13,8 +13,8 @@
 
 ## Selected Features (Top 9)
 1. **`process_cpu_seconds_total_rate`** (category: cpu, type: gauge, relevance: 115.0)
-2. **`python_gc_collections_total_rate`** (category: memory, type: gauge, relevance: 85.0)
-3. **`python_gc_objects_collected_total_rate`** (category: memory, type: gauge, relevance: 85.0)
+2. **`process_resident_memory_bytes`** (category: memory, type: gauge, relevance: 120.0)
+3. **`process_virtual_memory_bytes`** (category: memory, type: gauge, relevance: 115.0)
 4. **`http_request_duration_seconds_sum_rate`** (category: network, type: gauge, relevance: 100.0)
 5. **`http_requests_total_rate`** (category: network, type: gauge, relevance: 105.0)
 6. **`http_request_duration_seconds_count_rate`** (category: network, type: gauge, relevance: 95.0)

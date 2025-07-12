@@ -199,6 +199,11 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
         services.dqn_model.eval()  # Set to evaluation mode
         logger.info(f"DQN_MODEL: loaded_successfully device={device}")
         
+        # Reset epsilon to config values if requested (prevents old saved epsilon from overriding config)
+        if config.dqn.reset_epsilon_on_load:
+            services.reset_epsilon_to_config()
+            logger.info(f"DQN_EPSILON: reset_to_config epsilon={services.get_epsilon():.3f}")
+        
         # Initialize combined trainer for real-time learning
         services.dqn_trainer = DQNTrainer(services.dqn_model, device, config.feature_order, services)
         
