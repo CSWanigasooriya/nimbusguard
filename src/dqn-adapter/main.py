@@ -184,64 +184,84 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
 
     # Load DQN model from MinIO
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    try:
-        # Try to load existing model from MinIO
-        logger.info("DQN_MODEL: loading_from_minio")
-        response = services.minio_client.get_object(config.minio.bucket_name, "dqn_model.pt")
-        model_bytes = response.read()
-        
-        checkpoint = torch.load(BytesIO(model_bytes), map_location=device)
-        
-        # Initialize model with current architecture
-        state_dim = len(config.feature_order)  # Scientifically-validated: 9 consumer performance features
-        action_dim = 3
-        services.dqn_model = EnhancedQNetwork(state_dim, action_dim, config.dqn.hidden_dims).to(device)
-        
-        # Try to load state dict with graceful handling of architecture mismatches
-        if 'policy_net_state_dict' in checkpoint:
-            try:
-                services.dqn_model.load_state_dict(checkpoint['policy_net_state_dict'], strict=False)
-                logger.info("DQN_MODEL: loaded_with_partial_compatibility (policy_net)")
-            except Exception as load_error:
-                logger.warning(f"DQN_MODEL: policy_net_load_failed error={load_error}")
-                logger.info("DQN_MODEL: using_fresh_weights_with_checkpoint_metadata")
-        else:
-            try:
-                services.dqn_model.load_state_dict(checkpoint, strict=False)
-                logger.info("DQN_MODEL: loaded_with_partial_compatibility (direct)")
-            except Exception as load_error:
-                logger.warning(f"DQN_MODEL: direct_load_failed error={load_error}")
-                logger.info("DQN_MODEL: using_fresh_weights")
-            
-        services.dqn_model.eval()  # Set to evaluation mode
-        logger.info(f"DQN_MODEL: loaded_successfully device={device}")
-        
-        # Initialize combined trainer for real-time learning
+    
+    # Check if we should force fresh model to fix Q-value bias
+    force_fresh_model = os.getenv("FORCE_FRESH_MODEL", "false").lower() == "true"
+    clear_experience_buffer = os.getenv("CLEAR_EXPERIENCE_BUFFER", "false").lower() == "true"
+    
+    if force_fresh_model:
+        logger.warning("DQN_MODEL: force_fresh_model_enabled - creating_fresh_weights_to_fix_bias")
+        # Skip loading existing model and go directly to fresh model creation
+        services.dqn_model = None
+        services.dqn_trainer = None
+    else:
         try:
-            services.dqn_trainer = DQNTrainer(services.dqn_model, device, config.feature_order, services)
-            logger.info("DQN_TRAINER: initialized_successfully")
+            # Try to load existing model from MinIO
+            logger.info("DQN_MODEL: loading_from_minio")
+            response = services.minio_client.get_object(config.minio.bucket_name, "dqn_model.pt")
+            model_bytes = response.read()
             
-            # Start background training loop
-            asyncio.create_task(services.dqn_trainer.continuous_training_loop())
-            logger.info("DQN_TRAINER: background_loop_started")
+            checkpoint = torch.load(BytesIO(model_bytes), map_location=device)
             
-            # Ensure model is saved to MinIO (in case it was loaded but trainer is new)
-            try:
-                await services.dqn_trainer._save_model()
-                logger.info("DQN_MODEL: saved_to_minio")
-            except Exception as save_error:
-                logger.warning(f"DQN_MODEL: save_failed error={save_error}")
+            # Initialize model with current architecture
+            state_dim = len(config.feature_order)  # Scientifically-validated: 9 consumer performance features
+            action_dim = 3
+            services.dqn_model = EnhancedQNetwork(state_dim, action_dim, config.dqn.hidden_dims).to(device)
+            
+            # Try to load state dict with graceful handling of architecture mismatches
+            if 'policy_net_state_dict' in checkpoint:
+                try:
+                    services.dqn_model.load_state_dict(checkpoint['policy_net_state_dict'], strict=False)
+                    logger.info("DQN_MODEL: loaded_with_partial_compatibility (policy_net)")
+                except Exception as load_error:
+                    logger.warning(f"DQN_MODEL: policy_net_load_failed error={load_error}")
+                    logger.info("DQN_MODEL: using_fresh_weights_with_checkpoint_metadata")
+            else:
+                try:
+                    services.dqn_model.load_state_dict(checkpoint, strict=False)
+                    logger.info("DQN_MODEL: loaded_with_partial_compatibility (direct)")
+                except Exception as load_error:
+                    logger.warning(f"DQN_MODEL: direct_load_failed error={load_error}")
+                    logger.info("DQN_MODEL: using_fresh_weights")
                 
-        except Exception as trainer_error:
-            logger.error(f"DQN_TRAINER: initialization_failed error={trainer_error}")
-            # Clear the trainer to trigger fallback
+            services.dqn_model.eval()  # Set to evaluation mode
+            logger.info(f"DQN_MODEL: loaded_successfully device={device}")
+            
+            # Initialize combined trainer for real-time learning
+            try:
+                services.dqn_trainer = DQNTrainer(services.dqn_model, device, config.feature_order, services)
+                logger.info("DQN_TRAINER: initialized_successfully")
+                
+                # Clear experience buffer if requested to ensure fresh learning
+                if clear_experience_buffer:
+                    services.dqn_trainer.memory.buffer.clear()
+                    logger.warning("DQN_TRAINER: experience_buffer_cleared - fresh_learning_enabled")
+                
+                # Start background training loop
+                asyncio.create_task(services.dqn_trainer.continuous_training_loop())
+                logger.info("DQN_TRAINER: background_loop_started")
+                
+                # Ensure model is saved to MinIO (in case it was loaded but trainer is new)
+                try:
+                    await services.dqn_trainer._save_model()
+                    logger.info("DQN_MODEL: saved_to_minio")
+                except Exception as save_error:
+                    logger.warning(f"DQN_MODEL: save_failed error={save_error}")
+                    
+            except Exception as trainer_error:
+                logger.error(f"DQN_TRAINER: initialization_failed error={trainer_error}")
+                # Clear the trainer to trigger fallback
+                services.dqn_trainer = None
+            
+        except Exception as e:
+            logger.warning(f"DQN_MODEL: load_failed error={e}")
+            logger.info("DQN_MODEL: using_fallback_logic")
+            # Clear variables to trigger fresh model creation below
+            services.dqn_model = None
             services.dqn_trainer = None
-        
-    except Exception as e:
-        logger.warning(f"DQN_MODEL: load_failed error={e}")
-        logger.info("DQN_MODEL: using_fallback_logic")
-        
-        # Even without a pre-trained model, we can start with a fresh model
+    
+    # Create fresh model if loading failed or was forced
+    if services.dqn_model is None or services.dqn_trainer is None:
         try:
             state_dim = len(config.feature_order)  # Scientifically-validated: 9 consumer performance features
             action_dim = 3
@@ -252,6 +272,11 @@ async def configure(settings: kopf.OperatorSettings, **kwargs):
             logger.info("DQN_TRAINER: initializing_fresh")
             services.dqn_trainer = DQNTrainer(services.dqn_model, device, config.feature_order, services)
             logger.info("DQN_TRAINER: initialized_successfully")
+            
+            # Clear experience buffer if requested to ensure fresh learning  
+            if clear_experience_buffer:
+                services.dqn_trainer.memory.buffer.clear()
+                logger.warning("DQN_TRAINER: experience_buffer_cleared - fresh_learning_enabled")
             
             # Start background training loop
             asyncio.create_task(services.dqn_trainer.continuous_training_loop())

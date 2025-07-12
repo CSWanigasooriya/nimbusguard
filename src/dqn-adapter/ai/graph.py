@@ -1130,6 +1130,11 @@ async def calculate_llm_reward(current_state: Dict[str, Any], next_state: Dict[s
 
 🚨 CRITICAL SCALING SIGNALS TO PRIORITIZE:
 
+**OVER-PROVISIONING DETECTION (PRIORITY #1):**
+- If replicas >15 AND CPU rate <0.01/sec per replica AND HTTP load <0.5 req/sec per replica: SEVERE over-provisioning, Scale Up should get -4 to -5
+- If replicas >10 AND CPU rate <0.02/sec per replica AND HTTP load <1.0 req/sec per replica: Over-provisioning, Scale Up should get -3 to -4
+- If CPU rate <0.005/sec per replica AND HTTP load <0.3 req/sec per replica: Scale Down opportunity, Scale Up should be negative
+
 **CPU THROTTLING DETECTION:**
 - If CPU rate >0.08/sec per replica AND current replicas=1: STRONG scale up signal
 - If CPU rate >0.12/sec per replica: CRITICAL scale up signal (resource starvation)
@@ -1167,13 +1172,14 @@ async def calculate_llm_reward(current_state: Dict[str, Any], next_state: Dict[s
 
 🎯 ACTION-SPECIFIC BALANCED EVALUATION WITH CPU FOCUS:
 
-**SCALE UP REWARDS:**
+**SCALE UP REWARDS (STRICT OVER-PROVISIONING DETECTION):**
 +4 to +5: Prevented CPU throttling/resource starvation, optimal timing, clear demand increase
-+3 to +4: Good performance improvement, addressed resource constraints
++3 to +4: Good performance improvement, addressed resource constraints  
 +1 to +2: Reasonable resource increase, moderate benefit
 +0 to +1: Minor benefit, acceptable resource trade-off
 -1 to -2: Premature scaling, minimal performance gain
--3 to -5: Over-provisioning, resource waste, poor timing
+-3 to -4: OVER-PROVISIONING - scaling up with low CPU (<0.02/sec per replica) and low HTTP load (<1 req/sec per replica)
+-4 to -5: SEVERE OVER-PROVISIONING - scaling up with very low load and already high replica count (>15 replicas)
 
 **SCALE DOWN REWARDS:**
 +4 to +5: Excellent cost optimization, maintained performance, intelligent right-sizing
