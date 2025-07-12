@@ -80,9 +80,8 @@ async def root_handler(request):
             "GET /": "Service info",
             "GET /healthz": "Health check",
             "GET /metrics": "Prometheus metrics",
-            "POST /evaluate": "Trigger evaluation",
-            "POST /decide": "Trigger DQN decision",
-            
+            "POST /evaluate": "Trigger model save",
+            "POST /decide": "Trigger DQN decision"
         }
     })
 
@@ -95,10 +94,8 @@ async def health_handler(request):
             "service": "dqn-adapter",
             "components": {
                 "dqn_trainer": _services and _services.dqn_trainer is not None,
-                "evaluator": _services and _services.evaluator is not None,
                 "redis": _services and _services.redis_client is not None,
                 "prometheus": _services and _services.prometheus_client is not None,
-        
                 "scaler": _services and _services.scaler is not None,
                 "dqn_model": _services and _services.dqn_model is not None
             },
@@ -118,27 +115,24 @@ async def health_handler(request):
 
 
 async def evaluation_trigger_handler(request):
-    """Manual trigger for evaluation"""
+    """Manual trigger for model save (evaluation removed)"""
     try:
-        if not _services or not _services.evaluator:
-            return web.json_response({"error": "Evaluation not enabled or services not initialized"}, status=400)
-        
-        if not _services.dqn_trainer:
+        if not _services or not _services.dqn_trainer:
             return web.json_response({"error": "DQN trainer not initialized"}, status=400)
         
-        # Trigger evaluation
-        await _services.dqn_trainer._generate_evaluation_outputs()
+        # Trigger model save instead of evaluation
+        await _services.dqn_trainer._save_model()
         
         return web.json_response({
-            "message": "Evaluation triggered successfully",
+            "message": "Model save triggered successfully",
             "timestamp": datetime.now().isoformat(),
-            "experiences": len(_services.evaluator.experiences),
-            "training_metrics": len(_services.evaluator.training_metrics)
+            "batches_trained": _services.dqn_trainer.batches_trained,
+            "buffer_size": len(_services.dqn_trainer.memory)
         })
         
     except Exception as e:
         logger = logging.getLogger("Controller")
-        logger.error(f"Evaluation trigger failed: {e}")
+        logger.error(f"Model save trigger failed: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
 
