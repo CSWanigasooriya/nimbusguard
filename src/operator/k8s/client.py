@@ -38,16 +38,24 @@ class KubernetesClient:
         self.logger.info("Kubernetes client initialized")
     
     async def get_deployment(self, name: str, namespace: str) -> Optional[Dict[str, Any]]:
-        """Get deployment information."""
+        """Get deployment information including replica limits from annotations."""
         try:
             deployment = self.apps_v1.read_namespaced_deployment(
                 name=name,
                 namespace=namespace
             )
+            
+            # Extract min/max replicas from annotations (common HPA pattern)
+            annotations = deployment.metadata.annotations or {}
+            min_replicas = self._extract_replica_limit(annotations, 'min', default=1)
+            max_replicas = self._extract_replica_limit(annotations, 'max', default=10)
+            
             return {
                 'name': deployment.metadata.name,
                 'namespace': deployment.metadata.namespace,
                 'replicas': deployment.spec.replicas,
+                'min_replicas': min_replicas,
+                'max_replicas': max_replicas,
                 'ready_replicas': deployment.status.ready_replicas or 0,
                 'available_replicas': deployment.status.available_replicas or 0,
                 'unavailable_replicas': deployment.status.unavailable_replicas or 0,
@@ -57,6 +65,30 @@ class KubernetesClient:
         except ApiException as e:
             self.logger.error(f"Failed to get deployment {name}: {e}")
             return None
+    
+    def _extract_replica_limit(self, annotations: Dict[str, str], limit_type: str, default: int) -> int:
+        """Extract min/max replica limits from deployment annotations."""
+        # Check various annotation formats commonly used for replica limits
+        possible_keys = [
+            f"nimbusguard.io/{limit_type}-replicas",
+            f"autoscaling.nimbusguard.io/{limit_type}-replicas", 
+            f"deployment.kubernetes.io/{limit_type}-replicas",
+            f"autoscaling.alpha.kubernetes.io/{limit_type}-replicas",
+            f"{limit_type}-replicas"
+        ]
+        
+        for key in possible_keys:
+            if key in annotations:
+                try:
+                    value = int(annotations[key])
+                    self.logger.debug(f"Found {limit_type}_replicas={value} from annotation {key}")
+                    return value
+                except ValueError:
+                    self.logger.warning(f"Invalid {limit_type}_replicas value in annotation {key}: {annotations[key]}")
+                    continue
+        
+        self.logger.debug(f"No {limit_type}_replicas annotation found, using default: {default}")
+        return default
     
     async def scale_deployment(self, name: str, namespace: str, replicas: int) -> bool:
         """Scale deployment to specified replica count."""

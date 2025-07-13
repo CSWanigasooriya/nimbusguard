@@ -1,0 +1,12 @@
+timestamp,value,metric_name,instance,job,namespace,pod,uid
+2025-07-13 17:56:48,1752429432,kube_pod_deletion_timestamp,10.244.2.8:8080,prometheus.scrape.annotated_pods,nimbusguard,consumer-789d764dc7-5zdq6,92a32a33-144a-4c6d-8abe-f42b339f52ed
+2025-07-13 18:00:48,1752429664,kube_pod_deletion_timestamp,10.244.2.8:8080,prometheus.scrape.annotated_pods,nimbusguard,consumer-789d764dc7-fjvwk,d9d7e23c-4ebd-4e95-bdaf-554ad67fb432
+2025-07-13 17:38:48,1752428341,kube_pod_deletion_timestamp,10.244.2.8:8080,prometheus.scrape.annotated_pods,nimbusguard,consumer-789d764dc7-g68d5,644f4249-bb5e-4795-8c18-409b61508621
+2025-07-13 17:46:48,1752428816,kube_pod_deletion_timestamp,10.244.2.8:8080,prometheus.scrape.annotated_pods,nimbusguard,consumer-789d764dc7-prmb5,73b45d87-d1e0-464c-a5cb-0cb37c909815
+2025-07-13 17:53:48,1752429250,kube_pod_deletion_timestamp,10.244.2.8:8080,prometheus.scrape.annotated_pods,nimbusguard,consumer-789d764dc7-rzwcv,6a7dc1c3-ffb8-44c1-bfef-1db32743786e
+2025-07-13 17:56:48,1752429432,kube_pod_deletion_timestamp,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-5zdq6,92a32a33-144a-4c6d-8abe-f42b339f52ed
+2025-07-13 18:00:48,1752429664,kube_pod_deletion_timestamp,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-fjvwk,d9d7e23c-4ebd-4e95-bdaf-554ad67fb432
+2025-07-13 17:38:48,1752428341,kube_pod_deletion_timestamp,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-g68d5,644f4249-bb5e-4795-8c18-409b61508621
+2025-07-13 18:02:48,1752429795,kube_pod_deletion_timestamp,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-ggp8k,0b78f52f-979e-477a-9f67-a8c9d1965f1e
+2025-07-13 17:46:48,1752428816,kube_pod_deletion_timestamp,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-prmb5,73b45d87-d1e0-464c-a5cb-0cb37c909815
+2025-07-13 17:53:48,1752429250,kube_pod_deletion_timestamp,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,consumer-789d764dc7-rzwcv,6a7dc1c3-ffb8-44c1-bfef-1db32743786e

@@ -1,0 +1,3 @@
+timestamp,value,metric_name,container,instance,job,namespace,pod,reason,uid
+2025-07-13 17:36:48,1,kube_pod_init_container_status_waiting_reason,wait-for-consumer,10.244.2.8:8080,prometheus.scrape.annotated_pods,nimbusguard,load-test-baseline-qj9dm,PodInitializing,ba21404d-e1b9-4ca9-ba1c-74982e026845
+2025-07-13 17:36:48,1,kube_pod_init_container_status_waiting_reason,wait-for-consumer,kube-state-metrics.nimbusguard.svc:8080,prometheus.scrape.kube_state_metrics,nimbusguard,load-test-baseline-qj9dm,PodInitializing,ba21404d-e1b9-4ca9-ba1c-74982e026845

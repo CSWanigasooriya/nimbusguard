@@ -397,15 +397,15 @@ async def continuous_training_loop():
                     await services['dqn_agent'].save_model()
                     logger.info("💾 DQN model saved to MinIO")
             
-            # Reduced frequency - train every 30 seconds instead of every second
-            await asyncio.sleep(30)
+            # Configurable stabilization period between training cycles
+            await asyncio.sleep(config.scaling.stabilization_period_seconds)
             
         except Exception as e:
             logger.error(f"Training loop error: {e}")
             await asyncio.sleep(60)  # Back off longer on error
 
 # Kopf event handlers
-@kopf.timer('apps', 'v1', 'deployments', interval=config.scaling.decision_interval)
+@kopf.timer('apps', 'v1', 'deployments', interval=config.scaling.stabilization_period_seconds)
 async def periodic_scaling_decision(meta, **kwargs):
     """Periodic scaling decisions based on timer."""
     if (meta.get('namespace') != config.scaling.target_namespace or 

@@ -96,9 +96,11 @@ class LoadForecaster:
                 logger.warning("Failed to prepare prediction input")
                 return self._get_fallback_forecast()
             
+            min_samples = config.forecasting.min_training_samples
+            
             # Check if we should train LSTM model if not already trained
-            if not self.lstm_trainer.is_trained and len(feature_matrix) >= 20:  # Reduced from 40 to 20
-                logger.info(f"LSTM not trained but have {len(feature_matrix)} data points - starting training")
+            if not self.lstm_trainer.is_trained and len(feature_matrix) >= min_samples:
+                logger.info(f"🔄 LSTM not trained but have {len(feature_matrix)} data points (min: {min_samples}) - starting training")
                 self._schedule_retrain()
             
             # Make prediction if model is trained
@@ -107,15 +109,22 @@ class LoadForecaster:
                 
                 if predictions is not None:
                     forecast_result = self._analyze_predictions(predictions, feature_matrix)
+                    forecast_result["method"] = "lstm"
+                    forecast_result["confidence"] = min(0.9, forecast_result.get("confidence", 0.5))  # Higher confidence for LSTM
                     self.last_prediction = forecast_result
                     
                     # Check if we need to retrain
                     self._check_retrain_schedule()
                     
+                    logger.info(f"✅ LSTM forecast generated: confidence={forecast_result['confidence']:.3f}")
                     return forecast_result
             
             # If no trained model, use statistical fallback
-            logger.info("No trained model available, using statistical forecast")
+            if len(feature_matrix) >= min_samples:
+                logger.info(f"📊 No trained LSTM model, using statistical forecast for {len(feature_matrix)} samples")
+            else:
+                logger.info(f"⚠️ Insufficient data ({len(feature_matrix)}/{min_samples}), using statistical forecast")
+            
             return self._get_statistical_forecast(feature_matrix)
             
         except Exception as e:
@@ -150,11 +159,11 @@ class LoadForecaster:
                 "forecast_summary": forecast_summary,
                 "current_metrics": {
                     feature: float(current_values[i]) 
-                    for i, feature in enumerate(config.selected_features)
+                    for i, feature in enumerate(config.scaling.selected_features)
                 },
                 "predicted_peak": {
                     feature: float(np.max(forecast_values[:, i])) 
-                    for i, feature in enumerate(config.selected_features)
+                    for i, feature in enumerate(config.scaling.selected_features)
                 }
             }
             
@@ -168,7 +177,7 @@ class LoadForecaster:
     def _calculate_forecast_metrics(self, forecast_values: np.ndarray, current_values: np.ndarray) -> Dict[str, float]:
         """Calculate key metrics from forecast for scaling decisions."""
         # Map feature indices
-        feature_indices = {name: i for i, name in enumerate(config.selected_features)}
+        feature_indices = {name: i for i, name in enumerate(config.scaling.selected_features)}
         
         # Extract key metrics
         cpu_rate_idx = feature_indices.get("process_cpu_seconds_total_rate", 0)
@@ -344,12 +353,15 @@ class LoadForecaster:
                         config.forecasting.lookback_minutes
                     )
                     
-                    if feature_matrix is not None and len(feature_matrix) >= 40:
+                    min_samples = config.forecasting.min_training_samples
+                    if feature_matrix is not None and len(feature_matrix) >= min_samples:
+                        logger.info(f"🔄 Starting LSTM retraining with {len(feature_matrix)} samples (min: {min_samples})")
                         self._train_model_async(feature_matrix)
                         self.last_training_time = datetime.utcnow()
-                        logger.info("Background retraining completed")
+                        logger.info("✅ Background retraining completed successfully")
                     else:
-                        logger.warning("Insufficient data for retraining")
+                        actual_samples = len(feature_matrix) if feature_matrix is not None else 0
+                        logger.warning(f"❌ Insufficient data for retraining: {actual_samples}/{min_samples} samples")
                     
             except Exception as e:
                 logger.error(f"Background retraining failed: {e}")

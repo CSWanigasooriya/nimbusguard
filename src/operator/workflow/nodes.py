@@ -501,7 +501,7 @@ async def validate_decision_node(state: OperatorState, services: Dict[str, Any],
         current_replicas = state['current_replicas']
         desired_replicas = state['desired_replicas']
         
-        is_valid, reason = scaler.validate_scaling_decision(
+        is_valid, reason = await scaler.validate_scaling_decision(
             current_replicas=current_replicas,
             desired_replicas=desired_replicas,
             metrics=state['current_metrics']

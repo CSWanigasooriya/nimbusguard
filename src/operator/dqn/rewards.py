@@ -13,10 +13,12 @@ class ProactiveRewardCalculator:
     """Calculates rewards for DQN considering both current and predicted future state."""
     
     def __init__(self):
-        # Load classification thresholds - FIXED: More realistic thresholds for actual workloads
-        self.cpu_thresholds = {"low": 0.05, "medium": 0.15, "high": 0.4}  # 5%, 15%, 40%
-        self.memory_thresholds = {"low": 50, "medium": 150, "high": 300}  # MB
+        # Consumer-focused thresholds based on HPA baseline analysis
+        self.cpu_thresholds = {"low": 0.5, "medium": 5.0, "high": 12.0}  # CPU seconds (observed: 0.48-15.51)
+        self.memory_thresholds = {"low": 80, "medium": 150, "high": 250}  # MB (observed: 61-197MB)
         self.request_thresholds = {"low": 0.01, "medium": 0.1, "high": 0.5}  # req/s per replica
+        # NEW: Request latency thresholds (PRIMARY INDICATOR)
+        self.latency_thresholds = {"low": 20, "medium": 60, "high": 200}  # seconds (observed: 35-542s)
         
         # IoT-inspired: Track recent actions for stability analysis
         self.recent_actions = []
@@ -28,8 +30,12 @@ class ProactiveRewardCalculator:
         
     def _get_context_aware_weights(self, load_class: str, forecast_confidence: float) -> tuple:
         """IoT-inspired: Adjust reward weights based on system context."""
+        # CRITICAL: Zero metrics (stuck pods) - prioritize immediate action over forecasting
+        if load_class == "ZERO":
+            return 0.9, 0.1  # Strong emphasis on current state reward to encourage scaling up
+        
         # High load: prioritize immediate response over forecasting
-        if load_class == "HIGH":
+        elif load_class == "HIGH":
             return 0.8, 0.2  # current_weight, forecast_weight
         
         # Low load with good forecast: prioritize proactive planning
@@ -316,6 +322,7 @@ class ProactiveRewardCalculator:
         
         # FIXED: More balanced reward matrix that doesn't heavily bias toward scale_down
         reward_matrix = {
+            "ZERO": {"scale_up": 3.0, "keep_same": -2.0, "scale_down": -5.0},  # CRITICAL: Strong preference for scale_up when metrics are zero (stuck pods)
             "LOW": {"scale_up": -0.5, "keep_same": 1.0, "scale_down": 0.5},  # Prefer keep_same for low load
             "MEDIUM": {"scale_up": 1.0, "keep_same": 0.0, "scale_down": -1.0},  # Prefer scale_up for medium load
             "HIGH": {"scale_up": 2.0, "keep_same": -1.0, "scale_down": -2.0}  # Strong preference for scale_up for high load
@@ -421,45 +428,50 @@ class ProactiveRewardCalculator:
         return 0.0
     
     def _classify_load(self, metrics: Dict[str, float], replicas: int) -> str:
-        """Classify current load as LOW, MEDIUM, or HIGH."""
+        """Classify current load as LOW, MEDIUM, HIGH, or ZERO (stuck pods) - Consumer-focused."""
         try:
-            # Extract key metrics
+            # Extract consumer-focused metrics
             cpu_rate = metrics.get("process_cpu_seconds_total_rate", 0.0)
             memory_bytes = metrics.get("process_resident_memory_bytes", 0.0)
-            request_rate = metrics.get("http_requests_total_rate", 0.0)
+            request_rate = metrics.get("http_requests_total_process_rate", 0.0)
             
-            # Debug logging for memory calculation
-            logger.info(f"🔍 DEBUG MEMORY: raw_memory_bytes={memory_bytes}, replicas={replicas}")
+            # NEW: Primary indicator - request latency (sum/count = avg latency)
+            latency_sum = metrics.get("http_request_duration_seconds_sum_rate", 0.0)
+            latency_count = metrics.get("http_request_duration_seconds_count_rate", 0.0)
+            avg_latency = latency_sum / max(latency_count, 1e-6)  # Avoid division by zero
             
             # Convert to per-replica metrics
             cpu_per_replica = cpu_rate / max(replicas, 1)
-            memory_mb_per_replica = (memory_bytes / max(replicas, 1)) / (1024 * 1024)  # Per-replica memory in MB
+            memory_mb_per_replica = (memory_bytes / max(replicas, 1)) / (1024 * 1024)
             requests_per_replica = request_rate / max(replicas, 1)
             
-            # Debug logging for per-replica calculation
-            logger.info(f"🔍 DEBUG CALCULATION: {memory_bytes} bytes ÷ {replicas} replicas ÷ 1024² = {memory_mb_per_replica:.1f} MB per replica")
-            
             # Log the actual values for debugging
-            logger.info(f"Load classification: cpu_per_replica={cpu_per_replica:.4f}, "
+            logger.info(f"Consumer load classification: cpu_per_replica={cpu_per_replica:.4f}, "
                        f"memory_mb_per_replica={memory_mb_per_replica:.1f}, "
-                       f"requests_per_replica={requests_per_replica:.4f}, replicas={replicas}")
+                       f"requests_per_replica={requests_per_replica:.4f}, "
+                       f"avg_latency={avg_latency:.2f}s, replicas={replicas}")
             
-            # High load conditions
-            if (cpu_per_replica > self.cpu_thresholds["high"] or
-                memory_mb_per_replica > self.memory_thresholds["high"] or
-                requests_per_replica > self.request_thresholds["high"]):
-                logger.info(f"Classified as HIGH load: cpu>{self.cpu_thresholds['high']}? {cpu_per_replica > self.cpu_thresholds['high']}, "
-                           f"memory>{self.memory_thresholds['high']}? {memory_mb_per_replica > self.memory_thresholds['high']}, "
-                           f"requests>{self.request_thresholds['high']}? {requests_per_replica > self.request_thresholds['high']}")
+            # CRITICAL: Check for zero metrics (indicates stuck/unhealthy pods)
+            if (cpu_per_replica == 0.0 and memory_mb_per_replica == 0.0 and requests_per_replica == 0.0):
+                logger.warning(f"⚠️ ZERO METRICS DETECTED: All metrics are zero - pods may be stuck or unhealthy!")
+                return "ZERO"
+            
+            # HIGH load conditions - LATENCY IS PRIMARY INDICATOR
+            if (avg_latency > self.latency_thresholds["high"] or
+                cpu_per_replica > self.cpu_thresholds["high"] or
+                memory_mb_per_replica > self.memory_thresholds["high"]):
+                logger.info(f"Classified as HIGH load: latency>{self.latency_thresholds['high']}s? {avg_latency > self.latency_thresholds['high']}, "
+                           f"cpu>{self.cpu_thresholds['high']}? {cpu_per_replica > self.cpu_thresholds['high']}, "
+                           f"memory>{self.memory_thresholds['high']}MB? {memory_mb_per_replica > self.memory_thresholds['high']}")
                 return "HIGH"
             
-            # Medium load conditions
-            elif (cpu_per_replica > self.cpu_thresholds["medium"] or
-                  memory_mb_per_replica > self.memory_thresholds["medium"] or
-                  requests_per_replica > self.request_thresholds["medium"]):
-                logger.info(f"Classified as MEDIUM load: cpu>{self.cpu_thresholds['medium']}? {cpu_per_replica > self.cpu_thresholds['medium']}, "
-                           f"memory>{self.memory_thresholds['medium']}? {memory_mb_per_replica > self.memory_thresholds['medium']}, "
-                           f"requests>{self.request_thresholds['medium']}? {requests_per_replica > self.request_thresholds['medium']}")
+            # MEDIUM load conditions - Focus on latency and resource pressure
+            elif (avg_latency > self.latency_thresholds["medium"] or
+                  cpu_per_replica > self.cpu_thresholds["medium"] or
+                  memory_mb_per_replica > self.memory_thresholds["medium"]):
+                logger.info(f"Classified as MEDIUM load: latency>{self.latency_thresholds['medium']}s? {avg_latency > self.latency_thresholds['medium']}, "
+                           f"cpu>{self.cpu_thresholds['medium']}? {cpu_per_replica > self.cpu_thresholds['medium']}, "
+                           f"memory>{self.memory_thresholds['medium']}MB? {memory_mb_per_replica > self.memory_thresholds['medium']}")
                 return "MEDIUM"
             
             # Low load (default)
