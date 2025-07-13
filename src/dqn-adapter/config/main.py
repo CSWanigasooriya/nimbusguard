@@ -24,15 +24,15 @@ class DQNAdapterConfig(BaseSettings):
     
     # === FEATURE CONFIGURATION ===
     base_features: List[str] = Field(default=[
-        'process_cpu_seconds_total_rate',
-        'process_resident_memory_bytes',
-        'process_virtual_memory_bytes',
-        'http_request_duration_seconds_sum_rate',
-        'http_requests_total_rate',
-        'http_request_duration_seconds_count_rate',
-        'process_open_fds',
-        'http_response_size_bytes_sum_rate',
-        'http_request_size_bytes_count_rate'
+        'process_cpu_seconds_total_rate',         # Rate of CPU usage (computed from counter)
+        'process_resident_memory_bytes',          # Gauge - memory usage (unchanged)
+        'process_virtual_memory_bytes',           # Gauge - virtual memory (unchanged)
+        'http_request_duration_seconds_sum_rate', # Rate of total duration (computed from counter)
+        'http_requests_total_rate',               # Rate of total requests (computed from counter)
+        'http_request_duration_seconds_count_rate', # Rate of request count (computed from counter)
+        'process_open_fds',                       # Gauge - file descriptors (unchanged)
+        'http_response_size_bytes_sum_rate',      # Rate of response size (computed from counter)
+        'http_request_size_bytes_count_rate',     # Rate of request size count (computed from counter)
     ])
     
 

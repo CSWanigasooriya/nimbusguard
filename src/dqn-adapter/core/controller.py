@@ -3,6 +3,8 @@ from datetime import datetime
 from aiohttp import web
 from prometheus_client import generate_latest
 import kopf
+import torch
+import numpy as np
 
 # Import required metrics
 from monitoring.metrics import *
@@ -168,7 +170,92 @@ async def decision_trigger_handler(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def emergency_diagnostic_handler(request):
+    """Emergency diagnostic and training fixes endpoint."""
+    try:
+        logger = logging.getLogger("Controller")
+        logger.info("🚑 EMERGENCY DIAGNOSTIC TRIGGERED")
+        
+        if not _services or not _services.dqn_model or not _services.dqn_trainer:
+            return web.json_response({
+                'status': 'error',
+                'message': 'DQN model or trainer not available'
+            }, status=500)
+        
+        # Import diagnostic tool here to avoid circular imports
+        from diagnostic_tool import run_emergency_diagnostic
+        
+        # Run emergency diagnostic
+        results, fixes = run_emergency_diagnostic(_services)
+        
+        return web.json_response({
+            'status': 'success',
+            'timestamp': datetime.now().isoformat(),
+            'diagnostic_results': results,
+            'fixes_applied': fixes,
+            'message': 'Emergency diagnostic completed'
+        })
+        
+    except Exception as e:
+        logger = logging.getLogger("Controller")
+        logger.error(f"Emergency diagnostic failed: {e}")
+        return web.json_response({
+            'status': 'error',
+            'message': f'Diagnostic failed: {str(e)}'
+        }, status=500)
 
+
+async def diagnostic_status_handler(request):
+    """Get current training status and health metrics."""
+    try:
+        logger = logging.getLogger("Controller")
+        
+        if not _services or not _services.dqn_trainer:
+            return web.json_response({
+                'status': 'error',
+                'message': 'DQN trainer not available'
+            }, status=500)
+        
+        # Get recent training metrics
+        recent_losses = _services.dqn_trainer.training_losses[-10:] if _services.dqn_trainer.training_losses else []
+        
+        # Get current Q-values for sample input
+        sample_q_values = []
+        if _services.dqn_model:
+            sample_input = torch.randn(1, 9).to(next(_services.dqn_model.parameters()).device)
+            with torch.no_grad():
+                sample_q_values = _services.dqn_model(sample_input).cpu().numpy().flatten().tolist()
+        
+        status = {
+            'timestamp': datetime.now().isoformat(),
+            'training_health': {
+                'recent_losses': recent_losses,
+                'average_loss': float(np.mean(recent_losses)) if recent_losses else None,
+                'max_loss': float(max(recent_losses)) if recent_losses else None,
+                'batches_trained': _services.dqn_trainer.batches_trained,
+                'buffer_size': len(_services.dqn_trainer.memory),
+                'learning_rate': _services.dqn_trainer.optimizer.param_groups[0]['lr']
+            },
+            'model_health': {
+                'sample_q_values': sample_q_values,
+                'q_value_range': [float(min(sample_q_values)), float(max(sample_q_values))] if sample_q_values else None,
+                'extreme_q_values': any(abs(q) > 50 for q in sample_q_values) if sample_q_values else False
+            },
+            'system_health': {
+                'epsilon': _services.get_epsilon(),
+                'decision_count': _services.decision_count
+            }
+        }
+        
+        return web.json_response(status)
+        
+    except Exception as e:
+        logger = logging.getLogger("Controller")
+        logger.error(f"Status check failed: {e}")
+        return web.json_response({
+            'status': 'error',
+            'message': f'Status check failed: {str(e)}'
+        }, status=500)
 
 
 def setup_http_server():
@@ -181,7 +268,10 @@ def setup_http_server():
     app.router.add_get('/healthz', health_handler)
     app.router.add_post('/evaluate', evaluation_trigger_handler)
     app.router.add_post('/decide', decision_trigger_handler)
-
+    
+    # Add diagnostic routes
+    app.router.add_post('/diagnostic/emergency', emergency_diagnostic_handler)
+    app.router.add_get('/diagnostic/status', diagnostic_status_handler)
     
     return app
 

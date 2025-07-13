@@ -164,6 +164,14 @@ class DQNTrainer:
             next_states_array = np.array([e.next_state for e in batch], dtype=np.float32)
             dones_array = np.array([e.done for e in batch], dtype=bool)
 
+            # STABILITY FIX 1: Reward normalization to prevent scale mismatch
+            # Normalize rewards to prevent Q-value explosion
+            reward_std = np.std(rewards_array)
+            if reward_std > 0.1:  # Only normalize if there's significant variation
+                rewards_array = np.clip(rewards_array, -5.0, 5.0)  # Clip extreme rewards
+                # Optional: normalize to unit variance
+                # rewards_array = (rewards_array - np.mean(rewards_array)) / (reward_std + 1e-8)
+
             states = torch.from_numpy(states_array).to(self.device)
             actions = torch.from_numpy(actions_array).to(self.device)
             rewards = torch.from_numpy(rewards_array).to(self.device)
@@ -178,6 +186,16 @@ class DQNTrainer:
                 next_actions = self.policy_net(next_states).max(1)[1]
                 next_q_values = self.target_net(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
                 target_q_values = rewards + (self.services.config.dqn.gamma * next_q_values * ~dones)
+                
+                # STABILITY FIX 2: Target Q-value clipping to prevent explosion
+                target_q_values = torch.clamp(target_q_values, -100, 100)
+
+            # STABILITY FIX 3: Check for extreme values before loss calculation
+            if torch.any(torch.abs(current_q_values) > 1000) or torch.any(torch.abs(target_q_values) > 1000):
+                logger.error(f"TRAINER: extreme_values_detected - skipping training step")
+                logger.error(f"TRAINER: current_q_range=[{current_q_values.min().item():.2f}, {current_q_values.max().item():.2f}]")
+                logger.error(f"TRAINER: target_q_range=[{target_q_values.min().item():.2f}, {target_q_values.max().item():.2f}]")
+                return 0.0
 
             # Calculate loss and backpropagate
             loss = F.mse_loss(current_q_values, target_q_values)
@@ -186,6 +204,15 @@ class DQNTrainer:
             if not torch.isfinite(loss) or loss.item() < 0:
                 logger.warning(f"TRAINER: invalid_loss_detected loss={loss.item()} - skipping training step")
                 return 0.0
+
+            # STABILITY FIX 4: Automatic learning rate reduction for high losses
+            if loss.item() > 50:
+                current_lr = self.optimizer.param_groups[0]['lr']
+                if current_lr > 1e-5:
+                    new_lr = current_lr * 0.8  # Reduce by 20%
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] = new_lr
+                    logger.warning(f"TRAINER: auto_lr_reduction {current_lr:.6f} → {new_lr:.6f} due_to_high_loss={loss.item():.4f}")
 
             # Diagnostic logging for high losses
             if loss.item() > 100:
@@ -204,12 +231,21 @@ class DQNTrainer:
             self.optimizer.zero_grad()
             loss.backward()
 
-            # Gradient clipping to prevent exploding gradients (more aggressive for high losses)
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
+            # STABILITY FIX 5: Enhanced gradient clipping with automatic adjustment
+            max_grad_norm = 1.0
+            if loss.item() > 50:
+                max_grad_norm = 0.5  # More aggressive clipping for high losses
+            
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=max_grad_norm)
             
             # Log gradient information for high losses
             if loss.item() > 100:
-                logger.warning(f"TRAINER: gradient_analysis grad_norm={grad_norm:.4f} clipped_to=1.0")
+                logger.warning(f"TRAINER: gradient_analysis grad_norm={grad_norm:.4f} clipped_to={max_grad_norm}")
+
+            # STABILITY FIX 6: Skip update if gradients are still too large after clipping
+            if grad_norm > 10 * max_grad_norm:
+                logger.warning(f"TRAINER: skipping_update due_to_extreme_gradients norm={grad_norm:.4f}")
+                return 0.0
 
             self.optimizer.step()
             self.batches_trained += 1
@@ -218,6 +254,21 @@ class DQNTrainer:
             if self.batches_trained % self.services.config.dqn.target_update_interval == 0:
                 self.target_net.load_state_dict(self.policy_net.state_dict())
                 logger.info(f"TRAINING: target_network_updated batch={self.batches_trained}")
+
+            # STABILITY FIX 7: Model recovery mechanism for persistent high losses
+            if hasattr(self, 'consecutive_high_losses'):
+                if loss.item() > 50:
+                    self.consecutive_high_losses += 1
+                else:
+                    self.consecutive_high_losses = 0
+            else:
+                self.consecutive_high_losses = 1 if loss.item() > 50 else 0
+
+            # Trigger emergency recovery if too many consecutive high losses
+            if self.consecutive_high_losses >= 10:
+                logger.error("TRAINER: emergency_recovery_triggered - reinitializing model")
+                self._emergency_model_recovery()
+                self.consecutive_high_losses = 0
 
             # Track training metrics with resource limits
             self.training_losses.append(loss.item())
@@ -247,6 +298,35 @@ class DQNTrainer:
         except Exception as e:
             logger.error(f"Sync training step error: {e}")
             return 0.0
+
+    def _emergency_model_recovery(self):
+        """Emergency model recovery for persistent training instability."""
+        logger.warning("🚑 EMERGENCY MODEL RECOVERY INITIATED")
+        
+        # 1. Reinitialize model weights with smaller scale
+        for module in self.policy_net.modules():
+            if isinstance(module, torch.nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight, gain=0.3)  # Smaller gain
+                if module.bias is not None:
+                    torch.nn.init.constant_(module.bias, 0)
+        
+        # 2. Reset target network
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        
+        # 3. Reset optimizer state
+        self.optimizer.state = {}
+        
+        # 4. Reduce learning rate significantly
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = min(param_group['lr'], 1e-5)
+        
+        # 5. Clear some of the replay buffer to remove potentially problematic experiences
+        buffer_size = len(self.memory.buffer)
+        if buffer_size > 1000:
+            # Keep only the most recent 50% of experiences
+            self.memory.buffer = self.memory.buffer[buffer_size//2:]
+        
+        logger.warning("🚑 Emergency recovery completed - model reinitialized")
 
     async def _save_model(self):
         """Save model to MinIO."""
