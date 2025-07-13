@@ -281,7 +281,7 @@ docker-build: docker-build-base ## Build all necessary Docker images
 	@echo "🔨 Building application images..."
 	@docker build -t nimbusguard-consumer:latest src/consumer/
 	@docker build -t nimbusguard-generator:latest src/generator/
-	@docker build -t nimbusguard-dqn-adapter:latest src/dqn-adapter/
+	@docker build -t nimbusguard-operator:latest src/operator/
 
 
 
@@ -290,17 +290,17 @@ docker-build-clean: ## Build images without cache (clean build)
 	@docker build --no-cache -t nimbusguard-base:latest docker/
 	@docker build --no-cache -t nimbusguard-consumer:latest src/consumer/
 	@docker build --no-cache -t nimbusguard-generator:latest src/generator/
-	@docker build --no-cache -t nimbusguard-dqn-adapter:latest src/dqn-adapter/
+	@docker build --no-cache -t nimbusguard-operator:latest src/operator/
 
 # Push Docker images
 docker-push: ## Push all necessary Docker images to a registry
 	$(eval REPO_URL := $(shell echo $(DOCKER_REPO_URL)))
 	docker tag nimbusguard-consumer:latest $(REPO_URL)/nimbusguard-consumer:latest
-	docker tag nimbusguard-dqn-adapter:latest $(REPO_URL)/nimbusguard-dqn-adapter:latest
 	docker tag nimbusguard-generator:latest $(REPO_URL)/nimbusguard-generator:latest
+	docker tag nimbusguard-operator:latest $(REPO_URL)/nimbusguard-operator:latest
 	docker push $(REPO_URL)/nimbusguard-consumer:latest
-	docker push $(REPO_URL)/nimbusguard-dqn-adapter:latest
 	docker push $(REPO_URL)/nimbusguard-generator:latest
+	docker push $(REPO_URL)/nimbusguard-operator:latest
 
 # -----------------------------------------------------------------------------
 # Deployment Commands
@@ -347,7 +347,7 @@ clean: ## NUCLEAR cleanup - immediate brutal force deletion of everything
 	
 	# Step 4: Destroy all RBAC resources matching our patterns
 	@echo "💥 Nuclear RBAC destruction..."
-	@kubectl get clusterrole,clusterrolebinding --no-headers 2>/dev/null | grep -E "(nimbusguard|dqn-adapter|mcp-server|alloy|beyla|prometheus|kube-state-metrics)" | awk '{print $$1}' | xargs -r kubectl delete --force --grace-period=0 2>/dev/null &
+	@kubectl get clusterrole,clusterrolebinding --no-headers 2>/dev/null | grep -E "(nimbusguard|mcp-server|alloy|beyla|prometheus|kube-state-metrics)" | awk '{print $$1}' | xargs -r kubectl delete --force --grace-period=0 2>/dev/null &
 	
 	# Step 5: Kill webhook configurations
 	@echo "💥 Nuclear webhook destruction..."
@@ -356,7 +356,7 @@ clean: ## NUCLEAR cleanup - immediate brutal force deletion of everything
 	# Step 6: Clean up project resources from default namespace (but don't delete the namespace)
 	@echo "💥 Cleaning project resources from default namespace..."
 	@kubectl delete pods,services,deployments,configmaps,secrets,jobs,cronjobs -n default -l app=nimbusguard --force --grace-period=0 2>/dev/null || true
-	@kubectl delete pods,services,deployments,configmaps,secrets,jobs,cronjobs -n default -l component=keda-dqn --force --grace-period=0 2>/dev/null || true
+	@kubectl delete pods,services,deployments,configmaps,secrets,jobs,cronjobs -n default -l component=nimbusguard --force --grace-period=0 2>/dev/null || true
 	@kubectl delete scaledobjects,hpa -n default --all --force --grace-period=0 2>/dev/null || true
 	
 	# Step 7: Wait briefly for background deletions then force-finalize stuck namespaces
@@ -392,7 +392,7 @@ ports: ## Port forward all relevant services in the background
 	@echo "🚀 Starting all port forwarding in the background..."
 	@nohup kubectl port-forward -n nimbusguard svc/prometheus 9090:9090 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/grafana 3000:3000 > .ports.log 2>&1 &
-	@nohup kubectl port-forward -n nimbusguard svc/dqn-adapter 8080:8080 > .ports.log 2>&1 &
+	@nohup kubectl port-forward -n nimbusguard svc/nimbusguard-operator 8080:8080 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/redis 6379:6379 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/minio 9000:9000 > .ports.log 2>&1 &
 	@nohup kubectl port-forward -n nimbusguard svc/minio 9001:9001 > .ports.log 2>&1 &
@@ -402,7 +402,7 @@ ports: ## Port forward all relevant services in the background
 	@echo "-----------------------------------------"
 	@echo "📈 Prometheus:         http://localhost:9090"
 	@echo "📋 Grafana:            http://localhost:3000  (admin/admin)"
-	@echo "🧠 DQN Adapter HTTP:   http://localhost:8080"
+	@echo "🧠 Operator HTTP:      http://localhost:8080"
 	@echo "    ├── /healthz      Health check"
 	@echo "    ├── /metrics      Prometheus metrics (includes nimbusguard_dqn_desired_replicas)"
 	@echo "    └── /evaluate     Manual evaluation trigger"
