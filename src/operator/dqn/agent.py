@@ -218,12 +218,33 @@ class ProactiveDQNAgent:
         
         return np.array(state, dtype=np.float32)
     
+    def _update_epsilon_by_experience(self):
+        """Update epsilon based on experience count for more consistent exploration decay."""
+        experience_count = len(self.replay_buffer)
+        
+        # Decay epsilon based on experiences collected (0 to 1000 experiences)
+        decay_experiences = 1000
+        if experience_count < decay_experiences:
+            # Linear decay from start to end over 1000 experiences
+            progress = experience_count / decay_experiences
+            self.epsilon = self.config.dqn_epsilon_start * (1 - progress) + self.config.dqn_epsilon_end * progress
+        else:
+            # Keep at minimum after decay period
+            self.epsilon = self.config.dqn_epsilon_end
+        
+        # Log epsilon changes occasionally
+        if experience_count % 50 == 0 or experience_count < 10:
+            logger.info(f"🎯 Epsilon updated by experience: {self.epsilon:.4f} (experiences: {experience_count}/1000)")
+    
     def select_action(self, state: np.ndarray, use_forecast_guidance: bool = True, 
                      forecast_confidence: float = 0.5) -> Tuple[int, float, bool]:
         """
         Select action using epsilon-greedy with forecast-guided exploration.
         Returns: (action_index, decision_confidence, is_exploration)
         """
+        # Update epsilon based on experience count (not just training steps)
+        self._update_epsilon_by_experience()
+        
         # Adjust epsilon based on forecast confidence if enabled
         if use_forecast_guidance:
             adjusted_epsilon = self.epsilon * (1.0 - forecast_confidence * 0.3)
@@ -352,18 +373,9 @@ class ProactiveDQNAgent:
                 self.target_network.load_state_dict(self.q_network.state_dict())
                 logger.info(f"Target network updated at step {self.training_steps}")
             
-            # Linear epsilon decay instead of exponential for better control
-            # Decay from start to end over 1000 training steps
-            decay_steps = 1000
-            if self.training_steps < decay_steps:
-                # Linear interpolation from start to end
-                progress = self.training_steps / decay_steps
-                self.epsilon = self.config.dqn_epsilon_start * (1 - progress) + self.config.dqn_epsilon_end * progress
-            else:
-                # Keep at minimum after decay period
-                self.epsilon = self.config.dqn_epsilon_end
-            
-            logger.info(f"🔍 Epsilon updated: {self.epsilon:.4f} (step {self.training_steps}/{decay_steps})")
+            # Note: Epsilon is now primarily updated by experience count in select_action()
+            # This ensures consistent decay regardless of training frequency
+            logger.info(f"🔍 Training completed: loss={loss.item():.6f}, step={self.training_steps}, epsilon={self.epsilon:.4f}")
             
             # Store last loss for metrics
             self.last_loss = loss.item()

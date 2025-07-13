@@ -200,6 +200,10 @@ async def collect_metrics_node(state: OperatorState, services: Dict[str, Any], c
         state = update_state_with_metrics(state, metrics)
         state['current_replicas'] = current_replicas
         
+        # CRITICAL FIX: Always update current replicas metric during collection
+        if 'metrics' in services:
+            services['metrics'].current_replicas.set(current_replicas)
+        
         execution_time = (time.time() - start_time) * 1000
         state = add_node_output(state, 'collect_metrics', {
             'metrics_count': len(metrics),
@@ -437,14 +441,14 @@ async def dqn_decision_node(state: OperatorState, services: Dict[str, Any], conf
         if 'metrics' in services:
             training_stats = {
                 'buffer_size': len(dqn_agent.replay_buffer) if hasattr(dqn_agent, 'replay_buffer') else 0,
-                'training_steps': getattr(dqn_agent, 'training_steps', 0)
+                'training_steps': getattr(dqn_agent, 'training_steps', 0),
+                'epsilon': getattr(dqn_agent, 'epsilon', 0.0)  # Include current epsilon value
             }
             
             # Add loss if available
             if hasattr(dqn_agent, 'last_loss') and dqn_agent.last_loss is not None:
                 training_stats['loss'] = float(dqn_agent.last_loss)
             
-            # Note: Epsilon is NOT updated here - only during training to prevent overwriting the decayed value
             await services['metrics'].update_dqn_metrics(
                 training_stats=training_stats,
                 q_values=q_values_dict,
@@ -551,6 +555,16 @@ async def execute_scaling_node(state: OperatorState, services: Dict[str, Any], c
             logger.info(f"⏭️ No scaling needed: {state['current_replicas']} replicas")
             state['scaling_applied'] = True
             state['scaling_error'] = None
+            
+            # CRITICAL FIX: Update metrics even when no scaling occurs
+            if 'metrics' in services:
+                await services['metrics'].update_scaling_metrics(
+                    action=state['scaling_decision'],
+                    current_replicas=state['current_replicas'],
+                    desired_replicas=state['desired_replicas'],
+                    reason="DQN_no_change"
+                )
+            
             execution_time = (time.time() - start_time) * 1000
             state = add_node_output(state, 'execute_scaling', {
                 'skipped': True,
