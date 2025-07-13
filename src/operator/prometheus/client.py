@@ -64,7 +64,7 @@ class PrometheusClient:
                 
                 # Debug logging for memory metrics specifically
                 if "memory" in feature_name.lower():
-                    logger.info(f"DEBUG: {feature_name} = {value} bytes ({value/(1024*1024):.1f} MB)")
+                    logger.info(f"🔍 DEBUG: {feature_name} = {value} bytes ({value/(1024*1024):.1f} MB)")
                 else:
                     logger.debug(f"Feature {feature_name}: {value}")
                 

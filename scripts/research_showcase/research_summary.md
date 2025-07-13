@@ -1,60 +1,60 @@
-# Kubernetes State-Focused DQN Research Summary
+# Consumer Performance DQN Research Summary
 
 ## Overview
-This document summarizes the KUBERNETES STATE-FOCUSED FEATURE SELECTION process for DQN-based Kubernetes pod autoscaling.
+This document summarizes the CONSUMER PERFORMANCE FEATURE SELECTION process for DQN-based Kubernetes pod autoscaling.
 
-**TARGET SYSTEM**: Multi-dimensional Kubernetes metrics with proper aggregation
-**FOCUS**: Pod health, resource limits, deployment state, and container status
-**GOAL**: Real-time scaling decisions through current Kubernetes state analysis
+**TARGET SYSTEM**: Consumer pod performance metrics with intelligent rate calculations
+**FOCUS**: CPU usage, memory consumption, HTTP request patterns, and file descriptors
+**GOAL**: Real-time scaling decisions through consumer performance analysis
 
 ## Dataset Statistics
-- **Target System**: Multi-dimensional Kubernetes metrics
-- **Total Samples**: 894
-- **Selected Features**: 9 (multi-dimensional handled)
-- **Statistical Approach**: ✅ Advanced ensemble feature selection with 6 validation methods
+- **Target System**: Consumer pod performance metrics with rate calculations
+- **Total Samples**: 45
+- **Selected Features**: 9 (performance-focused)
+- **Methodology**: Intelligent data-driven feature selection
 
-## Kubernetes Feature Categories
-- **Deployment State**: 3 features (replicas, generation)
-- **Pod & Container**: 5 features (readiness, running, exit codes)
-- **Resource Management**: 2 features (CPU, memory limits)
-- **Network & Health**: 1 features (network status)
+## Consumer Performance Categories
+- **CPU Performance**: 1 features (usage rate)
+- **Memory Usage**: 2 features (resident, virtual)
+- **Network Performance**: 5 features (HTTP requests, responses)
+- **I/O Performance**: 1 features (file descriptors)
 
 ## Scaling Opportunity Analysis
-- **Scale-Down Opportunities**: 781 samples (87.4%)
-- **Keep Same**: 0 samples
-- **Scale Up**: 113 samples
-- **Resource Optimization Potential**: High
+- **Scale-Up Opportunities**: 44 samples (97.8%)
+- **Keep Same**: 1 samples
+- **Scale Down**: Limited scale-down opportunities detected
+- **Performance Optimization Potential**: High
 
-## Multi-Dimensional Benefits
-1. **Pod Health Analysis**: True - Real-time pod readiness patterns
-2. **Resource Optimization**: Separate CPU and memory limits for precise scaling decisions
-3. **Deployment Tracking**: Current generation and replica state monitoring
-4. **Container Health**: Running status and exit code analysis for scaling triggers
-5. **Statistical Rigor**: 6-method validation with zero redundancy
+## Rate-Based Benefits
+1. **CPU Rate Analysis**: Real-time CPU usage rate patterns for immediate scaling triggers
+2. **Memory Optimization**: Separate resident and virtual memory for precise resource planning
+3. **HTTP Performance**: Request duration, count, and size rates for load-based scaling
+4. **I/O Monitoring**: File descriptor usage for resource constraint detection
+5. **Statistical Rigor**: Data-driven feature selection with scaling relevance scoring
 
 ## Technical Achievements
-1. **Multi-Dimensional Handling**: CPU and memory resource limits properly separated
-2. **Real-Time Focus**: All 9/9 features are current-state indicators (no cumulative metrics)
-3. **Statistical Excellence**: Mutual Information, Random Forest, Correlation, RFECV, Statistical Significance, VIF
-4. **Prometheus Integration**: Proper aggregation with sum() across consumer pods
-5. **Zero Redundancy**: No derived features, no historical accumulation issues
+1. **Rate-Based Metrics**: HTTP and CPU metrics converted to rates for better scaling signals
+2. **Real-Time Focus**: All 9/9 features are current performance indicators
+3. **Consumer-Specific**: Focused on actual consumer pod performance, not infrastructure
+4. **Statistical Excellence**: Scaling relevance scores from 87.7 to 120.0
+5. **Zero Redundancy**: Each feature provides unique performance insight
 
 ## Selected Features (9 total)
-1. **Unavailable Replicas** (score: 138.55) - Deployment scaling trigger
-2. **Pod Readiness** (score: 138.40) - Container health indicator  
-3. **Desired Replicas** (score: 130.40) - Target capacity planning
-4. **CPU Limits** (score: 109.10) - Resource constraint monitoring
-5. **Memory Limits** (score: 109.00) - Memory resource optimization
-6. **Running Containers** (score: 105.15) - Active workload tracking
-7. **Deployment Generation** (score: 102.10) - Update state monitoring
-8. **Network Status** (score: 98.55) - Infrastructure health
-9. **Container Exit Code** (score: 87.70) - Failure pattern detection
+1. **CPU Usage Rate** (relevance: 115.0) - Real-time CPU consumption rate
+2. **Resident Memory** (relevance: 120.0) - Physical memory usage
+3. **Virtual Memory** (relevance: 115.0) - Virtual memory allocation
+4. **Request Duration Rate** (relevance: 100.0) - HTTP request processing speed
+5. **Request Count Rate** (relevance: 105.0) - HTTP request frequency
+6. **Request Frequency** (relevance: 95.0) - Request arrival patterns
+7. **Open File Descriptors** (relevance: 90.0) - I/O resource usage
+8. **Response Size Rate** (relevance: 90.0) - HTTP response throughput
+9. **Request Size Rate** (relevance: 90.0) - HTTP request throughput
 
 ## Generated Visualizations
-1. **feature_analysis.png**: Kubernetes state feature importance and category analysis
-2. **correlation_heatmap.png**: Multi-dimensional feature correlations
-3. **feature_distributions.png**: Kubernetes state vs scaling analysis
-4. **data_quality_report.png**: Resource optimization and health analysis
+1. **feature_analysis.png**: Consumer performance feature importance and category analysis
+2. **correlation_heatmap.png**: Performance metric correlations
+3. **feature_distributions.png**: Consumer performance vs scaling analysis
+4. **data_quality_report.png**: Performance optimization and health analysis
 
 ---
-*Generated on 2025-07-07 18:55:45 using Kubernetes state-focused methods with multi-dimensional handling*
+*Generated on 2025-07-13 16:12:53 using consumer performance-focused methods*
