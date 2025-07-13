@@ -104,6 +104,7 @@ def process_metric(
 def export_metrics(
     prometheus_url,
     days,
+    minutes,
     step,
     output_format,
     output_dir,
@@ -124,7 +125,10 @@ def export_metrics(
     if dry_run:
         logging.info("--- DRY RUN ---")
         logging.info(f"URL: {prometheus_url}")
-        logging.info(f"Days: {days}, Step: {step}")
+        if days is not None:
+            logging.info(f"Days: {days}, Step: {step}")
+        if minutes is not None:
+            logging.info(f"Minutes: {minutes}, Step: {step}")
         logging.info(f"Output Format: {output_format}, Output Dir: {output_path}")
         if metrics_file:
             logging.info(f"Metrics File: {metrics_file}")
@@ -161,7 +165,12 @@ def export_metrics(
         return
 
     end_time = datetime.now()
-    start_time = end_time - timedelta(days=days)
+    if minutes is not None:
+        start_time = end_time - timedelta(minutes=minutes)
+        logging.info(f"Exporting metrics from {start_time} to {end_time} ({minutes} minutes)")
+    else:
+        start_time = end_time - timedelta(days=days)
+        logging.info(f"Exporting metrics from {start_time} to {end_time} ({days} days)")
 
     all_metrics_dfs = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -209,8 +218,10 @@ def main():
                       help='Prometheus server URL')
     
     # Export options
-    parser.add_argument('--days', type=int, default=7,
+    parser.add_argument('--days', type=int, default=None,
                       help='Number of days to export')
+    parser.add_argument('--minutes', type=int, default=None,
+                      help='Number of minutes to export (alternative to --days)')
     parser.add_argument('--step', default='1m',
                       help='Query resolution step width')
     parser.add_argument('--output-format', choices=['unified', 'individual'],
@@ -237,6 +248,14 @@ def main():
     
     args = parser.parse_args()
     
+    # Validate time range arguments
+    if args.days is not None and args.minutes is not None:
+        logging.error("Cannot specify both --days and --minutes")
+        sys.exit(1)
+    
+    if args.days is None and args.minutes is None:
+        args.days = 7  # Default to 7 days
+    
     try:
         # Handle work directory - set output relative to script location if not absolute
         if not Path(args.output_dir).is_absolute():
@@ -254,6 +273,7 @@ def main():
         export_metrics(
             prometheus_url=args.url,
             days=args.days,
+            minutes=args.minutes,
             step=args.step,
             output_format=args.output_format,
             output_dir=args.output_dir,

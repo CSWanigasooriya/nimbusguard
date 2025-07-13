@@ -18,16 +18,16 @@ class DirectScaler:
         self.config = scaling_config
         self.logger = logger
         
-        # Scaling constraints
-        self.min_replicas = scaling_config.min_replicas
-        self.max_replicas = scaling_config.max_replicas
+        # Default scaling constraints (fallback values)
+        self.default_min_replicas = scaling_config.min_replicas
+        self.default_max_replicas = scaling_config.max_replicas
         
         # Target deployment
         self.target_deployment = scaling_config.target_deployment
         self.target_namespace = scaling_config.target_namespace
         
         self.logger.info(f"DirectScaler initialized: target={self.target_deployment}, "
-                        f"range=[{self.min_replicas}, {self.max_replicas}]")
+                        f"default_range=[{self.default_min_replicas}, {self.default_max_replicas}]")
     
     async def scale_to(self, desired_replicas: int, reason: str = "DQN decision") -> Tuple[bool, Dict[str, Any]]:
         """
@@ -37,13 +37,7 @@ class DirectScaler:
             Tuple of (success, result_info)
         """
         try:
-            # Apply safety constraints
-            constrained_replicas = max(self.min_replicas, min(self.max_replicas, desired_replicas))
-            
-            if constrained_replicas != desired_replicas:
-                self.logger.warning(f"Replica count constrained: {desired_replicas} → {constrained_replicas}")
-            
-            # Get current deployment state
+            # Get current deployment state first to extract dynamic limits
             current_deployment = await self.k8s_client.get_deployment(
                 self.target_deployment, 
                 self.target_namespace
@@ -51,6 +45,20 @@ class DirectScaler:
             
             if not current_deployment:
                 return False, {"error": "Target deployment not found"}
+            
+            # Use deployment-specific limits or fall back to defaults
+            min_replicas = current_deployment.get('min_replicas', self.default_min_replicas)
+            max_replicas = current_deployment.get('max_replicas', self.default_max_replicas)
+            
+            # Apply safety constraints using deployment-specific limits
+            constrained_replicas = max(min_replicas, min(max_replicas, desired_replicas))
+            
+            if constrained_replicas != desired_replicas:
+                self.logger.warning(f"Replica count constrained: {desired_replicas} → {constrained_replicas} "
+                                  f"(limits: {min_replicas}-{max_replicas})")
+            else:
+                self.logger.debug(f"Scaling within limits: {desired_replicas} "
+                                f"(limits: {min_replicas}-{max_replicas})")
             
             current_replicas = current_deployment['replicas']
             
@@ -137,20 +145,37 @@ class DirectScaler:
             self.logger.error(f"Error waiting for stability: {e}")
             return False
     
-    def validate_scaling_decision(self, current_replicas: int, desired_replicas: int, 
-                                metrics: Dict[str, Any]) -> Tuple[bool, str]:
+    async def validate_scaling_decision(self, current_replicas: int, desired_replicas: int, 
+                                      metrics: Dict[str, Any]) -> Tuple[bool, str]:
         """
-        Validate scaling decision based on current state and metrics.
+        Validate scaling decision based on current state and metrics with dynamic limits.
         
         Returns:
             Tuple of (is_valid, reason)
         """
-        # Check replica bounds
-        if desired_replicas < self.min_replicas:
-            return False, f"Below minimum replicas ({self.min_replicas})"
-        
-        if desired_replicas > self.max_replicas:
-            return False, f"Above maximum replicas ({self.max_replicas})"
+        try:
+            # Get current deployment to fetch dynamic limits
+            current_deployment = await self.k8s_client.get_deployment(
+                self.target_deployment, 
+                self.target_namespace
+            )
+            
+            if current_deployment:
+                min_replicas = current_deployment.get('min_replicas', self.default_min_replicas)
+                max_replicas = current_deployment.get('max_replicas', self.default_max_replicas)
+            else:
+                min_replicas = self.default_min_replicas
+                max_replicas = self.default_max_replicas
+            
+            # Check replica bounds with dynamic limits
+            if desired_replicas < min_replicas:
+                return False, f"Below minimum replicas ({min_replicas})"
+            
+            if desired_replicas > max_replicas:
+                return False, f"Above maximum replicas ({max_replicas})"
+        except Exception as e:
+            self.logger.error(f"Failed to validate scaling decision: {e}")
+            return False, f"Validation error: {e}"
         
         # Check for extreme scaling
         replica_change = abs(desired_replicas - current_replicas)
@@ -192,12 +217,41 @@ class DirectScaler:
             self.logger.error(f"❌ Emergency scaling error: {e}")
             return False
     
-    def get_scaling_stats(self) -> Dict[str, Any]:
-        """Get scaling configuration and statistics."""
-        return {
-            'target_deployment': self.target_deployment,
-            'target_namespace': self.target_namespace,
-            'min_replicas': self.min_replicas,
-            'max_replicas': self.max_replicas,
-            'scaling_method': 'direct_k8s_api'
-        } 
+    async def get_scaling_stats(self) -> Dict[str, Any]:
+        """Get scaling configuration and statistics with current dynamic limits."""
+        try:
+            # Get current deployment to fetch dynamic limits
+            current_deployment = await self.k8s_client.get_deployment(
+                self.target_deployment, 
+                self.target_namespace
+            )
+            
+            if current_deployment:
+                min_replicas = current_deployment.get('min_replicas', self.default_min_replicas)
+                max_replicas = current_deployment.get('max_replicas', self.default_max_replicas)
+                current_replicas = current_deployment.get('replicas', 0)
+            else:
+                min_replicas = self.default_min_replicas
+                max_replicas = self.default_max_replicas
+                current_replicas = 0
+            
+            return {
+                'target_deployment': self.target_deployment,
+                'target_namespace': self.target_namespace,
+                'current_replicas': current_replicas,
+                'min_replicas': min_replicas,
+                'max_replicas': max_replicas,
+                'default_min_replicas': self.default_min_replicas,
+                'default_max_replicas': self.default_max_replicas,
+                'scaling_method': 'direct_k8s_api_with_dynamic_limits'
+            }
+        except Exception as e:
+            self.logger.error(f"Failed to get scaling stats: {e}")
+            return {
+                'target_deployment': self.target_deployment,
+                'target_namespace': self.target_namespace,
+                'min_replicas': self.default_min_replicas,
+                'max_replicas': self.default_max_replicas,
+                'scaling_method': 'direct_k8s_api_with_dynamic_limits',
+                'error': str(e)
+            } 

@@ -7,41 +7,43 @@ class PrometheusQueries:
     
     @staticmethod
     def get_feature_queries() -> Dict[str, str]:
-        """Get all feature queries mapped by feature name."""
+        """Get consumer-focused feature queries based on HPA baseline analysis."""
         return {
-            # CPU metrics - aggregated across consumer pods
-            "process_cpu_seconds_total_rate": 
-                'sum(rate(process_cpu_seconds_total{job="prometheus.scrape.annotated_pods", instance=~".*8000"}[30s])) or vector(0)',
+            # PRIMARY INDICATOR: Request latency (35-542s spikes indicate scaling need)
+            "http_request_duration_seconds_sum_rate": 
+                'sum(rate(http_request_duration_seconds_sum{job="prometheus.scrape.nimbusguard_consumer"}[1m])) or vector(0)',
             
-            # Memory metrics - aggregated across consumer pods
-            "process_resident_memory_bytes":
-                'sum(process_resident_memory_bytes{job="prometheus.scrape.annotated_pods", instance=~".*8000"}) or vector(0)',
-            
-            "process_virtual_memory_bytes":
-                'sum(process_virtual_memory_bytes{job="prometheus.scrape.annotated_pods", instance=~".*8000"}) or vector(0)',
-            
-            # Request latency metrics - ONLY for /process endpoint (actual workload)
-            "http_request_duration_seconds_sum_rate":
-                'sum(rate(http_request_duration_seconds_sum{job="prometheus.scrape.annotated_pods", instance=~".*8000", handler="/process"}[30s])) or vector(0)',
-            
-            # Request rate metrics - ONLY for /process endpoint (actual workload)
-            "http_requests_total_rate":
-                'sum(rate(http_requests_total{job="prometheus.scrape.annotated_pods", instance=~".*8000", handler="/process"}[30s])) or vector(0)',
-            
+            # Request rate - actual workload indicator
             "http_request_duration_seconds_count_rate":
-                'sum(rate(http_request_duration_seconds_count{job="prometheus.scrape.annotated_pods", instance=~".*8000", handler="/process"}[30s])) or vector(0)',
+                'sum(rate(http_request_duration_seconds_count{job="prometheus.scrape.nimbusguard_consumer"}[1m])) or vector(0)',
             
-            # File descriptor metrics - aggregated across consumer pods
-            "process_open_fds":
-                'sum(process_open_fds{job="prometheus.scrape.annotated_pods", instance=~".*8000"}) or vector(0)',
+            # CPU per pod - shows resource pressure (0.48-15.51s spikes)
+            "process_cpu_seconds_total_rate": 
+                'sum(rate(process_cpu_seconds_total{job="prometheus.scrape.nimbusguard_consumer"}[1m])) or vector(0)',
             
-            # Response size metrics - ONLY for /process endpoint (actual workload)
+            # Memory per pod - shows memory pressure (61-197MB spikes)
+            "process_resident_memory_bytes":
+                'sum(process_resident_memory_bytes{job="prometheus.scrape.nimbusguard_consumer"}) or vector(0)',
+            
+            # Actual workload requests to /process endpoint (fallback to all HTTP requests)
+            "http_requests_total_process_rate":
+                'sum(rate(http_requests_total{job="prometheus.scrape.nimbusguard_consumer", handler="/process"}[1m])) or sum(rate(http_requests_total{job="prometheus.scrape.nimbusguard_consumer"}[1m])) or vector(0)',
+            
+            # Response throughput - indicates processing capacity
             "http_response_size_bytes_sum_rate":
-                'sum(rate(http_response_size_bytes_sum{job="prometheus.scrape.annotated_pods", instance=~".*8000", handler="/process"}[30s])) or vector(0)',
+                'sum(rate(http_response_size_bytes_sum{job="prometheus.scrape.nimbusguard_consumer"}[1m])) or vector(0)',
             
-            # Request size metrics - ONLY for /process endpoint (actual workload)
-            "http_request_size_bytes_count_rate":
-                'sum(rate(http_request_size_bytes_count{job="prometheus.scrape.annotated_pods", instance=~".*8000", handler="/process"}[30s])) or vector(0)'
+            # Connection pressure - file descriptors
+            "process_open_fds":
+                'sum(process_open_fds{job="prometheus.scrape.nimbusguard_consumer"}) or vector(0)',
+            
+            # Resource constraints - CPU limits from kube-state-metrics
+            "kube_pod_container_resource_limits_cpu":
+                'sum(kube_pod_container_resource_limits{resource="cpu", namespace="nimbusguard", pod=~"consumer-.*"}) or vector(0)',
+            
+            # Active connections (fallback to request count if not available)
+            "http_server_active_connections":
+                'sum(rate(http_requests_total{job="prometheus.scrape.nimbusguard_consumer"}[1m])) or vector(0)'
         }
     
     @staticmethod

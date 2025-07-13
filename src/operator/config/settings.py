@@ -22,13 +22,21 @@ class ForecastingConfig:
     """LSTM forecasting configuration."""
     def __init__(self):
         self.enabled = os.getenv("FORECASTING_ENABLED", "true").lower() == "true"
-        self.lookback_minutes = int(os.getenv("FORECASTING_LOOKBACK_MINUTES", "30"))
-        self.forecast_horizon_minutes = int(os.getenv("FORECASTING_HORIZON_MINUTES", "10"))
-        self.hidden_units = int(os.getenv("LSTM_HIDDEN_UNITS", "64"))
-        self.lstm_hidden_size = int(os.getenv("LSTM_HIDDEN_UNITS", "64"))  # Alias for compatibility
-        self.lstm_num_layers = int(os.getenv("LSTM_NUM_LAYERS", "2"))
-        self.sequence_length = int(os.getenv("LSTM_SEQUENCE_LENGTH", "10"))
-        self.retrain_interval_minutes = int(os.getenv("LSTM_RETRAIN_INTERVAL_MINUTES", "60"))
+        self.lookback_minutes = int(os.getenv("FORECASTING_LOOKBACK_MINUTES", "60"))  # Increased for better training
+        self.forecast_horizon_minutes = int(os.getenv("FORECASTING_HORIZON_MINUTES", "5"))  # Shorter horizon for better accuracy
+        self.hidden_units = int(os.getenv("LSTM_HIDDEN_UNITS", "32"))  # Smaller model for limited data
+        self.lstm_hidden_size = int(os.getenv("LSTM_HIDDEN_UNITS", "32"))  # Alias for compatibility
+        self.lstm_num_layers = int(os.getenv("LSTM_NUM_LAYERS", "1"))  # Single layer for small datasets
+        self.sequence_length = int(os.getenv("LSTM_SEQUENCE_LENGTH", "15"))  # Longer sequences for better patterns
+        self.retrain_interval_minutes = int(os.getenv("LSTM_RETRAIN_INTERVAL_MINUTES", "30"))  # More frequent training
+        
+        # New parameters for improved training
+        self.min_training_samples = int(os.getenv("LSTM_MIN_TRAINING_SAMPLES", "20"))  # Minimum data for training
+        self.validation_split = float(os.getenv("LSTM_VALIDATION_SPLIT", "0.2"))  # 20% for validation
+        self.early_stopping_patience = int(os.getenv("LSTM_EARLY_STOPPING_PATIENCE", "10"))  # Early stopping
+        self.learning_rate = float(os.getenv("LSTM_LEARNING_RATE", "0.001"))  # Learning rate
+        self.batch_size = int(os.getenv("LSTM_BATCH_SIZE", "8"))  # Smaller batch size for limited data
+        self.max_epochs = int(os.getenv("LSTM_MAX_EPOCHS", "100"))  # More epochs for better training
 
 class ScalingConfig:
     """Scaling configuration."""
@@ -37,7 +45,6 @@ class ScalingConfig:
         self.target_namespace = os.getenv("TARGET_NAMESPACE", "nimbusguard")
         self.min_replicas = int(os.getenv("MIN_REPLICAS", "1"))
         self.max_replicas = int(os.getenv("MAX_REPLICAS", "10"))
-        self.decision_interval = int(os.getenv("DECISION_INTERVAL", "30"))
         
         # DQN configuration
         self.dqn_hidden_dims = [int(x) for x in os.getenv("DQN_HIDDEN_DIMS", "64,32").split(",")]
@@ -49,17 +56,21 @@ class ScalingConfig:
         self.dqn_batch_size = int(os.getenv("DQN_BATCH_SIZE", "16"))
         self.dqn_memory_capacity = int(os.getenv("DQN_MEMORY_CAPACITY", "10000"))
         
-        # The 9 scientifically selected features from your existing system
+        # Training loop configuration
+        self.stabilization_period_seconds = int(os.getenv("STABILIZATION_PERIOD_SECONDS", "30"))
+        
+        # Consumer-focused features based on HPA baseline analysis
+        # These features directly correlate with scaling decisions
         self.selected_features = [
-            'process_cpu_seconds_total_rate',
-            'process_resident_memory_bytes',
-            'process_virtual_memory_bytes',
-            'http_request_duration_seconds_sum_rate',
-            'http_requests_total_rate',
-            'http_request_duration_seconds_count_rate',
-            'process_open_fds',
-            'http_response_size_bytes_sum_rate',
-            'http_request_size_bytes_count_rate'
+            'http_request_duration_seconds_sum_rate',      # PRIMARY: Request latency (35-542s spikes)
+            'http_request_duration_seconds_count_rate',    # Request rate (actual workload)
+            'process_cpu_seconds_total_rate',              # CPU per pod (0.48-15.51s spikes)
+            'process_resident_memory_bytes',               # Memory per pod (61-197MB spikes)
+            'http_requests_total_process_rate',            # Actual /process endpoint requests
+            'http_response_size_bytes_sum_rate',           # Response throughput
+            'process_open_fds',                            # Connection pressure
+            'kube_pod_container_resource_limits_cpu',      # Resource constraints
+            'http_server_active_connections'               # Active connections (if available)
         ]
 
 class ServerConfig:

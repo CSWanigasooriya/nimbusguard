@@ -61,7 +61,19 @@ class DataPreprocessor:
             # Convert to DataFrame with feature names to match how scaler was fitted
             import pandas as pd
             data_df = pd.DataFrame(data, columns=config.scaling.selected_features)
-            scaled_data = self.scaler.transform(data_df)
+            
+            # Check for feature mismatch and retrain if needed
+            try:
+                scaled_data = self.scaler.transform(data_df)
+            except ValueError as feature_error:
+                if "feature names" in str(feature_error).lower():
+                    logger.warning(f"Feature mismatch detected: {feature_error}")
+                    logger.info("🔄 Retraining scaler with current features...")
+                    self.fit_scaler(data)
+                    scaled_data = self.scaler.transform(data_df)
+                else:
+                    raise feature_error
+            
             return scaled_data
         except Exception as e:
             logger.error(f"Failed to transform data: {e}")
@@ -105,14 +117,20 @@ class DataPreprocessor:
         return X, y
     
     def prepare_training_data(self, feature_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Prepare data for LSTM training."""
+        """Prepare data for LSTM training with improved handling for small datasets."""
         try:
             # Check data quality
             if feature_matrix.size == 0:
                 raise ValueError("Empty feature matrix")
             
+            logger.info(f"📊 Preparing training data: input shape={feature_matrix.shape}")
+            
             # Remove any infinite or NaN values
             feature_matrix = np.nan_to_num(feature_matrix, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # Validate data quality
+            if not self.validate_data_quality(feature_matrix):
+                logger.warning("⚠️ Data quality issues detected, but proceeding with training")
             
             # Fit scaler if not already fitted
             if not self.is_fitted:
@@ -121,20 +139,29 @@ class DataPreprocessor:
             # Scale the data
             scaled_data = self.transform(feature_matrix)
             
-            # Create sequences for LSTM
-            sequence_length = min(30, len(scaled_data) // 2)  # 30 minutes or half the data
+            # Adaptive sequence length based on available data
+            sequence_length = config.forecasting.sequence_length
             forecast_horizon = config.forecasting.forecast_horizon_minutes
+            min_required = sequence_length + forecast_horizon
+            
+            # Adjust sequence length if we don't have enough data
+            if len(scaled_data) < min_required:
+                sequence_length = max(5, len(scaled_data) - forecast_horizon - 1)  # Minimum 5 time steps
+                logger.info(f"📉 Adjusted sequence length to {sequence_length} due to limited data")
             
             if len(scaled_data) < sequence_length + forecast_horizon:
-                raise ValueError(f"Insufficient data for training: need {sequence_length + forecast_horizon} points")
+                raise ValueError(f"Insufficient data for training: have {len(scaled_data)}, need {sequence_length + forecast_horizon}")
             
             X, y = self.create_sequences(scaled_data, sequence_length, forecast_horizon)
             
-            logger.info(f"Prepared training data: X {X.shape}, y {y.shape}")
+            if X.size == 0 or y.size == 0:
+                raise ValueError("No sequences created - check data length and parameters")
+            
+            logger.info(f"✅ Prepared training data: X {X.shape}, y {y.shape}, seq_len={sequence_length}")
             return X, y
             
         except Exception as e:
-            logger.error(f"Failed to prepare training data: {e}")
+            logger.error(f"❌ Failed to prepare training data: {e}")
             raise
     
     def prepare_prediction_input(self, recent_data: np.ndarray) -> Optional[np.ndarray]:
