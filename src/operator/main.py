@@ -122,12 +122,12 @@ async def startup_handler(settings: kopf.OperatorSettings, **kwargs):
     
     # Initialize Prometheus client
     services['prometheus'] = PrometheusClient()
-    logger.info("Prometheus client initialized")
+    logger.info("✅ Prometheus client initialized")
     
     # Initialize Kubernetes client
     services['k8s_client'] = KubernetesClient(config.scaling)
     services['scaler'] = DirectScaler(services['k8s_client'], config.scaling)
-    logger.info("Kubernetes client initialized")
+    logger.info("✅ Kubernetes client initialized")
     
     # Initialize DQN agent first (so forecaster can use its scaler)
     await setup_dqn_agent()
@@ -301,7 +301,7 @@ async def start_http_server():
 async def execute_scaling_decision():
     """Execute a single scaling decision using the workflow."""
     try:
-        logger.info("Executing scaling decision workflow")
+        logger.info("🎯 Executing scaling decision workflow")
         
         # Get current replica count
         current_replicas = 1
@@ -357,7 +357,7 @@ async def execute_scaling_decision():
             except Exception as e:
                 logger.error(f"Model save error: {e}")
         
-        logger.info(f"Scaling decision completed: {workflow_result.get('success', False)}")
+        logger.info(f"✅ Scaling decision completed: {workflow_result.get('success', False)}")
         return workflow_result
         
     except Exception as e:
@@ -425,7 +425,7 @@ async def periodic_scaling_decision(meta, **kwargs):
             system_health = 1.0 if result.get('success', False) else 0.3
             services['metrics'].system_health_score.set(system_health)
         
-        logger.info(f"Periodic scaling decision completed: {result.get('success', False)}")
+        logger.info(f"✅ Periodic scaling decision completed: {result.get('success', False)}")
         
     except Exception as e:
         logger.error(f"❌ Periodic scaling decision failed: {e}")

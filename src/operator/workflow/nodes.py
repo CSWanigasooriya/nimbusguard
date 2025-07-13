@@ -159,7 +159,7 @@ async def collect_metrics_node(state: OperatorState, services: Dict[str, Any], c
     start_time = time.time()
     
     try:
-        logger.info(f"Collecting metrics for execution {state['execution_id']}")
+        logger.info(f"📊 Collecting metrics for execution {state['execution_id']}")
         
         # Get Prometheus client
         prometheus = services.get('prometheus')
@@ -206,7 +206,7 @@ async def collect_metrics_node(state: OperatorState, services: Dict[str, Any], c
             'current_replicas': current_replicas
         }, execution_time)
         
-        logger.info(f"Metrics collected: {len(metrics)} features, {current_replicas} replicas")
+        logger.info(f"✅ Metrics collected: {len(metrics)} features, {current_replicas} replicas")
         return state
         
     except Exception as e:
@@ -221,10 +221,10 @@ async def generate_forecast_node(state: OperatorState, services: Dict[str, Any],
     start_time = time.time()
     
     try:
-        logger.info(f"Generating forecast for execution {state['execution_id']}")
+        logger.info(f"🔮 Generating forecast for execution {state['execution_id']}")
         
         if not config.forecasting.enabled:
-            logger.info("Forecasting disabled, using current metrics as forecast")
+            logger.info("⏭️ Forecasting disabled, using current metrics as forecast")
             forecast_result = {
                 'predicted_metrics': state['current_metrics'].copy(),
                 'confidence': 0.5,
@@ -329,7 +329,7 @@ async def generate_forecast_node(state: OperatorState, services: Dict[str, Any],
             'horizon_minutes': int(forecast_result.get('horizon_minutes', 0))  # Ensure int
         }, execution_time)
         
-        logger.info(f"Forecast generated: method={forecast_result.get('method')}, "
+        logger.info(f"✅ Forecast generated: method={forecast_result.get('method')}, "
                    f"confidence={forecast_result.get('confidence', 0):.3f}")
         return state
         
@@ -354,7 +354,7 @@ async def dqn_decision_node(state: OperatorState, services: Dict[str, Any], conf
     start_time = time.time()
     
     try:
-        logger.info(f"Making DQN decision for execution {state['execution_id']}")
+        logger.info(f"🧠 Making DQN decision for execution {state['execution_id']}")
         
         # Get DQN agent
         dqn_agent = services.get('dqn_agent')
@@ -461,7 +461,7 @@ async def dqn_decision_node(state: OperatorState, services: Dict[str, Any], conf
             'is_exploration': is_exploration
         }, execution_time)
         
-        logger.info(f"DQN decision: {action_name} → {desired_replicas} replicas "
+        logger.info(f"✅ DQN decision: {action_name} → {desired_replicas} replicas "
                    f"(confidence: {confidence:.3f}, exploration: {is_exploration})")
         return state
         
@@ -487,7 +487,7 @@ async def validate_decision_node(state: OperatorState, services: Dict[str, Any],
     start_time = time.time()
     
     try:
-        logger.info(f"Validating decision for execution {state['execution_id']}")
+        logger.info(f"✅ Validating decision for execution {state['execution_id']}")
         
         scaler = services.get('scaler')
         if not scaler:
@@ -516,7 +516,7 @@ async def validate_decision_node(state: OperatorState, services: Dict[str, Any],
             'desired_replicas': desired_replicas
         }, execution_time)
         
-        logger.info(f"Decision validation: {'PASSED' if is_valid else 'FAILED'} - {reason}")
+        logger.info(f"✅ Decision validation: {'PASSED' if is_valid else 'FAILED'} - {reason}")
         return state
         
     except Exception as e:
@@ -536,7 +536,7 @@ async def execute_scaling_node(state: OperatorState, services: Dict[str, Any], c
         
         # Skip if validation failed
         if not state['validation_passed']:
-            logger.info("Skipping scaling execution due to validation failure")
+            logger.info("⏭️ Skipping scaling execution due to validation failure")
             state['scaling_applied'] = False
             state['scaling_error'] = "validation_failed"
             execution_time = (time.time() - start_time) * 1000
@@ -548,7 +548,7 @@ async def execute_scaling_node(state: OperatorState, services: Dict[str, Any], c
         
         # Skip if no scaling needed
         if state['desired_replicas'] == state['current_replicas']:
-            logger.info(f"No scaling needed: {state['current_replicas']} replicas")
+            logger.info(f"⏭️ No scaling needed: {state['current_replicas']} replicas")
             state['scaling_applied'] = True
             state['scaling_error'] = None
             execution_time = (time.time() - start_time) * 1000
@@ -585,7 +585,7 @@ async def execute_scaling_node(state: OperatorState, services: Dict[str, Any], c
                     reason="DQN"
                 )
             
-            logger.info(f"🚀 Scaling successful: {old_replicas} → {new_replicas} replicas")
+            logger.info(f"✅ Scaling successful: {old_replicas} → {new_replicas} replicas")
         else:
             state['scaling_applied'] = False
             state['scaling_error'] = scaling_result.get('error', 'unknown_error')
@@ -616,7 +616,7 @@ async def calculate_reward_node(state: OperatorState, services: Dict[str, Any], 
     start_time = time.time()
     
     try:
-        logger.info(f"Calculating reward for execution {state['execution_id']}")
+        logger.info(f"🎯 Calculating reward for execution {state['execution_id']}")
         
         # Get DQN agent
         dqn_agent = services.get('dqn_agent')
@@ -664,7 +664,7 @@ async def calculate_reward_node(state: OperatorState, services: Dict[str, Any], 
             )
             
             buffer_size = len(dqn_agent.replay_buffer)
-            logger.info(f"Experience stored: buffer_size={buffer_size}/{dqn_agent.replay_buffer.capacity}")
+            logger.info(f"📝 Experience stored: buffer_size={buffer_size}/{dqn_agent.replay_buffer.capacity}")
             
             # Update experience metrics
             if 'metrics' in services:
@@ -678,7 +678,7 @@ async def calculate_reward_node(state: OperatorState, services: Dict[str, Any], 
         buffer_size = len(dqn_agent.replay_buffer) if hasattr(dqn_agent, 'replay_buffer') else 0
         batch_size = config.scaling.dqn_batch_size
         
-        logger.info(f"Training check: buffer_size={buffer_size}, batch_size={batch_size}")
+        logger.info(f"🧠 Training check: buffer_size={buffer_size}, batch_size={batch_size}")
         
         if buffer_size >= batch_size:
             try:

@@ -71,11 +71,11 @@ class ProactiveRewardCalculator:
         )
         
         if significant_change:
-            logger.info(f"Load change detected: {previous} → {current}")
+            logger.info(f"🔄 Load change detected: {previous} → {current}")
         
         return significant_change
     
-    def _calculate_stability_penalty(self, action: str, current_metrics: Dict[str, float] = None, current_replicas: int = 1, load_class: str = None) -> float:
+    def _calculate_stability_penalty(self, action: str, current_metrics: Dict[str, float] = None, current_replicas: int = 1) -> float:
         """Context-aware stability system that distinguishes between justified quick scaling and harmful oscillations."""
         logger.debug(f"Stability analysis: action={action}, history_size={len(self.recent_actions)}, recent_actions={self.recent_actions}")
         
@@ -86,12 +86,10 @@ class ProactiveRewardCalculator:
         stability_score = 0.0
         
         # Get current load context if available
-        current_load_class = load_class
+        current_load_class = None
         load_change_detected = False
         if current_metrics and current_replicas:
-            # Use provided load_class or calculate if not provided
-            if current_load_class is None:
-                current_load_class = self._classify_load(current_metrics, current_replicas)
+            current_load_class = self._classify_load(current_metrics, current_replicas)
             self._track_load_class(current_load_class)
             load_change_detected = self._detect_load_change()
             logger.debug(f"Current load context: {current_load_class}, load_change: {load_change_detected}")
@@ -114,18 +112,18 @@ class ProactiveRewardCalculator:
                 # JUSTIFIED QUICK SCALING: If load is high and we're scaling up, or load is low and scaling down
                 elif current_load_class:
                     if (current_load_class == "HIGH" and action == "scale_up"):
-                        logger.info(f"Justified quick scale-up for HIGH load: {last_action} → {action}")
+                        logger.info(f"✅ Justified quick scale-up for HIGH load: {last_action} → {action}")
                         stability_score += 0.3  # Reward quick response to high load
                     elif (current_load_class == "LOW" and action == "scale_down"):
-                        logger.info(f"Justified quick scale-down for LOW load: {last_action} → {action}")
+                        logger.info(f"✅ Justified quick scale-down for LOW load: {last_action} → {action}")
                         stability_score += 0.3  # Reward quick response to low load
                     else:
                         # Unjustified flip-flop
-                        logger.warning(f"❌ Unjustified flip-flop ({current_load_class} load): {last_action} → {action}")
+                        logger.warning(f"⚠️ Unjustified flip-flop ({current_load_class} load): {last_action} → {action}")
                         stability_score -= 0.3  # Moderate penalty (reduced from 0.5)
                 else:
                     # No context available, apply moderate penalty
-                    logger.warning(f"Flip-flop without context: {last_action} → {action}")
+                    logger.warning(f"⚠️ Flip-flop without context: {last_action} → {action}")
                     stability_score -= 0.2  # Reduced penalty without context
                 
             # Check for 3-step oscillation
@@ -135,7 +133,7 @@ class ProactiveRewardCalculator:
             
             if is_3_step_oscillation:
                 # 3-step oscillations are generally bad regardless of load
-                logger.warning(f"❌ 3-step oscillation: {second_last} → {last_action} → {action}")
+                logger.warning(f"⚠️ 3-step oscillation: {second_last} → {last_action} → {action}")
                 stability_score -= 0.5  # Reduced from 0.8
         
         # 2. SMART EXCESSIVE SCALING ANALYSIS
@@ -145,18 +143,18 @@ class ProactiveRewardCalculator:
             # Check for excessive scaling in same direction
             if all(a == "scale_up" for a in recent_3) and action == "scale_up":
                 if load_change_detected or current_load_class == "HIGH":
-                    logger.info(f"Justified sustained scale-up ({'load change' if load_change_detected else 'HIGH load'}): {recent_3} → {action}")
+                    logger.info(f"✅ Justified sustained scale-up ({'load change' if load_change_detected else 'HIGH load'}): {recent_3} → {action}")
                     stability_score += 0.15  # Reward for sustained response to high load or load changes
                 else:
-                    logger.warning(f"Excessive scale-up ({current_load_class or 'unknown'} load): {recent_3} → {action}")
+                    logger.warning(f"⚠️ Excessive scale-up ({current_load_class or 'unknown'} load): {recent_3} → {action}")
                     stability_score -= 0.15  # Reduced penalty (was 0.2)
                     
             elif all(a == "scale_down" for a in recent_3) and action == "scale_down":
                 if load_change_detected or current_load_class == "LOW":
-                    logger.info(f"Justified sustained scale-down ({'load change' if load_change_detected else 'LOW load'}): {recent_3} → {action}")
+                    logger.info(f"✅ Justified sustained scale-down ({'load change' if load_change_detected else 'LOW load'}): {recent_3} → {action}")
                     stability_score += 0.15  # Reward for sustained response to low load or load changes
                 else:
-                    logger.warning(f"Excessive scale-down ({current_load_class or 'unknown'} load): {recent_3} → {action}")
+                    logger.warning(f"⚠️ Excessive scale-down ({current_load_class or 'unknown'} load): {recent_3} → {action}")
                     stability_score -= 0.15  # Reduced penalty (was 0.2)
         
         # 3. CONSISTENCY REWARDS (Positive rewards for stable behavior)
@@ -165,13 +163,13 @@ class ProactiveRewardCalculator:
             
             # Reward for maintaining stability with keep_same
             if last_action == "keep_same" and action == "keep_same":
-                logger.info(f"Stability maintained: {last_action} → {action}")
+                logger.info(f"✅ Stability maintained: {last_action} → {action}")
                 stability_score += 0.2
             
             # Reward for gradual scaling (scale → keep_same)
             elif ((last_action == "scale_up" and action == "keep_same") or
                   (last_action == "scale_down" and action == "keep_same")):
-                logger.info(f"Gradual scaling: {last_action} → {action}")
+                logger.info(f"✅ Gradual scaling: {last_action} → {action}")
                 stability_score += 0.15
             
             # Small reward for not oscillating
@@ -185,7 +183,7 @@ class ProactiveRewardCalculator:
             
             # Reward for stable patterns
             if recent_4.count("keep_same") >= 3:
-                logger.info(f"Long-term stability: {recent_4}")
+                logger.info(f"✅ Long-term stability: {recent_4}")
                 stability_score += 0.25
             
             # Reward for controlled scaling patterns (scale → keep → scale → keep)
@@ -195,7 +193,7 @@ class ProactiveRewardCalculator:
             ]
             for pattern in controlled_patterns:
                 if recent_4 == pattern[:3] and action == pattern[3]:
-                    logger.info(f"Controlled scaling pattern: {recent_4} → {action}")
+                    logger.info(f"✅ Controlled scaling pattern: {recent_4} → {action}")
                     stability_score += 0.2
         
         # 5. ADAPTIVE SCALING REWARDS (Context-aware stability)
@@ -204,16 +202,16 @@ class ProactiveRewardCalculator:
             
             # Reward for stopping excessive scaling
             if (all(a == "scale_up" for a in recent_3) and action in ["keep_same", "scale_down"]):
-                logger.info(f"Stopped excessive scale-up: {recent_3} → {action}")
+                logger.info(f"✅ Stopped excessive scale-up: {recent_3} → {action}")
                 stability_score += 0.3
             elif (all(a == "scale_down" for a in recent_3) and action in ["keep_same", "scale_up"]):
-                logger.info(f"Stopped excessive scale-down: {recent_3} → {action}")
+                logger.info(f"✅ Stopped excessive scale-down: {recent_3} → {action}")
                 stability_score += 0.3
         
         # Clamp the stability score to reasonable bounds
         stability_score = max(-1.0, min(1.0, stability_score))
         
-        logger.info(f"Stability analysis result: {stability_score:.3f} (action: {action})")
+        logger.info(f"🎯 Stability analysis result: {stability_score:.3f} (action: {action})")
         return stability_score
         
     def _calculate_performance_score(self, metrics: Dict[str, float]) -> float:
@@ -270,12 +268,9 @@ class ProactiveRewardCalculator:
                         forecast_result: Optional[Dict[str, Any]] = None) -> float:
         """Calculate reward considering current state and forecast."""
         try:
-            # Calculate load classification ONCE and cache it
-            load_class = self._classify_load(current_metrics, current_replicas)
-            
-            # Base reward from current state (pass load_class to avoid recalculation)
+            # Base reward from current state
             current_reward = self._calculate_current_state_reward(
-                action, current_metrics, current_replicas, desired_replicas, load_class
+                action, current_metrics, current_replicas, desired_replicas
             )
             
             # Forecast-based reward adjustment
@@ -287,14 +282,15 @@ class ProactiveRewardCalculator:
                 )
                 forecast_confidence = forecast_result.get("confidence", 0)
             
-            # IoT-inspired: Context-aware weight adjustment (use cached load_class)
+            # IoT-inspired: Context-aware weight adjustment
+            load_class = self._classify_load(current_metrics, current_replicas)
             current_weight, forecast_weight = self._get_context_aware_weights(load_class, forecast_confidence)
             
             # Track this action for stability analysis BEFORE calculating penalty
             self._track_action(action)
             
-            # Context-aware stability analysis that considers current load (pass load_class to avoid recalculation)
-            stability_penalty = self._calculate_stability_penalty(action, current_metrics, current_replicas, load_class)
+            # Context-aware stability analysis that considers current load
+            stability_penalty = self._calculate_stability_penalty(action, current_metrics, current_replicas)
             
             # Combined reward with adaptive weights and stability consideration
             total_reward = (current_reward * current_weight) + (forecast_reward * forecast_weight) + stability_penalty
@@ -313,12 +309,10 @@ class ProactiveRewardCalculator:
                                       action: str,
                                       current_metrics: Dict[str, float],
                                       current_replicas: int,
-                                      desired_replicas: int,
-                                      load_class: str = None) -> float:
+                                      desired_replicas: int) -> float:
         """Calculate reward based on current system state."""
-        # Use provided load_class or classify if not provided (for backward compatibility)
-        if load_class is None:
-            load_class = self._classify_load(current_metrics, current_replicas)
+        # Classify current load
+        load_class = self._classify_load(current_metrics, current_replicas)
         
         # FIXED: More balanced reward matrix that doesn't heavily bias toward scale_down
         reward_matrix = {
@@ -435,7 +429,7 @@ class ProactiveRewardCalculator:
             request_rate = metrics.get("http_requests_total_rate", 0.0)
             
             # Debug logging for memory calculation
-            logger.info(f"DEBUG MEMORY: raw_memory_bytes={memory_bytes}, replicas={replicas}")
+            logger.info(f"🔍 DEBUG MEMORY: raw_memory_bytes={memory_bytes}, replicas={replicas}")
             
             # Convert to per-replica metrics
             cpu_per_replica = cpu_rate / max(replicas, 1)
@@ -443,7 +437,7 @@ class ProactiveRewardCalculator:
             requests_per_replica = request_rate / max(replicas, 1)
             
             # Debug logging for per-replica calculation
-            logger.info(f"DEBUG CALCULATION: {memory_bytes} bytes ÷ {replicas} replicas ÷ 1024² = {memory_mb_per_replica:.1f} MB per replica")
+            logger.info(f"🔍 DEBUG CALCULATION: {memory_bytes} bytes ÷ {replicas} replicas ÷ 1024² = {memory_mb_per_replica:.1f} MB per replica")
             
             # Log the actual values for debugging
             logger.info(f"Load classification: cpu_per_replica={cpu_per_replica:.4f}, "

@@ -60,7 +60,7 @@ class ScalingWorkflow:
             
             # Log execution summary
             summary = get_state_summary(final_state)
-            self.logger.info(f"Workflow {execution_id} completed: {summary}")
+            self.logger.info(f"✅ Workflow {execution_id} completed: {summary}")
             
             # Create result summary
             result = {

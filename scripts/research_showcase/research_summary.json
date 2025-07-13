@@ -1,38 +1,35 @@
 {
-  "kubernetes_state_summary": {
-    "target_system": "Multi-dimensional Kubernetes metrics",
-    "total_samples": 894,
+  "consumer_performance_summary": {
+    "target_system": "Consumer pod performance metrics with rate calculations",
+    "total_samples": 45,
     "total_features": 9,
-    "time_range": {
-      "start": "N/A",
-      "end": "N/A"
-    },
+    "methodology": "Intelligent data-driven feature selection",
     "action_distribution": {
-      "0": 781,
-      "2": 113
+      "scale_up": 44,
+      "keep_same": 1
     },
-    "kubernetes_categories": {
-      "deployment_state": 3,
-      "pod_container": 5,
-      "resource_management": 2,
-      "network_health": 1
+    "performance_categories": {
+      "cpu_performance": 1,
+      "memory_usage": 2,
+      "network_performance": 5,
+      "io_performance": 1
     }
   },
   "scaling_analysis": {
-    "opportunities_count": 781,
-    "opportunities_percentage": 87.36017897091722,
-    "resource_optimization_potential": "High",
+    "scale_up_count": 44,
+    "scale_up_percentage": 97.77777777777777,
+    "performance_optimization_potential": "High",
     "primary_indicators": [
-      "Pod readiness",
-      "Resource limits",
-      "Deployment state",
-      "Container status"
+      "CPU usage rate",
+      "Memory consumption",
+      "HTTP request patterns",
+      "File descriptors"
     ]
   },
-  "kubernetes_insights": {
-    "multi_dimensional_handling": true,
-    "real_time_state_focus": true,
+  "consumer_insights": {
+    "rate_based_metrics": true,
+    "real_time_performance_focus": true,
     "statistical_feature_selection": true,
-    "approach": "Kubernetes state-focused with multi-dimensional metric handling"
+    "approach": "Consumer performance-focused with intelligent rate calculations"
   }
 }
