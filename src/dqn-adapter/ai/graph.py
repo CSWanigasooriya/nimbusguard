@@ -64,12 +64,13 @@ def create_graph(services: ServiceContainer):
 # --- LangGraph Nodes ---
 async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_next_state: bool = False) -> Dict[str, Any]:
     """
-    Get live metrics from Prometheus with deduplication fixes.
+    Get live metrics from Prometheus with enhanced failure detection and proactive scaling.
     
-    FIXED ISSUES:
-    - Changed sum() to count() for ready/running containers to avoid double-counting duplicated metrics
-    - Changed sum() to sum(sum by (pod)) for resource limits to deduplicate by pod first
-    - This fixes the issue where readiness=18 instead of 9, and resource calculations being doubled
+    ENHANCED FOR PROACTIVE SCALING:
+    - Detects pod failures and restarts
+    - Monitors resource pressure indicators
+    - Predicts scaling needs before crashes occur
+    - Uses historical failure patterns for better decisions
     """
     node_name = "observe_next_state" if is_next_state else "get_live_metrics"
     logger.info("=" * 60)
@@ -79,94 +80,85 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
     from datetime import datetime
     current_time = datetime.now()
 
-    # FIXED: Multi-dimensional consumer pod queries with proper target deployment scoping
-    # These queries target consumer pod metrics with rate calculations where needed
-    # Using job=prometheus.scrape.nimbusguard_consumer to target specifically the consumer deployment
-    # FIXED: Changed rate window from [2m] to [30s] to match stabilization period
+    # ENHANCED: Add failure detection and resource pressure queries
     queries = {
-        # 1. CPU rate (process CPU seconds total rate across consumer pods)
-        "process_cpu_seconds_total_rate": f'sum(rate(process_cpu_seconds_total{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
+        # Core consumer metrics (FIXED to compute rates with _rate suffix for DQN compatibility)
+        "process_cpu_seconds_total_rate": f'sum(rate(process_cpu_seconds_total{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}[30s])) or vector(0)',
+        "process_resident_memory_bytes": f'sum(process_resident_memory_bytes{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}) or vector(0)',
+        "process_virtual_memory_bytes": f'sum(process_virtual_memory_bytes{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}) or vector(0)',
+        "http_request_duration_seconds_sum_rate": f'sum(rate(http_request_duration_seconds_sum{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}[30s])) or vector(0)',
+        "http_requests_total_rate": f'sum(rate(http_requests_total{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}[30s])) or vector(0)',
+        "http_request_duration_seconds_count_rate": f'sum(rate(http_request_duration_seconds_count{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}[30s])) or vector(0)',
+        "process_open_fds": f'sum(process_open_fds{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}) or vector(0)',
+        "http_response_size_bytes_sum_rate": f'sum(rate(http_response_size_bytes_sum{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}[30s])) or vector(0)',
+        "http_request_size_bytes_count_rate": f'sum(rate(http_request_size_bytes_count{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}[30s])) or vector(0)',
 
-        # 2. Process resident memory bytes (actual physical memory usage - CRITICAL for scaling)
-        "process_resident_memory_bytes": f'sum(process_resident_memory_bytes{{job="prometheus.scrape.nimbusguard_consumer"}}) or vector(0)',
-
-        # 3. Process virtual memory bytes (virtual memory usage - CRITICAL for scaling)
-        "process_virtual_memory_bytes": f'sum(process_virtual_memory_bytes{{job="prometheus.scrape.nimbusguard_consumer"}}) or vector(0)',
-
-        # 4. HTTP request duration sum rate (latency indicator)
-        "http_request_duration_seconds_sum_rate": f'sum(rate(http_request_duration_seconds_sum{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
-
-        # 5. HTTP requests total rate (throughput indicator)
-        "http_requests_total_rate": f'sum(rate(http_requests_total{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
-
-        # 6. HTTP request duration count rate (request count indicator)
-        "http_request_duration_seconds_count_rate": f'sum(rate(http_request_duration_seconds_count{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
-
-        # 7. Process open file descriptors (system resource indicator)
-        "process_open_fds": f'sum(process_open_fds{{job="prometheus.scrape.nimbusguard_consumer"}}) or vector(0)',
-
-        # 8. HTTP response size bytes sum rate (response size indicator)
-        "http_response_size_bytes_sum_rate": f'sum(rate(http_response_size_bytes_sum{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
-
-        # 9. HTTP request size bytes count rate (request size indicator)
-        "http_request_size_bytes_count_rate": f'sum(rate(http_request_size_bytes_count{{job="prometheus.scrape.nimbusguard_consumer"}}[30s])) or vector(0)',
-
-        # AUXILIARY: Current replica count for scaling decisions
+        # Current replica count for scaling decisions
         "current_replicas": f'kube_deployment_status_replicas{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}}',
         
-        # KUBERNETES STATE QUERIES: For proper availability and health status
+        # ENHANCED: Failure detection and resource pressure indicators
         "deployment_replicas_unavailable": f'kube_deployment_status_replicas_unavailable{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}} or vector(0)',
         "deployment_replicas_ready": f'kube_deployment_status_ready_replicas{{deployment="{services.config.kubernetes.target_deployment}",namespace="{services.config.kubernetes.target_namespace}"}} or vector(0)',
         "pod_container_ready": f'kube_pod_container_status_ready{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
         "pod_container_running": f'kube_pod_container_status_running{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
         "pod_container_restarts": f'kube_pod_container_status_restarts_total{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
+        
+        # PROACTIVE: Resource pressure and failure prediction
         "pod_resource_limits_cpu": f'kube_pod_container_resource_limits{{resource="cpu",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
         "pod_resource_limits_memory": f'kube_pod_container_resource_limits{{resource="memory",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}',
+        "pod_resource_requests_cpu": f'kube_pod_container_resource_requests{{resource="cpu",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}} or vector(0)',
+        "pod_resource_requests_memory": f'kube_pod_container_resource_requests{{resource="memory",namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}} or vector(0)',
+        
+        # CRITICAL: Failure indicators - recent restarts and exit codes
+        "pod_container_restarts_recent": f'increase(kube_pod_container_status_restarts_total{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}[5m]) or vector(0)',
+        "pod_container_last_terminated_exitcode": f'kube_pod_container_status_last_terminated_exitcode{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}} or vector(0)',
+        
+        # PROACTIVE: Network and cluster health indicators
         "node_network_up": f'node_network_up{{device!~"veth.*"}}',
+        "prometheus_scrape_up": f'up{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}',
+        
+        # ENHANCED: Historical failure patterns (5min and 15min windows)
+        "restarts_5m": f'increase(kube_pod_container_status_restarts_total{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}[5m]) or vector(0)',
+        "restarts_15m": f'increase(kube_pod_container_status_restarts_total{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}[15m]) or vector(0)',
     }
-    # CLEAN ARCHITECTURE: No computed temporal features (moving averages, deviations, etc.)
-
 
     # Debug logging for query targeting
     logger.info(f"QUERY_TARGETING: namespace={services.config.kubernetes.target_namespace} "
                 f"deployment={services.config.kubernetes.target_deployment}")
     
-    # Log key queries for debugging consumer pod metrics
-    logger.debug(f"CPU_RATE_QUERY: {queries['process_cpu_seconds_total_rate']}")
-    logger.debug(f"HTTP_REQUESTS_QUERY: {queries['http_requests_total_rate']}")
-    logger.debug(f"RESIDENT_MEMORY_QUERY: {queries['process_resident_memory_bytes']}")
-    logger.debug(f"VIRTUAL_MEMORY_QUERY: {queries['process_virtual_memory_bytes']}")
-    logger.debug(f"OPEN_FDS_QUERY: {queries['process_open_fds']}")
-
     tasks = {name: services.prometheus_client.query(query) for name, query in queries.items()}
     
-    # Debug query to see what pods are actually being targeted
-    debug_pods_query = f'kube_pod_info{{namespace="{services.config.kubernetes.target_namespace}",pod=~"{services.config.kubernetes.target_deployment}-.*"}}'
-    tasks['debug_target_pods'] = services.prometheus_client.query_raw(debug_pods_query)
+    # Debug query to see what consumer instances are actually being scraped
+    debug_consumer_query = f'up{{job="prometheus.scrape.annotated_pods", instance=~".*8000"}}'
+    tasks['debug_consumer_instances'] = services.prometheus_client.query_raw(debug_consumer_query)
 
     results = await asyncio.gather(*tasks.values())
 
     metrics = dict(zip(tasks.keys(), results))
     current_replicas = int(metrics.pop('current_replicas', 1))
-    debug_pods_result = metrics.pop('debug_target_pods', [])
+    debug_consumer_result = metrics.pop('debug_consumer_instances', [])
     
-    # Log debug information about targeted pods
-    if debug_pods_result and isinstance(debug_pods_result, list) and len(debug_pods_result) > 0:
-        pod_names = [result.get('metric', {}).get('pod', 'unknown') for result in debug_pods_result if 'metric' in result]
-        unique_pods = list(set(pod_names))  # Remove duplicates
-        logger.info(f"TARGETED_PODS: total_results={len(pod_names)} unique_pods={len(unique_pods)} pods={unique_pods[:5]}{'...' if len(unique_pods) > 5 else ''}")
+    # Log debug information about consumer instances being scraped
+    if debug_consumer_result and isinstance(debug_consumer_result, list) and len(debug_consumer_result) > 0:
+        consumer_instances = [result.get('metric', {}).get('instance', 'unknown') for result in debug_consumer_result if 'metric' in result]
+        up_values = [result.get('value', [None, '0'])[1] for result in debug_consumer_result if 'value' in result]
+        logger.info(f"CONSUMER_INSTANCES: total={len(consumer_instances)} instances={consumer_instances} up_status={up_values}")
     else:
-        logger.warning(f"TARGETED_PODS: debug_query_result={debug_pods_result}")
-        logger.warning(f"TARGETED_PODS: no_pods_found_matching_pattern={services.config.kubernetes.target_deployment}-*")
+        logger.warning(f"CONSUMER_INSTANCES: debug_query_result={debug_consumer_result}")
+        logger.warning(f"CONSUMER_INSTANCES: no_consumer_instances_found_for_job=prometheus.scrape.annotated_pods_port_8000")
 
     # Ensure raw features have defaults (no computations)
     metrics = _ensure_raw_features(metrics)
 
-
+    # ENHANCED: Failure detection and proactive scaling analysis
+    failure_indicators = _analyze_failure_patterns(metrics, current_replicas)
+    
+    # Add failure indicators to metrics for DQN
+    metrics.update(failure_indicators)
 
     CURRENT_REPLICAS_GAUGE.set(current_replicas)
 
-    # Enhanced logging with consumer pod metrics
+    # Enhanced logging with consumer pod metrics and failure analysis
     cpu_rate = metrics.get('process_cpu_seconds_total_rate', 0.0)
     resident_memory = metrics.get('process_resident_memory_bytes', 0.0)
     virtual_memory = metrics.get('process_virtual_memory_bytes', 0.0)
@@ -177,15 +169,28 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
     response_size_rate = metrics.get('http_response_size_bytes_sum_rate', 0.0)
     request_size_rate = metrics.get('http_request_size_bytes_count_rate', 0.0)
 
-    # Kubernetes state metrics for proper availability and health reporting
+    # ENHANCED: Failure and resource pressure indicators
     replicas_unavailable = metrics.get('deployment_replicas_unavailable', 0)
     replicas_ready = metrics.get('deployment_replicas_ready', current_replicas)
     containers_ready = metrics.get('pod_container_ready', 0)
     containers_running = metrics.get('pod_container_running', 0)
     container_restarts = metrics.get('pod_container_restarts', 0)
+    restarts_recent = metrics.get('pod_container_restarts_recent', 0)
+    restarts_5m = metrics.get('restarts_5m', 0)
+    restarts_15m = metrics.get('restarts_15m', 0)
+    last_exit_code = metrics.get('pod_container_last_terminated_exitcode', 0)
+    
     cpu_limits = metrics.get('pod_resource_limits_cpu', 0)
     memory_limits = metrics.get('pod_resource_limits_memory', 0)
+    cpu_requests = metrics.get('pod_resource_requests_cpu', 0)
+    memory_requests = metrics.get('pod_resource_requests_memory', 0)
     network_up = metrics.get('node_network_up', 0)
+    prometheus_up = metrics.get('prometheus_scrape_up', 0)
+
+    # CRITICAL: Failure pattern analysis
+    failure_severity = failure_indicators.get('failure_severity', 'none')
+    scaling_urgency = failure_indicators.get('scaling_urgency', 'normal')
+    resource_pressure = failure_indicators.get('resource_pressure', 'low')
 
     logger.info(f"CONSUMER_METRICS: cpu_rate={cpu_rate:.4f} resident_memory={resident_memory:.0f}bytes "
                 f"virtual_memory={virtual_memory:.0f}bytes http_requests_rate={http_requests_rate:.4f} "
@@ -198,17 +203,29 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
     logger.info(f"SYSTEM_METRICS: open_fds={open_fds:.0f} targeting_consumer_pods={services.config.kubernetes.target_deployment} "
                 f"namespace={services.config.kubernetes.target_namespace}")
 
-    # Kubernetes state logging for availability and health status
-    logger.info(f"KUBERNETES_STATE: replicas_unavailable={replicas_unavailable} replicas_ready={replicas_ready} "
-                f"containers_ready={containers_ready} containers_running={containers_running} "
-                f"container_restarts={container_restarts}")
+    # ENHANCED: Failure and health analysis logging
+    logger.info(f"FAILURE_ANALYSIS: severity={failure_severity} urgency={scaling_urgency} resource_pressure={resource_pressure}")
+    logger.info(f"RESTART_PATTERN: total={container_restarts} recent={restarts_recent} 5m={restarts_5m} 15m={restarts_15m} exit_code={last_exit_code}")
+    logger.info(f"AVAILABILITY: unavailable={replicas_unavailable} ready={replicas_ready}/{current_replicas} "
+                f"containers_ready={containers_ready} containers_running={containers_running}")
     
-    # Resource limits logging
+    # Resource pressure analysis
     memory_limits_mb = memory_limits / 1000000 if memory_limits > 0 else 0
-    logger.info(f"RESOURCE_LIMITS: cpu_limits={cpu_limits:.2f} memory_limits_mb={memory_limits_mb:.0f} "
-                f"network_up={network_up:.0f}")
+    memory_requests_mb = memory_requests / 1000000 if memory_requests > 0 else 0
+    logger.info(f"RESOURCE_PRESSURE: cpu_limits={cpu_limits:.2f} memory_limits_mb={memory_limits_mb:.0f} "
+                f"cpu_requests={cpu_requests:.2f} memory_requests_mb={memory_requests_mb:.0f}")
+    
+    # Monitoring infrastructure health
+    logger.info(f"MONITORING_HEALTH: network_up={network_up:.0f} prometheus_scrape_up={prometheus_up:.0f}")
 
-    # Consumer pod metrics analysis for debugging
+    # PROACTIVE SCALING INDICATORS
+    if failure_severity in ['high', 'critical']:
+        logger.warning(f"PROACTIVE_SCALING_NEEDED: failure_severity={failure_severity} restarts_recent={restarts_recent}")
+        logger.warning(f"SCALING_RECOMMENDATION: immediate_scale_up_required current_replicas={current_replicas}")
+    elif scaling_urgency == 'high':
+        logger.warning(f"SCALING_URGENCY: high_urgency_detected resource_pressure={resource_pressure}")
+    
+    # Resource utilization analysis for proactive scaling
     if current_replicas > 0:
         # Analyze per-replica metrics to understand load distribution
         cpu_rate_per_replica = cpu_rate / current_replicas if current_replicas > 0 else 0
@@ -231,8 +248,7 @@ async def get_live_metrics(state: ScalingState, services: ServiceContainer, is_n
                     f"total_cpu_rate={cpu_rate:.4f} total_http_rate={http_requests_rate:.4f} "
                     f"memory_usage_mb={resident_memory / 1000000:.1f}")
 
-    # Log feature availability for debugging (clean architecture: consumer metrics only)
-    # Check if features exist (not None) rather than > 0, since 0 can be a valid value
+    # Log feature availability for debugging
     base_features_available = sum(1 for feat in services.config.base_features if feat in metrics)
     total_features_available = base_features_available
 
@@ -277,7 +293,14 @@ def _ensure_raw_features(metrics: Dict[str, float]) -> Dict[str, float]:
         'pod_container_restarts': 0.0,  # Default: no container restarts
         'pod_resource_limits_cpu': 0.0,  # Default: no CPU limits set
         'pod_resource_limits_memory': 0.0,  # Default: no memory limits set
+        'pod_resource_requests_cpu': 0.0,  # Default: no CPU requests set
+        'pod_resource_requests_memory': 0.0,  # Default: no memory requests set
         'node_network_up': 0.0,  # Default: network status unknown
+        'prometheus_scrape_up': 0.0,  # Default: prometheus scraping down
+        'pod_container_restarts_recent': 0.0,  # Default: no recent restarts
+        'pod_container_last_terminated_exitcode': 0.0,  # Default: normal exit
+        'restarts_5m': 0.0,  # Default: no restarts in 5 minutes
+        'restarts_15m': 0.0,  # Default: no restarts in 15 minutes
     }
 
     # Apply defaults for missing consumer pod metrics only
@@ -307,6 +330,11 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
     # Scale the 9 scientifically-selected base features from Prometheus with proper feature names
     raw_features = [metrics.get(feat, 0.0) for feat in services.config.base_features]
 
+    # DEBUG: Log what features are expected vs available
+    logger.info(f"DQN_FEATURES_DEBUG: expected_features={services.config.base_features}")
+    logger.info(f"DQN_FEATURES_DEBUG: available_metrics={list(metrics.keys())[:10]}...")  # First 10 keys
+    logger.info(f"DQN_FEATURES_DEBUG: raw_feature_values={raw_features}")
+    
     # Create pandas DataFrame with feature names to match how scaler was fitted
     import pandas as pd
     raw_features_df = pd.DataFrame([raw_features], columns=services.config.base_features)
@@ -409,6 +437,72 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
             risk_level = explanation['risk_assessment']
             confidence_gap = explanation['confidence_metrics']['confidence_gap']
 
+                # ENHANCED: Proactive scaling based on failure indicators
+            failure_severity = metrics.get('failure_severity', 'none')
+            scaling_urgency = metrics.get('scaling_urgency', 'normal')
+            resource_pressure = metrics.get('resource_pressure', 'low')
+            proactive_scale_recommended = metrics.get('proactive_scale_recommended', False)
+            failure_score = metrics.get('failure_score', 0.0)
+            failure_reasons = metrics.get('failure_reasons', [])
+
+            # PROACTIVE OVERRIDE: If system is failing, override DQN to scale up immediately
+            if proactive_scale_recommended and current_replicas < 10:
+                logger.warning(f"PROACTIVE_OVERRIDE: failure_detected={failure_severity} overriding_dqn_to_scale_up")
+                logger.warning(f"FAILURE_REASONS: {', '.join(failure_reasons)}")
+                action_index = 2  # Force Scale Up
+                action_name = "Scale Up"
+                exploration_type = "proactive_intervention"
+                
+                # Log the override decision
+                logger.warning(f"PROACTIVE_SCALING: forced_scale_up failure_score={failure_score:.2f} "
+                              f"urgency={scaling_urgency} current_replicas={current_replicas}")
+            else:
+                # Normal DQN decision logic
+                # ENHANCED: Boost exploration when over-provisioned to encourage scale-down learning
+                effective_epsilon = current_epsilon
+                if current_replicas >= 8:  # Over-provisioned scenario
+                    effective_epsilon = max(current_epsilon, 0.15)  # Minimum 15% exploration
+                    logger.info(
+                        f"DQN_EXPLORATION_BOOST: over_provisioned={current_replicas} epsilon_boosted={current_epsilon:.3f}=>{effective_epsilon:.3f}")
+
+                # Epsilon-greedy exploration with detailed reasoning
+                if random.random() < effective_epsilon:
+                    action_index = random.randint(0, 2)  # Random action
+                    exploration_type = "exploration"
+                    logger.info(f"DQN_EXPLORATION: random_action epsilon={effective_epsilon:.3f}")
+                else:
+                    action_index = np.argmax(q_values)  # Greedy action
+                    exploration_type = "exploitation"
+                    logger.info(f"DQN_EXPLOITATION: best_action epsilon={effective_epsilon:.3f}")
+
+                action_map = {0: "Scale Down", 1: "Keep Same", 2: "Scale Up"}
+                action_name = action_map.get(action_index, "Unknown")
+
+            # Update epsilon and decision count through ServiceContainer
+            updated_epsilon = services.update_epsilon(services.config.dqn.epsilon_decay, services.config.dqn.epsilon_end)
+            decision_count = services.increment_decision_count()
+
+            # Use DQN decision directly
+            dqn_action_name = action_name
+
+            # Generate comprehensive explanation using explainable AI system
+            explanation = decision_reasoning.explain_dqn_decision(
+                metrics=metrics,
+                q_values=q_values.tolist(),
+                action_name=action_name,
+                exploration_type=exploration_type,
+                epsilon=updated_epsilon,
+                current_replicas=current_replicas
+            )
+
+            # Log detailed reasoning
+            decision_reasoning.log_decision_reasoning(explanation, metrics, q_values.tolist())
+
+            # Enhanced logging with confidence and reasoning
+            confidence = explanation['confidence_metrics']['decision_confidence']
+            risk_level = explanation['risk_assessment']
+            confidence_gap = explanation['confidence_metrics']['confidence_gap']
+
             # DIAGNOSTIC: Enhanced Q-value logging for scale-down debugging
             scale_down_q = q_values[0]
             keep_same_q = q_values[1]
@@ -422,6 +516,12 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
             logger.info(f"DQN_REPLICA_PRESSURE: current={current_replicas} "
                         f"scale_down_advantage={scale_down_q - keep_same_q:.4f} "
                         f"should_scale_down={current_replicas > 5 and scale_down_q > keep_same_q}")
+
+            # Log failure analysis for all decisions
+            logger.info(f"FAILURE_ANALYSIS_DQN: severity={failure_severity} urgency={scaling_urgency} "
+                        f"resource_pressure={resource_pressure} score={failure_score:.2f}")
+            if failure_reasons:
+                logger.info(f"FAILURE_INDICATORS: {', '.join(failure_reasons[:3])}")  # Log top 3 reasons
 
             logger.info(f"DQN_DECISION: action={action_name} confidence={confidence} risk={risk_level}")
             logger.info(f"DQN_Q_VALUES: values=[{','.join(f'{q:.3f}' for q in q_values)}] gap={confidence_gap:.3f}")
@@ -488,7 +588,7 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
                 "experience": experience_update
             }
         else:
-            # Enhanced fallback: Rule-based logic with balanced selected features
+            # Enhanced fallback: Rule-based logic with proactive failure detection
             logger.info("DQN_FALLBACK: using_rule_based_logic model_not_available")
 
             # Get current consumer pod metrics for fallback decision
@@ -502,20 +602,37 @@ async def get_dqn_recommendation(state: ScalingState, services: ServiceContainer
             response_size_rate = metrics.get('http_response_size_bytes_sum_rate', 0.0)
             request_size_rate = metrics.get('http_request_size_bytes_count_rate', 0.0)
 
+            # ENHANCED: Get failure indicators for proactive fallback scaling
+            failure_severity = metrics.get('failure_severity', 'none')
+            scaling_urgency = metrics.get('scaling_urgency', 'normal')
+            resource_pressure = metrics.get('resource_pressure', 'low')
+            proactive_scale_recommended = metrics.get('proactive_scale_recommended', False)
+            failure_score = metrics.get('failure_score', 0.0)
+            failure_reasons = metrics.get('failure_reasons', [])
+
             # Generate analysis for fallback decision
             analysis = decision_reasoning.analyze_metrics(metrics, current_replicas)
 
-            # Enhanced rule-based decision with consumer pod metrics
+            # Enhanced rule-based decision with consumer pod metrics and failure detection
             reasoning_factors = []
 
-            # Decision logic based on consumer application metrics
+            # Calculate metrics for decision logic
             avg_request_duration = http_duration_rate / http_requests_rate if http_requests_rate > 0 else 0
             
             # Memory pressure indicators (convert to MB for thresholds)
             resident_memory_mb = resident_memory / 1000000 if resident_memory > 0 else 0
             virtual_memory_mb = virtual_memory / 1000000 if virtual_memory > 0 else 0
-            
-            if cpu_rate > 0.8 or avg_request_duration > 1.0 or resident_memory_mb > 500:  # High load/pressure
+
+            # PROACTIVE: Check for failure conditions first (highest priority)
+            if proactive_scale_recommended and current_replicas < 10:
+                action_name = "Scale Up"
+                reasoning_factors.append(f"PROACTIVE SCALING: System failure detected - {failure_severity} severity")
+                reasoning_factors.append(f"Failure indicators: {', '.join(failure_reasons[:2])}")
+                reasoning_factors.append(f"Scaling urgency: {scaling_urgency} - immediate action required")
+                risk_level = "high"
+                logger.warning(f"FALLBACK_PROACTIVE: failure_detected={failure_severity} forcing_scale_up")
+            # Decision logic based on consumer application metrics
+            elif cpu_rate > 0.8 or avg_request_duration > 1.0 or resident_memory_mb > 500:  # High load/pressure
                 action_name = "Scale Up"
                 reasoning_factors.append(
                     f"High load detected: CPU rate {cpu_rate:.4f}, avg duration {avg_request_duration:.4f}s, memory {resident_memory_mb:.1f}MB")
@@ -1220,6 +1337,122 @@ async def log_experience(state: ScalingState, services: ServiceContainer) -> Dic
     logger.info("NODE_END: log_experience")
     logger.info("=" * 60)
     return {}
+
+
+def _analyze_failure_patterns(metrics: Dict[str, float], current_replicas: int) -> Dict[str, Any]:
+    """
+    Analyze failure patterns and resource pressure to enable proactive scaling.
+    
+    Returns:
+        Dict with failure indicators:
+        - failure_severity: none, low, medium, high, critical
+        - scaling_urgency: normal, medium, high, critical
+        - resource_pressure: low, medium, high, critical
+        - failure_score: 0.0-1.0 (higher = more likely to need scaling)
+    """
+    
+    # Get failure indicators
+    restarts_recent = metrics.get('pod_container_restarts_recent', 0)
+    restarts_5m = metrics.get('restarts_5m', 0)
+    restarts_15m = metrics.get('restarts_15m', 0)
+    last_exit_code = metrics.get('pod_container_last_terminated_exitcode', 0)
+    replicas_unavailable = metrics.get('deployment_replicas_unavailable', 0)
+    containers_ready = metrics.get('pod_container_ready', 0)
+    containers_running = metrics.get('pod_container_running', 0)
+    prometheus_up = metrics.get('prometheus_scrape_up', 0)
+    
+    # Resource pressure indicators
+    cpu_limits = metrics.get('pod_resource_limits_cpu', 0)
+    memory_limits = metrics.get('pod_resource_limits_memory', 0)
+    cpu_requests = metrics.get('pod_resource_requests_cpu', 0)
+    memory_requests = metrics.get('pod_resource_requests_memory', 0)
+    
+    # Calculate failure severity
+    failure_score = 0.0
+    failure_reasons = []
+    
+    # Recent restart patterns (high weight)
+    if restarts_recent > 0:
+        failure_score += 0.4
+        failure_reasons.append(f"recent_restarts={restarts_recent}")
+    
+    if restarts_5m > 2:  # More than 2 restarts in 5 minutes
+        failure_score += 0.3
+        failure_reasons.append(f"frequent_restarts_5m={restarts_5m}")
+    
+    if restarts_15m > 5:  # More than 5 restarts in 15 minutes
+        failure_score += 0.2
+        failure_reasons.append(f"excessive_restarts_15m={restarts_15m}")
+    
+    # Exit code analysis
+    if last_exit_code in [137, 143]:  # OOMKilled or SIGTERM
+        failure_score += 0.3
+        failure_reasons.append(f"oom_killed_exit_code={last_exit_code}")
+    elif last_exit_code != 0 and last_exit_code != -1:
+        failure_score += 0.2
+        failure_reasons.append(f"abnormal_exit_code={last_exit_code}")
+    
+    # Availability issues
+    if replicas_unavailable > 0:
+        failure_score += 0.3
+        failure_reasons.append(f"unavailable_replicas={replicas_unavailable}")
+    
+    if containers_ready < current_replicas:
+        failure_score += 0.2
+        failure_reasons.append(f"containers_not_ready={containers_ready}/{current_replicas}")
+    
+    if containers_running < current_replicas:
+        failure_score += 0.2
+        failure_reasons.append(f"containers_not_running={containers_running}/{current_replicas}")
+    
+    # Monitoring issues
+    if prometheus_up == 0:
+        failure_score += 0.4
+        failure_reasons.append("prometheus_scrape_down")
+    
+    # Determine failure severity
+    if failure_score >= 0.8:
+        failure_severity = 'critical'
+    elif failure_score >= 0.6:
+        failure_severity = 'high'
+    elif failure_score >= 0.4:
+        failure_severity = 'medium'
+    elif failure_score >= 0.2:
+        failure_severity = 'low'
+    else:
+        failure_severity = 'none'
+    
+    # Calculate scaling urgency
+    scaling_urgency = 'normal'
+    if failure_severity in ['critical', 'high']:
+        scaling_urgency = 'critical'
+    elif failure_severity == 'medium':
+        scaling_urgency = 'high'
+    elif failure_severity == 'low':
+        scaling_urgency = 'medium'
+    
+    # Analyze resource pressure
+    resource_pressure = 'low'
+    if memory_limits > 0 and memory_limits < 2000000000:  # Less than 2GB
+        resource_pressure = 'high'
+        failure_reasons.append(f"low_memory_limit={memory_limits/1000000:.0f}MB")
+    elif cpu_limits > 0 and cpu_limits < 1.0:  # Less than 1 CPU
+        resource_pressure = 'medium'
+        failure_reasons.append(f"low_cpu_limit={cpu_limits:.2f}")
+    
+    # Special case: If we have only 1 replica and it's failing, urgency is critical
+    if current_replicas == 1 and failure_severity in ['medium', 'high', 'critical']:
+        scaling_urgency = 'critical'
+        failure_reasons.append("single_replica_failing")
+    
+    return {
+        'failure_severity': failure_severity,
+        'scaling_urgency': scaling_urgency,
+        'resource_pressure': resource_pressure,
+        'failure_score': failure_score,
+        'failure_reasons': failure_reasons,
+        'proactive_scale_recommended': failure_severity in ['medium', 'high', 'critical'] or scaling_urgency in ['high', 'critical']
+    }
 
 
 def test_reward_function_accuracy():

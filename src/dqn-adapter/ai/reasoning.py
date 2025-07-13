@@ -148,16 +148,15 @@ class DecisionReasoning:
         
         # Get Kubernetes state metrics for better availability and health reporting
         replicas_unavailable = metrics.get('deployment_replicas_unavailable', 0)
-        replicas_ready = metrics.get('deployment_replicas_ready', current_replicas)
         containers_ready = metrics.get('pod_container_ready', 0)
         containers_running = metrics.get('pod_container_running', 0)
         container_restarts = metrics.get('pod_container_restarts', 0)
         
-        # Determine availability status
+        # Determine availability status - use container-level metrics for accuracy
         if replicas_unavailable > 0:
             availability_status = f"PODS UNAVAILABLE ({replicas_unavailable})"
-        elif replicas_ready < current_replicas:
-            availability_status = f"PODS NOT READY ({replicas_ready}/{current_replicas})"
+        elif containers_ready < current_replicas:
+            availability_status = f"PODS NOT READY ({containers_ready}/{current_replicas})"
         else:
             availability_status = "ALL PODS AVAILABLE"
         
