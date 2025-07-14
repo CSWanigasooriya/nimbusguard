@@ -444,8 +444,9 @@ class ProactiveRewardCalculator:
             else:
                 logger.debug(f"Skipping forecast reward: confidence={forecast_result.get('confidence', 0) if forecast_result else 0:.3f} <= threshold={self.forecast_confidence_threshold}")
 
-            # Use fixed weights for current and forecast rewards
-            current_weight, forecast_weight = 0.5, 0.5
+            # Use configurable weights for current and forecast rewards
+            current_weight = config.reward.current_weight
+            forecast_weight = config.reward.forecast_weight
 
             # Combined reward with fixed weights and requests reward
             total_reward = (current_reward * current_weight) + (forecast_reward * forecast_weight) + requests_reward
@@ -467,6 +468,7 @@ class ProactiveRewardCalculator:
         """Calculate reward based on current system state."""
         # BALANCED reward matrix that gives fair consideration to all three actions
         reward_matrix = {
+            "EMERGENCY": {"scale_up": 5.0, "keep_same": -5.0, "scale_down": -10.0},  # Emergency: must scale up
             "ZERO": {"scale_up": 2.0, "keep_same": -1.0, "scale_down": -2.0},
             "LOW": {"scale_up": -0.3, "keep_same": 0.8, "scale_down": 0.3},
             "MEDIUM": {"scale_up": 0.5, "keep_same": 0.2, "scale_down": -0.5},
@@ -559,7 +561,7 @@ class ProactiveRewardCalculator:
         return 0.0
 
     def _classify_load(self, metrics: Dict[str, float], replicas: int, deployment_info: Optional[Dict[str, Any]] = None) -> str:
-        """Classify current load using a composite weighted load score."""
+        """Classify current load using a composite weighted load score with health-aware logic."""
         try:
             validated_replicas = self._validate_replicas(replicas, "in load classification")
             cpu_rate = metrics.get("process_cpu_seconds_total_rate", 0.0)
@@ -569,6 +571,17 @@ class ProactiveRewardCalculator:
             cpu_per_replica = cpu_rate / validated_replicas
             memory_per_replica = memory_bytes / validated_replicas
             requests_per_replica = request_rate / validated_replicas
+
+            # CRITICAL: Check if we have healthy pods by looking at pod readiness
+            if deployment_info and deployment_info.get('ready_replicas', 0) == 0:
+                logger.warning("🚨 CRITICAL: No healthy pods available - emergency scale up needed!")
+                return "EMERGENCY"  # New classification for pod health issues
+            
+            # CRITICAL: Check if all metrics are zero which indicates unhealthy pods
+            if (cpu_rate == 0.0 and memory_bytes == 0.0 and request_rate == 0.0 and 
+                deployment_info and deployment_info.get('ready_replicas', validated_replicas) < validated_replicas):
+                logger.warning("🚨 CRITICAL: All metrics are zero with unhealthy pods - emergency scale up needed!")
+                return "EMERGENCY"
 
             if not (deployment_info and deployment_info.get('resource_limits')):
                 logger.warning("No deployment resource limits available; cannot classify load without dynamic thresholds. Returning LOW.")
@@ -595,6 +608,7 @@ class ProactiveRewardCalculator:
 
             logger.info(f"Composite load score: cpu_util={cpu_util:.2f}, memory_util={memory_util:.2f}, request_density={request_density:.2f}, score={load_score:.2f}")
 
+            # Only classify as ZERO if we have healthy pods but no requests
             if request_rate == 0.0:
                 logger.info(f"💤 NO WORKLOAD: Request rate is 0.0 - no actual processing demand")
                 return "ZERO"

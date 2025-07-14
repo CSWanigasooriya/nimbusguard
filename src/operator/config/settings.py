@@ -105,6 +105,15 @@ class MetricsConfig:
         self.enabled = os.getenv("METRICS_ENABLED", "true").lower() == "true"
 
 
+class RewardConfig:
+    """Reward system configuration."""
+
+    def __init__(self):
+        # Single weight parameter - current gets this weight, forecast gets (1 - weight)
+        self.current_weight = float(os.getenv("REWARD_CURRENT_WEIGHT", "0.5"))
+        self.forecast_weight = 1.0 - self.current_weight
+
+
 class Config:
     """Main configuration object."""
 
@@ -116,6 +125,7 @@ class Config:
         self.server = ServerConfig()
         self.logging = LoggingConfig()
         self.metrics = MetricsConfig()
+        self.reward = RewardConfig()
 
 
 def load_config() -> Config:
