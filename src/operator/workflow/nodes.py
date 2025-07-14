@@ -13,6 +13,7 @@ from workflow.state import (
     add_error
 )
 import json
+import re
 
 
 # Helper functions for state updates
@@ -381,6 +382,64 @@ async def dqn_decision_node(state: OperatorState, services: Dict[str, Any], conf
         return state
 
 
+# Robust LLM JSON response parser with safety fallback
+def parse_llm_json_response(response_text: str, action_name: str) -> dict:
+    """Parse LLM JSON response with robust error handling and safety-first fallbacks."""
+    try:
+        # Try to extract JSON from the response
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group()
+            parsed = json.loads(json_str)
+
+            # Validate required fields for safety monitoring
+            required_fields = ['approved', 'confidence', 'reasoning']
+            if all(field in parsed for field in required_fields):
+
+                # Ensure all expected safety fields exist with defaults
+                safety_defaults = {
+                    'safety_risk': parsed.get('safety_risk', 'none'),
+                    'extreme_factors': parsed.get('extreme_factors', []),
+                    'alternative_suggestion': parsed.get('alternative_suggestion', ''),
+                    'cluster_check_performed': parsed.get('cluster_check_performed', False),
+                    'tool_findings': parsed.get('tool_findings', []),
+                    'validation_score': 0.8 if parsed.get('approved', True) else 0.3
+                }
+
+                # Merge parsed response with safety defaults
+                result = {**parsed, **safety_defaults}
+
+                # Ensure confidence is valid
+                if result['confidence'] not in ['low', 'medium', 'high']:
+                    result['confidence'] = 'medium'
+
+                return result
+
+        # If JSON parsing failed, log and use safety fallback
+        logger.warning(f"LLM_PARSING: json_extraction_failed response_preview={response_text[:100]}")
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"LLM_PARSING: json_decode_error position={e.pos}")
+
+    except Exception as e:
+        logger.warning(f"LLM_PARSING: general_parsing_error error={e}")
+
+    # SAFETY FALLBACK: Default to APPROVE for any parsing failures
+    # This preserves DQN learning and only blocks when LLM explicitly identifies extreme risk
+    return {
+        'approved': True,  # Safety-first: approve unless explicitly dangerous
+        'confidence': 'low',
+        'reasoning': f'Parsing failure, unable to verify cluster state. Defaulting to APPROVE for safety. Response: {response_text[:200]}...',
+        'safety_risk': 'unknown',
+        'extreme_factors': ['parsing_failure', 'tool_verification_failed'],
+        'alternative_suggestion': 'Monitor decision closely due to validation parsing failure',
+        'cluster_check_performed': False,
+        'validation_score': 0.5,
+        'fallback_mode': True,
+        'tool_findings': ['Parsing failed - no tool verification performed']
+    }
+
+
 async def validate_decision_node(state: OperatorState, services: Dict[str, Any], config: Any) -> OperatorState:
     start_time = time.time()
 
@@ -421,12 +480,8 @@ async def validate_decision_node(state: OperatorState, services: Dict[str, Any],
                     logger.info(f"LLM validation response chars={len(last_message) if last_message else 0}")
                     if last_message:
                         logger.debug(f"LLM RAW RESPONSE: {last_message[:200]}...")
-                    # Try to parse JSON
-                    try:
-                        validation_result = json.loads(last_message)
-                    except Exception as e:
-                        logger.error(f"LLM JSON parsing error: {e}")
-                        validation_result = {"approved": True, "confidence": "low", "reasoning": f"LLM error: {e}", "cluster_check_performed": False}
+                    # Use robust parser
+                    validation_result = parse_llm_json_response(last_message, action_name)
                     # If LLM blocks, override validation
                     if not validation_result.get("approved", True):
                         llm_blocked = True
