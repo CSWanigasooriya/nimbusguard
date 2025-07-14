@@ -1,4 +1,14 @@
-"""Reward system for DQN that considers current state and forecast predictions."""
+"""Reward system for DQN that considers current state and forecast predictions.
+
+Available Metrics:
+- http_requests_total_process_rate: Total HTTP request rate (req/s)
+- process_cpu_seconds_total_rate: CPU usage rate (seconds/second)
+- process_resident_memory_bytes: Current memory usage (bytes)
+- http_response_size_bytes_sum_rate: Response size throughput rate
+- process_open_fds: Open file descriptors count
+- kube_pod_container_resource_limits_cpu: CPU resource limits
+- http_server_active_connections: Active connections (using request rate)
+"""
 import logging
 from typing import Dict, Any, Optional
 
@@ -13,22 +23,73 @@ class ProactiveRewardCalculator:
     """Calculates rewards for DQN considering both current and predicted future state."""
 
     def __init__(self):
-        # FIXED: Consumer-focused thresholds for instantaneous metrics
-        self.cpu_thresholds = {"low": 0.01, "medium": 0.1,
-                               "high": 0.5}  # CPU rate: seconds per second (0.01-0.5 realistic)
-        self.memory_thresholds = {"low": 80, "medium": 150, "high": 300}  # MB (80-300MB for Python apps)
-        # PRIMARY: Request rate thresholds - ADJUSTED for realistic load test values
-        self.request_thresholds = {"low": 0.2, "medium": 1.0, "high": 5.0}  # req/s total (not per replica)
+        # Use attribute access for config, with sensible defaults
+        self.cpu_thresholds = getattr(config, 'reward_thresholds', {}).get('cpu', {
+            "low": 0.01, "medium": 0.1, "high": 0.5
+        })
+        self.memory_thresholds = getattr(config, 'reward_thresholds', {}).get('memory', {
+            "low": 80, "medium": 150, "high": 300
+        })  # MB
+        self.request_thresholds = getattr(config, 'reward_thresholds', {}).get('request', {
+            "low": 0.2, "medium": 1.0, "high": 5.0
+        })  # req/s total
 
-        # IoT-inspired: Track recent actions for stability analysis
+        reward_config = getattr(config, 'reward_config', {})
+        self.forecast_confidence_threshold = reward_config.get(
+            "forecast_confidence_threshold", 0.3
+        )
+
+        self.efficiency_targets = reward_config.get('efficiency_targets', {
+            "cpu_utilization": 0.70,
+            "memory_utilization": 0.80,
+            "default_memory_mb": 400
+        })
+
         self.recent_actions = []
-        self.max_action_history = 10
-
-        # Track load changes to justify quick scaling
+        self.max_action_history = reward_config.get('max_action_history', 10)
         self.recent_load_classes = []
-        self.max_load_history = 5
+        self.max_load_history = reward_config.get('max_load_history', 5)
 
-    def _get_context_aware_weights(self, load_class: str, forecast_confidence: float) -> tuple:
+        logger.info(f"Initialized ProactiveRewardCalculator with configurable thresholds: "
+                    f"CPU={self.cpu_thresholds}, Memory={self.memory_thresholds}, "
+                    f"Request={self.request_thresholds}, ForecastConf={self.forecast_confidence_threshold}")
+
+    @staticmethod
+    def _validate_metrics(metrics: Dict[str, float]) -> Dict[str, float]:
+        """Validate that required metrics are present and handle missing ones."""
+        required_metrics = [
+            "http_requests_total_process_rate",
+            "process_cpu_seconds_total_rate",
+            "process_resident_memory_bytes"
+        ]
+
+        validated_metrics = metrics.copy()
+        missing_metrics = []
+
+        for metric in required_metrics:
+            if metric not in metrics:
+                missing_metrics.append(metric)
+                validated_metrics[metric] = 0.0  # Safe default
+
+        if missing_metrics:
+            logger.warning(f"⚠️ Missing metrics (using defaults): {missing_metrics}")
+
+        # Optional metrics with defaults
+        optional_defaults = {
+            "http_response_size_bytes_sum_rate": 0.0,
+            "process_open_fds": 0.0,
+            "kube_pod_container_resource_limits_cpu": 0.0,
+            "http_server_active_connections": 0.0
+        }
+
+        for metric, default_value in optional_defaults.items():
+            if metric not in validated_metrics:
+                validated_metrics[metric] = default_value
+
+        return validated_metrics
+
+    @staticmethod
+    def _get_context_aware_weights(load_class: str, forecast_confidence: float) -> tuple:
         """IoT-inspired: Adjust reward weights based on system context."""
         # CRITICAL: Zero metrics (stuck pods) - prioritize immediate action over forecasting
         if load_class == "ZERO":
@@ -45,6 +106,18 @@ class ProactiveRewardCalculator:
         # Medium load or uncertain forecast: balanced approach
         else:
             return 0.6, 0.4
+
+    @staticmethod
+    def _validate_replicas(replicas: int, context: str = "") -> int:
+        """FIXED: Validate replica count and handle edge cases explicitly."""
+        if replicas < 0:
+            logger.error(f"⚠️ CRITICAL: Negative replica count detected: {replicas} {context}")
+            return 1  # Force to minimum viable state
+        elif replicas == 0:
+            logger.warning(f"⚠️ CRITICAL: Zero replicas detected - no pods running! {context}")
+            return 1  # Prevent division by zero and alert to critical state
+        else:
+            return replicas
 
     def _track_action(self, action: str) -> None:
         """Track recent actions for stability analysis."""
@@ -125,10 +198,10 @@ class ProactiveRewardCalculator:
 
                 # JUSTIFIED QUICK SCALING: If load is high and we're scaling up, or load is low and scaling down
                 elif current_load_class:
-                    if (current_load_class == "HIGH" and action == "scale_up"):
+                    if current_load_class == "HIGH" and action == "scale_up":
                         logger.info(f"✅ Justified quick scale-up for HIGH load: {last_action} → {action}")
                         stability_score += 0.3  # Reward quick response to high load
-                    elif (current_load_class == "LOW" and action == "scale_down"):
+                    elif current_load_class == "LOW" and action == "scale_down":
                         logger.info(f"✅ Justified quick scale-down for LOW load: {last_action} → {action}")
                         stability_score += 0.3  # Reward quick response to low load
                     else:
@@ -222,10 +295,10 @@ class ProactiveRewardCalculator:
             recent_3 = self.recent_actions[-3:]
 
             # Reward for stopping excessive scaling
-            if (all(a == "scale_up" for a in recent_3) and action in ["keep_same", "scale_down"]):
+            if all(a == "scale_up" for a in recent_3) and action in ["keep_same", "scale_down"]:
                 logger.info(f"✅ Stopped excessive scale-up: {recent_3} → {action}")
                 stability_score += 0.3
-            elif (all(a == "scale_down" for a in recent_3) and action in ["keep_same", "scale_up"]):
+            elif all(a == "scale_down" for a in recent_3) and action in ["keep_same", "scale_up"]:
                 logger.info(f"✅ Stopped excessive scale-down: {recent_3} → {action}")
                 stability_score += 0.3
 
@@ -235,19 +308,29 @@ class ProactiveRewardCalculator:
         logger.info(f"🎯 Stability analysis result: {stability_score:.3f} (action: {action})")
         return stability_score
 
-    def _calculate_performance_score(self, metrics: Dict[str, float]) -> float:
-        """IoT-inspired: Calculate performance score based on response time and throughput."""
+    @staticmethod
+    def _calculate_performance_score(metrics: Dict[str, float]) -> float:
+        """Calculate performance score using available throughput metrics."""
         try:
-            # FIXED: Use correct metric names - both are actually request rates, not latency
-            # We can't calculate latency from current metrics, so use request rate as performance indicator
-            request_rate = metrics.get("http_requests_total_process_rate", 0.0)  # Actual workload requests
+            # Use available request rate metric (all your queries return the same request rate)
+            request_rate = metrics.get("http_requests_total_process_rate", 0.0)  # Request throughput (req/s)
 
-            # Performance score based on request processing capability
-            # Higher request rate = better performance (system is handling load)
+            # Since duration sum isn't actually available (your query returns request rate),
+            # use throughput as the primary performance indicator
             throughput_score = min(1.0, request_rate / 10.0)  # Normalize to 0-1, 10 req/s = max score
 
-            # Since we can't measure latency, use throughput as primary performance indicator
-            return throughput_score
+            # Optional: Use response size rate as additional performance indicator if available
+            response_size_rate = metrics.get("http_response_size_bytes_sum_rate", 0.0)
+            if response_size_rate > 0:
+                # Higher response size rate indicates more data throughput
+                size_score = min(1.0, response_size_rate / 1000000.0)  # Normalize to 1MB/s = max score
+                performance_score = (throughput_score * 0.8) + (size_score * 0.2)
+                logger.debug(f"Performance: throughput={throughput_score:.3f}, size_rate={size_score:.3f}, combined={performance_score:.3f}")
+            else:
+                performance_score = throughput_score
+                logger.debug(f"Performance (throughput only): {performance_score:.3f}")
+
+            return performance_score
 
         except Exception as e:
             logger.warning(f"Failed to calculate performance score: {e}")
@@ -255,45 +338,69 @@ class ProactiveRewardCalculator:
 
     def _calculate_resource_efficiency(self, metrics: Dict[str, float], replicas: int,
                                        deployment_info: Optional[Dict[str, Any]] = None) -> float:
-        """IoT-inspired: Calculate resource efficiency score using deployment limits when available."""
+        """FIXED: Calculate resource efficiency with proper validation and fallback handling."""
         try:
+            # FIXED: Validate replicas first
+            validated_replicas = self._validate_replicas(replicas, "in resource efficiency calculation")
+
             # Get resource utilization metrics
             cpu_rate = metrics.get("process_cpu_seconds_total_rate", 0.0)
             memory_bytes = metrics.get("process_resident_memory_bytes", 0.0)
 
             # Calculate per-replica utilization
-            cpu_per_replica = cpu_rate / max(replicas, 1)
-            memory_per_replica = memory_bytes / max(replicas, 1)
+            cpu_per_replica = cpu_rate / validated_replicas
+            memory_per_replica = memory_bytes / validated_replicas
 
-            # Use deployment limits if available, otherwise fall back to defaults
+            # FIXED: Proper validation of deployment limits with explicit warnings
+            cpu_limit_per_replica = None
+            memory_limit_per_replica = None
+
             if deployment_info and deployment_info.get('resource_limits'):
                 resource_limits = deployment_info['resource_limits']
-                cpu_limit_per_replica = resource_limits.get('cpu', 0.0) / max(replicas, 1)
-                memory_limit_per_replica = resource_limits.get('memory', 0) / max(replicas, 1)
 
-                # Target same as HPA baseline: 70% CPU, 80% memory utilization
-                target_cpu = cpu_limit_per_replica * 0.70 if cpu_limit_per_replica > 0 else 0.70
-                target_memory = memory_limit_per_replica * 0.80 if memory_limit_per_replica > 0 else 400 * 1024 * 1024
+                # Validate CPU limit
+                cpu_limit_total = resource_limits.get('cpu', 0.0)
+                if cpu_limit_total > 0:
+                    cpu_limit_per_replica = cpu_limit_total / validated_replicas
+                    logger.debug(f"Using deployment CPU limit: {cpu_limit_per_replica:.3f} per replica")
+                else:
+                    logger.warning("⚠️ Invalid or missing CPU limit in deployment_info, using default targets")
 
-                logger.debug(
-                    f"Using deployment limits: CPU target={target_cpu:.3f} ({cpu_limit_per_replica:.3f}*0.70), "
-                    f"Memory target={target_memory / 1024 / 1024:.1f}MB ({memory_limit_per_replica / 1024 / 1024:.1f}MB*0.80)")
+                # Validate memory limit
+                memory_limit_total = resource_limits.get('memory', 0)
+                if memory_limit_total > 0:
+                    memory_limit_per_replica = memory_limit_total / validated_replicas
+                    logger.debug(f"Using deployment memory limit: {memory_limit_per_replica/1024/1024:.1f}MB per replica")
+                else:
+                    logger.warning("⚠️ Invalid or missing memory limit in deployment_info, using default targets")
             else:
-                # Fallback to default targets (matching HPA baseline)
-                target_cpu = 0.70
-                target_memory = 400 * 1024 * 1024  # 400MB in bytes
-                logger.debug("Using default efficiency targets: CPU=70%, Memory=400MB")
+                logger.info("No deployment resource limits available, using configurable default targets")
+
+            # Calculate targets (use deployment limits if available, otherwise configurable defaults)
+            if cpu_limit_per_replica and cpu_limit_per_replica > 0:
+                target_cpu = cpu_limit_per_replica * self.efficiency_targets["cpu_utilization"]
+            else:
+                target_cpu = self.efficiency_targets["cpu_utilization"]  # Absolute target
+
+            if memory_limit_per_replica and memory_limit_per_replica > 0:
+                target_memory = memory_limit_per_replica * self.efficiency_targets["memory_utilization"]
+            else:
+                target_memory = self.efficiency_targets["default_memory_mb"] * 1024 * 1024  # Convert MB to bytes
+
+            logger.debug(f"Efficiency targets: CPU={target_cpu:.3f}, Memory={target_memory/1024/1024:.1f}MB")
 
             # Calculate efficiency scores
             if target_cpu > 0:
                 cpu_efficiency = 1.0 - abs(cpu_per_replica - target_cpu) / target_cpu
             else:
                 cpu_efficiency = 0.5  # Neutral if no target
+                logger.warning("⚠️ Zero CPU target, using neutral efficiency score")
 
             if target_memory > 0:
                 memory_efficiency = 1.0 - abs(memory_per_replica - target_memory) / target_memory
             else:
                 memory_efficiency = 0.5  # Neutral if no target
+                logger.warning("⚠️ Zero memory target, using neutral efficiency score")
 
             # Ensure scores are between 0 and 1
             cpu_efficiency = max(0, min(1, cpu_efficiency))
@@ -320,22 +427,32 @@ class ProactiveRewardCalculator:
                          deployment_info: Optional[Dict[str, Any]] = None) -> float:
         """Calculate reward considering current state and forecast."""
         try:
-            # FIXED: Calculate load classification first to avoid variable reference error
-            load_class = self._classify_load(current_metrics, current_replicas)
+            # Validate and clean metrics first
+            validated_metrics = self._validate_metrics(current_metrics)
+
+            # Validate replicas early to prevent issues downstream
+            validated_current_replicas = self._validate_replicas(current_replicas, "in reward calculation")
+            validated_desired_replicas = self._validate_replicas(desired_replicas, "for desired replicas")
+
+            # Calculate load classification first to avoid variable reference error
+            load_class = self._classify_load(validated_metrics, validated_current_replicas)
 
             # Base reward from current state (pass cached load_class)
             current_reward = self._calculate_current_state_reward(
-                action, current_metrics, current_replicas, desired_replicas, deployment_info, load_class
+                action, validated_metrics, validated_current_replicas, validated_desired_replicas, deployment_info, load_class
             )
 
-            # Forecast-based reward adjustment
+            # Forecast-based reward adjustment with configurable confidence threshold
             forecast_reward = 0.0
             forecast_confidence = 0.0
-            if forecast_result and forecast_result.get("confidence", 0) > 0.3:
+            if forecast_result and forecast_result.get("confidence", 0) > self.forecast_confidence_threshold:
                 forecast_reward = self._calculate_forecast_reward(
-                    action, current_metrics, forecast_result, current_replicas, desired_replicas
+                    action, validated_metrics, forecast_result, validated_current_replicas, validated_desired_replicas
                 )
                 forecast_confidence = forecast_result.get("confidence", 0)
+                logger.debug(f"Using forecast reward: confidence={forecast_confidence:.3f} > threshold={self.forecast_confidence_threshold}")
+            else:
+                logger.debug(f"Skipping forecast reward: confidence={forecast_result.get('confidence', 0) if forecast_result else 0:.3f} <= threshold={self.forecast_confidence_threshold}")
 
             # IoT-inspired: Context-aware weight adjustment
             current_weight, forecast_weight = self._get_context_aware_weights(load_class, forecast_confidence)
@@ -344,7 +461,7 @@ class ProactiveRewardCalculator:
             self._track_action(action)
 
             # Context-aware stability analysis that considers current load (pass cached load_class)
-            stability_penalty = self._calculate_stability_penalty(action, current_metrics, current_replicas, load_class)
+            stability_penalty = self._calculate_stability_penalty(action, validated_metrics, validated_current_replicas, load_class)
 
             # Combined reward with adaptive weights and stability consideration
             total_reward = (current_reward * current_weight) + (forecast_reward * forecast_weight) + stability_penalty
@@ -452,8 +569,8 @@ class ProactiveRewardCalculator:
 
         return total_forecast_reward
 
-    def _calculate_proactive_reward(self,
-                                    action: str,
+    @staticmethod
+    def _calculate_proactive_reward(action: str,
                                     forecast_summary: Dict[str, float],
                                     current_replicas: int,
                                     desired_replicas: int) -> float:
@@ -482,54 +599,49 @@ class ProactiveRewardCalculator:
         return 0.0
 
     def _classify_load(self, metrics: Dict[str, float], replicas: int) -> str:
-        """Classify current load as LOW, MEDIUM, HIGH, or ZERO (stuck pods) - Consumer-focused."""
+        """Classify current load using available metrics with replica validation."""
         try:
-            # Extract consumer-focused metrics
+            # Validate replicas first
+            validated_replicas = self._validate_replicas(replicas, "in load classification")
+
+            # Extract available metrics
             cpu_rate = metrics.get("process_cpu_seconds_total_rate", 0.0)
             memory_bytes = metrics.get("process_resident_memory_bytes", 0.0)
-            request_rate = metrics.get("http_requests_total_process_rate", 0.0)
+            request_rate = metrics.get("http_requests_total_process_rate", 0.0)  # Primary workload indicator
 
-            # FIXED: Use request rate as primary load indicator (no latency available)
-            # Both metrics are actually the same request rate, so just use one
-            workload_request_rate = metrics.get("http_request_duration_seconds_sum_rate", 0.0)  # Same as _count_rate
-
-            # Convert to per-replica metrics
-            cpu_per_replica = cpu_rate / max(replicas, 1)
-            memory_mb_per_replica = (memory_bytes / max(replicas, 1)) / (1024 * 1024)
-            requests_per_replica = request_rate / max(replicas, 1)
+            # Convert to per-replica metrics for analysis
+            cpu_per_replica = cpu_rate / validated_replicas
+            memory_mb_per_replica = (memory_bytes / validated_replicas) / (1024 * 1024)
+            requests_per_replica = request_rate / validated_replicas
 
             # Log the actual values for debugging
-            logger.info(f"Consumer load classification: cpu_per_replica={cpu_per_replica:.4f}, "
+            logger.info(f"Load classification: cpu_per_replica={cpu_per_replica:.4f}, "
                         f"memory_mb_per_replica={memory_mb_per_replica:.1f}, "
                         f"requests_per_replica={requests_per_replica:.4f}, "
-                        f"workload_request_rate={workload_request_rate:.4f}, replicas={replicas}")
+                        f"total_request_rate={request_rate:.4f}, replicas={validated_replicas}")
 
-            # CRITICAL: Check for zero workload (no actual requests to /process endpoint)
-            if workload_request_rate == 0.0:
+            # CRITICAL: Check for zero workload (no actual requests)
+            if request_rate == 0.0:
                 logger.info(f"💤 NO WORKLOAD: Request rate is 0.0 - no actual processing demand")
                 return "ZERO"
 
-            # NEW CLASSIFICATION LOGIC:
-            # PRIMARY: Request rate (total system workload demand)
-            # SECONDARY: CPU utilization rate (resource pressure)
-            # TERTIARY: Memory usage (resource pressure)
-
+            # Classification logic using configurable thresholds
             # HIGH load conditions - REQUEST RATE IS PRIMARY INDICATOR
-            if (workload_request_rate > self.request_thresholds["high"] or
+            if (request_rate > self.request_thresholds["high"] or
                     cpu_rate > self.cpu_thresholds["high"] or
                     memory_bytes > self.memory_thresholds["high"] * 1024 * 1024):  # Convert MB to bytes
                 logger.info(
-                    f"Classified as HIGH load: request_rate>{self.request_thresholds['high']}? {workload_request_rate > self.request_thresholds['high']}, "
+                    f"Classified as HIGH load: request_rate>{self.request_thresholds['high']}? {request_rate > self.request_thresholds['high']}, "
                     f"cpu_rate>{self.cpu_thresholds['high']}? {cpu_rate > self.cpu_thresholds['high']}, "
                     f"memory>{self.memory_thresholds['high']}MB? {memory_bytes > self.memory_thresholds['high'] * 1024 * 1024}")
                 return "HIGH"
 
-            # MEDIUM load conditions - Focus on request rate and resource pressure  
-            elif (workload_request_rate > self.request_thresholds["medium"] or
+            # MEDIUM load conditions
+            elif (request_rate > self.request_thresholds["medium"] or
                   cpu_rate > self.cpu_thresholds["medium"] or
                   memory_bytes > self.memory_thresholds["medium"] * 1024 * 1024):  # Convert MB to bytes
                 logger.info(
-                    f"Classified as MEDIUM load: request_rate>{self.request_thresholds['medium']}? {workload_request_rate > self.request_thresholds['medium']}, "
+                    f"Classified as MEDIUM load: request_rate>{self.request_thresholds['medium']}? {request_rate > self.request_thresholds['medium']}, "
                     f"cpu_rate>{self.cpu_thresholds['medium']}? {cpu_rate > self.cpu_thresholds['medium']}, "
                     f"memory>{self.memory_thresholds['medium']}MB? {memory_bytes > self.memory_thresholds['medium'] * 1024 * 1024}")
                 return "MEDIUM"
@@ -537,68 +649,74 @@ class ProactiveRewardCalculator:
             # Low load (default) - has some workload but below medium thresholds
             else:
                 logger.info(
-                    f"Classified as LOW load: workload={workload_request_rate:.4f} req/s, all metrics below medium thresholds")
+                    f"Classified as LOW load: workload={request_rate:.4f} req/s, all metrics below medium thresholds")
                 return "LOW"
 
         except Exception as e:
             logger.warning(f"Failed to classify load: {e}")
             return "LOW"  # Default to low load on error
 
-    def _calculate_efficiency_penalty(self,
-                                      metrics: Dict[str, float],
+    def _calculate_efficiency_penalty(self, metrics: Dict[str, float],
                                       current_replicas: int,
                                       desired_replicas: int,
                                       deployment_info: Optional[Dict[str, Any]] = None) -> float:
-        """Calculate penalty for inefficient scaling decisions using deployment limits when available."""
+        """FIXED: Calculate penalty with proper resource limit validation."""
+        # FIXED: Validate replicas
+        validated_current_replicas = self._validate_replicas(current_replicas, "in efficiency penalty calculation")
+
         # Penalty for over-scaling
-        if desired_replicas > current_replicas + 2:
+        if desired_replicas > validated_current_replicas + 2:
             return -0.5  # Penalty for scaling up too aggressively
 
         # Penalty for under-scaling during high load
         cpu_rate = metrics.get("process_cpu_seconds_total_rate", 0.0)
-        cpu_per_replica = cpu_rate / max(current_replicas, 1)
+        cpu_per_replica = cpu_rate / validated_current_replicas
 
-        # Use deployment CPU limits if available for more accurate thresholds
+        # FIXED: Proper validation of deployment CPU limits
+        cpu_limit_per_replica = None
         if deployment_info and deployment_info.get('resource_limits'):
             resource_limits = deployment_info['resource_limits']
-            cpu_limit_per_replica = resource_limits.get('cpu', 0.0) / max(current_replicas, 1)
+            cpu_limit_total = resource_limits.get('cpu', 0.0)
 
-            if cpu_limit_per_replica > 0:
+            if cpu_limit_total > 0:
+                cpu_limit_per_replica = cpu_limit_total / validated_current_replicas
                 cpu_utilization = cpu_per_replica / cpu_limit_per_replica
-                high_cpu_threshold = 0.70  # 70% of limit (matching HPA baseline)
+                high_cpu_threshold = self.efficiency_targets["cpu_utilization"]  # Use configurable threshold
                 logger.debug(
                     f"Using deployment CPU limit: {cpu_utilization:.3f} utilization ({cpu_per_replica:.3f}/{cpu_limit_per_replica:.3f})")
             else:
+                logger.warning("⚠️ Invalid CPU limit in deployment_info, using absolute threshold")
                 cpu_utilization = cpu_per_replica
-                high_cpu_threshold = 0.70  # Fallback to absolute value (matching HPA baseline)
-                logger.debug(f"Using absolute CPU threshold: {cpu_per_replica:.3f}")
+                high_cpu_threshold = self.efficiency_targets["cpu_utilization"]  # Use configurable threshold
         else:
+            logger.debug("No deployment limits available, using absolute CPU threshold")
             cpu_utilization = cpu_per_replica
-            high_cpu_threshold = 0.70  # Fallback to absolute value (matching HPA baseline)
-            logger.debug(f"Using default CPU threshold: {cpu_per_replica:.3f}")
+            high_cpu_threshold = self.efficiency_targets["cpu_utilization"]  # Use configurable threshold
 
-        if cpu_utilization > high_cpu_threshold and desired_replicas <= current_replicas:
+        if cpu_utilization > high_cpu_threshold and desired_replicas <= validated_current_replicas:
             logger.info(
                 f"Efficiency penalty: High CPU utilization {cpu_utilization:.3f} > {high_cpu_threshold}, not scaling up")
             return -1.0  # Penalty for not scaling during very high CPU
 
         return 0.0
 
-    def _calculate_waste_penalty(self,
-                                 metrics: Dict[str, float],
+    def _calculate_waste_penalty(self, metrics: Dict[str, float],
                                  current_replicas: int,
                                  desired_replicas: int) -> float:
-        """Calculate penalty for resource waste."""
+        """FIXED: Calculate waste penalty with proper replica validation."""
+        # FIXED: Validate replicas
+        validated_current_replicas = self._validate_replicas(current_replicas, "in waste penalty calculation")
+
         # Penalty for maintaining too many replicas during low load
         cpu_rate = metrics.get("process_cpu_seconds_total_rate", 0.0)
         request_rate = metrics.get("http_requests_total_process_rate", 0.0)  # FIXED: Use correct metric name
 
-        cpu_per_replica = cpu_rate / max(current_replicas, 1)
-        requests_per_replica = request_rate / max(current_replicas, 1)
+        cpu_per_replica = cpu_rate / validated_current_replicas
+        requests_per_replica = request_rate / validated_current_replicas
 
         # If load is very low but maintaining high replica count
         if (cpu_per_replica < 0.05 and requests_per_replica < 1.0 and
-                desired_replicas >= current_replicas and current_replicas > 2):
+                desired_replicas >= validated_current_replicas > 2):
             return -0.8  # Penalty for resource waste
 
         return 0.0
@@ -610,10 +728,15 @@ class ProactiveRewardCalculator:
                                desired_replicas: int,
                                forecast_result: Optional[Dict[str, Any]] = None) -> str:
         """Get human-readable explanation of reward calculation."""
-        load_class = self._classify_load(current_metrics, current_replicas)
+        # Validate metrics and replicas in explanation
+        validated_metrics = self._validate_metrics(current_metrics)
+        validated_current_replicas = self._validate_replicas(current_replicas, "in reward explanation")
+        validated_desired_replicas = self._validate_replicas(desired_replicas, "for desired replicas in explanation")
+
+        load_class = self._classify_load(validated_metrics, validated_current_replicas)
 
         explanation = f"Action: {action}, Load: {load_class}, "
-        explanation += f"Replicas: {current_replicas} → {desired_replicas}"
+        explanation += f"Replicas: {validated_current_replicas} → {validated_desired_replicas}"
 
         if forecast_result:
             forecast_rec = forecast_result.get("recommendation", "unknown")
