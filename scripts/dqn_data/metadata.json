@@ -1,250 +1,19 @@
 {
-  "timestamp": "2025-07-14T22:10:20.890799",
-  "methodology": "Intelligent data-driven feature selection",
-  "discovered_metrics": 31,
-  "analyzed_metrics": 41,
+  "timestamp": "2025-07-15T00:15:20.698348",
+  "methodology": "Simplified CPU and Memory focused feature selection",
+  "discovered_metrics": 2,
+  "analyzed_metrics": 3,
   "selected_features": [
-    "http_request_duration_seconds_sum_rate",
-    "http_request_duration_seconds_count_rate",
     "process_cpu_seconds_total_rate",
-    "process_resident_memory_bytes",
-    "http_requests_total_rate",
-    "http_response_size_bytes_sum_rate",
-    "process_open_fds",
-    "http_requests_total",
-    "process_virtual_memory_bytes"
+    "process_resident_memory_bytes"
   ],
   "metric_analysis": {
-    "http_request_duration_highr_seconds_bucket": {
-      "type": "histogram",
-      "category": "network",
-      "scaling_relevance": 0.0,
-      "variability": 4.763563149014986,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1061.3070552819797,
-        "std": 1148.0122692404166,
-        "min": 7.5,
-        "max": 3915.090909090909,
-        "samples": 45
-      }
-    },
-    "http_request_duration_highr_seconds_count": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 0.0,
-      "variability": 4.7336131553470615,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1117.8790364573697,
-        "std": 1204.606913061776,
-        "min": 7.5,
-        "max": 4094.5,
-        "samples": 45
-      }
-    },
-    "http_request_duration_highr_seconds_created": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 0.0,
-      "variability": 1.0223022058750168e-06,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1752298671.3026123,
-        "std": 450.7668580711219,
-        "min": 1752298150.600287,
-        "max": 1752299491.212226,
-        "samples": 45
-      }
-    },
-    "http_request_duration_highr_seconds_sum": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 0.0,
-      "variability": 4.398650920069199,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 546.6764328294465,
-        "std": 583.3128100444136,
-        "min": 0.02282029299749405,
-        "max": 1821.348804494417,
-        "samples": 45
-      }
-    },
-    "http_request_duration_seconds_bucket": {
-      "type": "histogram",
-      "category": "network",
-      "scaling_relevance": 0.0,
-      "variability": 4.112318354135516,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 246.25141304160027,
-        "std": 226.6642055831899,
-        "min": 3.75,
-        "max": 789.75,
-        "samples": 45
-      }
-    },
-    "http_request_duration_seconds_count": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 75.0,
-      "variability": 4.096185073138938,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 256.4271449228613,
-        "std": 235.2230433810692,
-        "min": 3.75,
-        "max": 818.9,
-        "samples": 45
-      }
-    },
-    "http_request_duration_seconds_created": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 0.0,
-      "variability": 9.710503988251958e-07,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1752298674.7307525,
-        "std": 417.08309331939574,
-        "min": 1752298162.2701163,
-        "max": 1752299446.75735,
-        "samples": 45
-      }
-    },
-    "http_request_duration_seconds_sum": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 80.0,
-      "variability": 3.800116092993896,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 125.5351332721411,
-        "std": 112.78972943159222,
-        "min": 0.011410146498747026,
-        "max": 364.2697608988834,
-        "samples": 45
-      }
-    },
-    "http_request_size_bytes_count": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 70.0,
-      "variability": 4.096185073138938,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 256.4271449228613,
-        "std": 235.2230433810692,
-        "min": 3.75,
-        "max": 818.9,
-        "samples": 45
-      }
-    },
-    "http_request_size_bytes_created": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 0.0,
-      "variability": 9.710504209113435e-07,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1752298674.7307,
-        "std": 417.0831005496197,
-        "min": 1752298162.270041,
-        "max": 1752299446.757306,
-        "samples": 45
-      }
-    },
-    "http_request_size_bytes_sum": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 70.0,
-      "variability": 0,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 0.0,
-        "std": 0.0,
-        "min": 0.0,
-        "max": 0.0,
-        "samples": 45
-      }
-    },
-    "http_requests_created": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 0.0,
-      "variability": 9.710504469339704e-07,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1752298674.7306685,
-        "std": 417.08310537942685,
-        "min": 1752298162.2699733,
-        "max": 1752299446.7572792,
-        "samples": 45
-      }
-    },
-    "http_requests_total": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 85.0,
-      "variability": 4.096185073138938,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 256.4271449228613,
-        "std": 235.2230433810692,
-        "min": 3.75,
-        "max": 818.9,
-        "samples": 45
-      }
-    },
-    "http_response_size_bytes_count": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 70.0,
-      "variability": 4.096185073138938,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 256.4271449228613,
-        "std": 235.2230433810692,
-        "min": 3.75,
-        "max": 818.9,
-        "samples": 45
-      }
-    },
-    "http_response_size_bytes_created": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 0.0,
-      "variability": 9.710504124594019e-07,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1752298674.7307258,
-        "std": 417.08309694499206,
-        "min": 1752298162.270073,
-        "max": 1752299446.7573268,
-        "samples": 45
-      }
-    },
-    "http_response_size_bytes_sum": {
-      "type": "counter",
-      "category": "network",
-      "scaling_relevance": 70.0,
-      "variability": 4.437847129009329,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 2102980.518725263,
-        "std": 2089287.7073874588,
-        "min": 19822.75,
-        "max": 7263241.1,
-        "samples": 45
-      }
-    },
     "process_cpu_seconds_total": {
       "type": "counter",
       "category": "cpu",
       "scaling_relevance": 95.0,
       "variability": 4.042350827264386,
-      "is_consumer_performance": true,
+      "is_core_metric": true,
       "stats": {
         "mean": 91.95806441459776,
         "std": 89.6967577603852,
@@ -253,40 +22,12 @@
         "samples": 45
       }
     },
-    "process_max_fds": {
-      "type": "gauge",
-      "category": "io",
-      "scaling_relevance": 40.0,
-      "variability": 0.0,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 1048576.0,
-        "std": 0.0,
-        "min": 1048576.0,
-        "max": 1048576.0,
-        "samples": 45
-      }
-    },
-    "process_open_fds": {
-      "type": "gauge",
-      "category": "io",
-      "scaling_relevance": 90.0,
-      "variability": 0.21854757113350415,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 10.501364869698202,
-        "std": 0.37838111921443784,
-        "min": 10.083333333333334,
-        "max": 12.0,
-        "samples": 45
-      }
-    },
     "process_resident_memory_bytes": {
       "type": "gauge",
       "category": "memory",
-      "scaling_relevance": 120.0,
+      "scaling_relevance": 100.0,
       "variability": 1.5673609608372536,
-      "is_consumer_performance": true,
+      "is_core_metric": true,
       "stats": {
         "mean": 113541220.69579607,
         "std": 40838284.7643976,
@@ -295,247 +36,28 @@
         "samples": 45
       }
     },
-    "process_start_time_seconds": {
-      "type": "info",
-      "category": "performance",
-      "scaling_relevance": 0.0,
-      "variability": 1.0221923179215669e-06,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1752298670.1779127,
-        "std": 450.6845725757535,
-        "min": 1752298149.5,
-        "max": 1752299490.0016668,
-        "samples": 45
-      }
-    },
-    "process_virtual_memory_bytes": {
-      "type": "gauge",
-      "category": "memory",
-      "scaling_relevance": 115.0,
-      "variability": 1.7224872296161813,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 613129632.7598288,
-        "std": 215920058.52806416,
-        "min": 224792576.0,
-        "max": 1064980480.0,
-        "samples": 45
-      }
-    },
-    "python_gc_collections_total": {
-      "type": "counter",
-      "category": "memory",
-      "scaling_relevance": 55.0,
-      "variability": 0.6546775910378525,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 62.95156133989467,
-        "std": 9.546309863472654,
-        "min": 53.333333333333336,
-        "max": 85.0,
-        "samples": 45
-      }
-    },
-    "python_gc_objects_collected_total": {
-      "type": "counter",
-      "category": "memory",
-      "scaling_relevance": 55.0,
-      "variability": 2.9688073570342635,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 816.8816611783278,
-        "std": 567.8309521995537,
-        "min": 287.6666666666667,
-        "max": 2145.0,
-        "samples": 45
-      }
-    },
-    "python_gc_objects_uncollectable_total": {
-      "type": "counter",
-      "category": "memory",
-      "scaling_relevance": 55.0,
-      "variability": 0,
-      "is_consumer_performance": true,
-      "stats": {
-        "mean": 0.0,
-        "std": 0.0,
-        "min": 0.0,
-        "max": 0.0,
-        "samples": 45
-      }
-    },
-    "python_info": {
-      "type": "info",
-      "category": "other",
-      "scaling_relevance": 0.0,
-      "variability": 0.0,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1.0,
-        "std": 0.0,
-        "min": 1.0,
-        "max": 1.0,
-        "samples": 45
-      }
-    },
-    "scrape_duration_seconds": {
-      "type": "gauge",
-      "category": "io",
-      "scaling_relevance": 0.0,
-      "variability": 6.5529631536809125,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 0.06569953507142519,
-        "std": 0.08101307019231234,
-        "min": 0.0020846455,
-        "max": 0.3515982085,
-        "samples": 45
-      }
-    },
-    "scrape_samples_post_metric_relabeling": {
-      "type": "gauge",
-      "category": "monitoring",
-      "scaling_relevance": 0.0,
-      "variability": 0.8644283733848874,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 92.67210080043414,
-        "std": 14.90839335316605,
-        "min": 50.8,
-        "max": 116.0,
-        "samples": 45
-      }
-    },
-    "scrape_samples_scraped": {
-      "type": "gauge",
-      "category": "monitoring",
-      "scaling_relevance": 0.0,
-      "variability": 0.8644283733848874,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 92.67210080043414,
-        "std": 14.90839335316605,
-        "min": 50.8,
-        "max": 116.0,
-        "samples": 45
-      }
-    },
-    "scrape_series_added": {
-      "type": "gauge",
-      "category": "monitoring",
-      "scaling_relevance": 0.0,
-      "variability": 28.81752325735557,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 1.4216843033509698,
-        "std": 5.4694204793156755,
-        "min": 0.0,
-        "max": 35.5,
-        "samples": 45
-      }
-    },
-    "up": {
-      "type": "gauge",
-      "category": "other",
-      "scaling_relevance": 0.0,
-      "variability": 0.35902706698118847,
-      "is_consumer_performance": false,
-      "stats": {
-        "mean": 0.9360676977343644,
-        "std": 0.08607364004930525,
-        "min": 0.75,
-        "max": 1.0,
-        "samples": 45
-      }
-    },
-    "http_request_duration_seconds_count_rate": {
-      "type": "gauge",
-      "category": "network",
-      "scaling_relevance": 95.0,
-      "variability": 1.3249357011357696,
-      "is_consumer_performance": true,
-      "derived_from": "http_request_duration_seconds_count"
-    },
-    "http_request_duration_seconds_sum_rate": {
-      "type": "gauge",
-      "category": "network",
-      "scaling_relevance": 100.0,
-      "variability": 2.144095361522845,
-      "is_consumer_performance": true,
-      "derived_from": "http_request_duration_seconds_sum"
-    },
-    "http_request_size_bytes_count_rate": {
-      "type": "gauge",
-      "category": "network",
-      "scaling_relevance": 90.0,
-      "variability": 1.3249357011357696,
-      "is_consumer_performance": true,
-      "derived_from": "http_request_size_bytes_count"
-    },
-    "http_request_size_bytes_sum_rate": {
-      "type": "gauge",
-      "category": "network",
-      "scaling_relevance": 90.0,
-      "variability": 0.0,
-      "is_consumer_performance": true,
-      "derived_from": "http_request_size_bytes_sum"
-    },
-    "http_requests_total_rate": {
-      "type": "gauge",
-      "category": "network",
-      "scaling_relevance": 105.0,
-      "variability": 1.3249357011357696,
-      "is_consumer_performance": true,
-      "derived_from": "http_requests_total"
-    },
-    "http_response_size_bytes_count_rate": {
-      "type": "gauge",
-      "category": "network",
-      "scaling_relevance": 90.0,
-      "variability": 1.3249357011357696,
-      "is_consumer_performance": true,
-      "derived_from": "http_response_size_bytes_count"
-    },
-    "http_response_size_bytes_sum_rate": {
-      "type": "gauge",
-      "category": "network",
-      "scaling_relevance": 90.0,
-      "variability": 1.4994288983889748,
-      "is_consumer_performance": true,
-      "derived_from": "http_response_size_bytes_sum"
-    },
     "process_cpu_seconds_total_rate": {
       "type": "gauge",
       "category": "cpu",
-      "scaling_relevance": 115.0,
+      "scaling_relevance": 100.0,
       "variability": 1.9513214797750098,
-      "is_consumer_performance": true,
+      "is_core_metric": true,
       "derived_from": "process_cpu_seconds_total"
-    },
-    "python_gc_collections_total_rate": {
-      "type": "gauge",
-      "category": "memory",
-      "scaling_relevance": 75.0,
-      "variability": 1.9177145414357266,
-      "is_consumer_performance": true,
-      "derived_from": "python_gc_collections_total"
-    },
-    "python_gc_objects_collected_total_rate": {
-      "type": "gauge",
-      "category": "memory",
-      "scaling_relevance": 75.0,
-      "variability": 1.7474971552814982,
-      "is_consumer_performance": true,
-      "derived_from": "python_gc_objects_collected_total"
     }
   },
   "dataset_shape": [
     45,
-    10
+    3
   ],
   "scaling_action_distribution": {
-    "scale_up": 44,
-    "keep_same": 1
+    "scale_down": 40,
+    "keep_same": 3,
+    "scale_up": 2
+  },
+  "resource_targets": {
+    "cpu_limit_cores": 0.5,
+    "memory_limit_mb": 1024,
+    "cpu_target_utilization": 0.7,
+    "memory_target_utilization": 0.8
   }
 }

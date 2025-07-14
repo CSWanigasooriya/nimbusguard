@@ -351,18 +351,6 @@ class ProactiveDQNAgent:
             logger.error(f"Training step failed: {e}")
             return None
 
-    def train(self) -> Optional[float]:
-        """
-        Legacy synchronous training method for compatibility.
-        """
-        return self._train_step_sync()
-
-    def train_step(self) -> Optional[float]:
-        """
-        Legacy synchronous training step for compatibility.
-        """
-        return self._train_step_sync()
-
     async def save_model(self, model_name: str = "dqn_model.pt") -> bool:
         """
         Save model checkpoint to MinIO storage.

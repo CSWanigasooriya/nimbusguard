@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class LoadForecaster:
-    """Main forecasting system for proactive scaling predictions."""
+    """Main forecasting system for proactive scaling predictions using CPU and Memory metrics only."""
 
     def __init__(self):
         from prometheus.client import PrometheusClient
@@ -36,11 +36,11 @@ class LoadForecaster:
         # Configurable forecasting parameters with fallbacks
         self._initialize_config()
 
-        logger.info(f"LoadForecaster initialized with config: {self._get_config_summary()}")
+        logger.info(f"LoadForecaster initialized with CPU and Memory metrics only: {self._get_config_summary()}")
 
     def _initialize_config(self):
-        """Initialize configurable parameters with safe defaults."""
-        # Forecasting thresholds (per-replica basis)
+        """Initialize configurable parameters with safe defaults for CPU and Memory only."""
+        # Forecasting thresholds (per-replica basis) - Only CPU and Memory
         self.scaling_thresholds = {
             "load_trend_up": getattr(config, 'forecast_load_trend_up_threshold', 0.15),  # 15% per-replica increase
             "load_trend_down": getattr(config, 'forecast_load_trend_down_threshold', -0.15),  # 15% per-replica decrease
@@ -48,8 +48,6 @@ class LoadForecaster:
             "cpu_change_down": getattr(config, 'forecast_cpu_change_down_threshold', -20.0),  # 20% CPU decrease
             "memory_change_up": getattr(config, 'forecast_memory_change_up_threshold', 20.0),  # 20% memory increase
             "memory_change_down": getattr(config, 'forecast_memory_change_down_threshold', -20.0),  # 20% memory decrease
-            "request_change_up": getattr(config, 'forecast_request_change_up_threshold', 40.0),  # 40% request increase
-            "request_change_down": getattr(config, 'forecast_request_change_down_threshold', -30.0)  # 30% request decrease
         }
 
         # Confidence calculation weights
@@ -66,8 +64,9 @@ class LoadForecaster:
         self.retrain_interval_minutes = getattr(config, 'forecast_retrain_interval_minutes', 60)
         self.min_data_quality_samples = getattr(config, 'forecast_min_data_quality_samples', 5)
 
-        # Target metrics for per-replica scaling decisions
-        self.target_requests_per_replica = getattr(config, 'target_requests_per_replica', 2.0)
+        # Target metrics for per-replica scaling decisions - Updated for CPU and Memory
+        self.target_cpu_cores = getattr(config, 'target_cpu_cores', 0.5)  # 500m
+        self.target_memory_mb = getattr(config, 'target_memory_mb', 1024)  # 1Gi
         self.target_cpu_utilization = getattr(config, 'target_cpu_utilization', 0.70)
 
         logger.debug(f"Forecasting thresholds: {self.scaling_thresholds}")
@@ -192,13 +191,10 @@ class LoadForecaster:
                 logger.warning("Poor data quality, using fallback")
                 return self._get_fallback_forecast()
 
-            # Get expected features from config
+            # Get expected features - Only CPU and Memory
             expected_features = getattr(config, 'scaling_selected_features', [
                 'process_cpu_seconds_total_rate',
-                'process_resident_memory_bytes', 
-                'http_response_size_bytes_sum_rate',
-                'process_open_fds',
-                'http_requests_total_process_rate'
+                'process_resident_memory_bytes'
             ])
 
             # Validate feature matrix structure
@@ -314,16 +310,13 @@ class LoadForecaster:
         # Safely get feature indices with validation
         cpu_rate_idx = feature_indices.get("process_cpu_seconds_total_rate")
         memory_idx = feature_indices.get("process_resident_memory_bytes")
-        request_rate_idx = feature_indices.get("http_requests_total_process_rate")
 
         # Initialize metrics with safe defaults
         metrics = {
             "cpu_change_percent": 0.0,
             "memory_change_percent": 0.0,
-            "request_change_percent": 0.0,
             "cpu_peak": 0.0,
             "memory_peak": 0.0,
-            "request_peak": 0.0,
             "overall_load_trend": 0.0,
             "per_replica_context": {},
             "health_emergency": False
@@ -332,8 +325,7 @@ class LoadForecaster:
         # CRITICAL: Detect unhealthy pod scenario
         all_metrics_near_zero = (
             (cpu_rate_idx is None or current_values[cpu_rate_idx] < 1e-3) and
-            (memory_idx is None or current_values[memory_idx] < 1000) and  # < 1KB
-            (request_rate_idx is None or current_values[request_rate_idx] < 1e-3)
+            (memory_idx is None or current_values[memory_idx] < 1000)  # < 1KB
         )
         
         # Check if we have health context
@@ -345,7 +337,6 @@ class LoadForecaster:
             # Return emergency metrics that will trigger scale-up
             metrics["cpu_change_percent"] = 100.0  # Force scale-up signal
             metrics["memory_change_percent"] = 100.0
-            metrics["request_change_percent"] = 100.0
             metrics["overall_load_trend"] = 1.0  # Strong positive trend
             return metrics
 
@@ -360,7 +351,7 @@ class LoadForecaster:
             predicted_cpu_per_replica = predicted_cpu / current_replicas
             cpu_peak_per_replica = cpu_peak / current_replicas
             
-            # FIXED: Handle near-zero current values properly
+            # Handle near-zero current values properly
             if current_cpu_per_replica < 1e-3:  # Very low CPU (likely unhealthy pods)
                 if predicted_cpu_per_replica > 0.1:  # Model predicts significant load
                     metrics["cpu_change_percent"] = 100.0  # Signal need for scale-up
@@ -397,7 +388,7 @@ class LoadForecaster:
             predicted_memory_per_replica = predicted_memory / current_replicas
             memory_peak_per_replica = memory_peak / current_replicas
             
-            # FIXED: Handle near-zero current values properly
+            # Handle near-zero current values properly
             if current_memory_per_replica < 1024:  # Very low memory (< 1KB, likely unhealthy pods)
                 if predicted_memory_per_replica > 10*1024*1024:  # Model predicts > 10MB
                     metrics["memory_change_percent"] = 100.0  # Signal need for scale-up
@@ -423,51 +414,12 @@ class LoadForecaster:
         else:
             logger.warning(f"⚠️ Memory metric not available: idx={memory_idx}")
 
-        # Calculate request metrics if available
-        if request_rate_idx is not None and request_rate_idx < len(current_values) and request_rate_idx < forecast_values.shape[1]:
-            current_requests = current_values[request_rate_idx]
-            predicted_requests = np.mean(forecast_values[:, request_rate_idx])
-            request_peak = np.max(forecast_values[:, request_rate_idx])
-            
-            # Per-replica request metrics
-            current_requests_per_replica = current_requests / current_replicas
-            predicted_requests_per_replica = predicted_requests / current_replicas
-            request_peak_per_replica = request_peak / current_replicas
-            
-            # FIXED: Handle near-zero current values properly
-            if current_requests_per_replica < 1e-3:  # Very low requests (likely unhealthy pods)
-                if predicted_requests_per_replica > 0.1:  # Model predicts significant load
-                    metrics["request_change_percent"] = 100.0  # Signal need for scale-up
-                    logger.info("🚨 Requests: Near-zero current, positive prediction → scale-up signal")
-                else:
-                    metrics["request_change_percent"] = 0.0  # No significant change
-                    logger.debug("Requests: Near-zero current and prediction → no change")
-            else:
-                # Normal calculation when current value is significant
-                metrics["request_change_percent"] = ((predicted_requests_per_replica - current_requests_per_replica) / 
-                                                   current_requests_per_replica) * 100
-                # Clamp extreme values
-                metrics["request_change_percent"] = max(-500, min(500, metrics["request_change_percent"]))
-            
-            metrics["request_peak"] = request_peak
-            metrics["per_replica_context"]["requests_per_replica_current"] = current_requests_per_replica
-            metrics["per_replica_context"]["requests_per_replica_predicted"] = predicted_requests_per_replica
-            metrics["per_replica_context"]["requests_per_replica_peak"] = request_peak_per_replica
-            
-            logger.debug(f"Request metrics: current_per_replica={current_requests_per_replica:.1f}, "
-                        f"predicted_per_replica={predicted_requests_per_replica:.1f}, "
-                        f"change={metrics['request_change_percent']:.1f}%")
-        else:
-            logger.warning(f"⚠️ Request metric not available: idx={request_rate_idx}")
-
-        # Calculate overall load trend (average of normalized changes)
+        # Calculate overall load trend (average of normalized changes for CPU and Memory only)
         valid_changes = []
         if metrics["cpu_change_percent"] != 0.0:
             valid_changes.append(metrics["cpu_change_percent"] / 100)
         if metrics["memory_change_percent"] != 0.0:
             valid_changes.append(metrics["memory_change_percent"] / 100)
-        if metrics["request_change_percent"] != 0.0:
-            valid_changes.append(metrics["request_change_percent"] / 100)
 
         if valid_changes:
             metrics["overall_load_trend"] = sum(valid_changes) / len(valid_changes)
@@ -478,7 +430,6 @@ class LoadForecaster:
 
         logger.info(f"📊 Forecast metrics calculated: cpu_change={metrics['cpu_change_percent']:.1f}%, "
                    f"memory_change={metrics['memory_change_percent']:.1f}%, "
-                   f"request_change={metrics['request_change_percent']:.1f}%, "
                    f"overall_trend={metrics['overall_load_trend']:.3f}")
 
         return metrics
@@ -495,7 +446,6 @@ class LoadForecaster:
         load_trend = forecast_summary["overall_load_trend"]
         cpu_change = forecast_summary["cpu_change_percent"]
         memory_change = forecast_summary["memory_change_percent"]
-        request_change = forecast_summary["request_change_percent"]
 
         # Get per-replica context
         per_replica_context = forecast_summary.get("per_replica_context", {})
@@ -503,7 +453,7 @@ class LoadForecaster:
         # Log current thresholds being used
         logger.debug(f"Using scaling thresholds: {self.scaling_thresholds}")
         logger.debug(f"Analyzing changes: load_trend={load_trend:.3f}, cpu={cpu_change:.1f}%, "
-                    f"memory={memory_change:.1f}%, requests={request_change:.1f}%")
+                    f"memory={memory_change:.1f}%")
 
         # Check resource limits for context-aware scaling
         resource_aware_scaling = False
@@ -524,7 +474,6 @@ class LoadForecaster:
             load_trend > self.scaling_thresholds["load_trend_up"],
             cpu_change > self.scaling_thresholds["cpu_change_up"],
             memory_change > self.scaling_thresholds["memory_change_up"],
-            request_change > self.scaling_thresholds["request_change_up"],
             resource_aware_scaling
         ]
 
@@ -532,8 +481,7 @@ class LoadForecaster:
         scale_down_conditions = [
             load_trend < self.scaling_thresholds["load_trend_down"],
             cpu_change < self.scaling_thresholds["cpu_change_down"] and 
-            memory_change < self.scaling_thresholds["memory_change_down"] and
-            request_change < self.scaling_thresholds["request_change_down"]
+            memory_change < self.scaling_thresholds["memory_change_down"]
         ]
 
         # Make recommendation
@@ -545,8 +493,6 @@ class LoadForecaster:
                 triggered_conditions.append(f"cpu_change({cpu_change:.1f}%)")
             if memory_change > self.scaling_thresholds["memory_change_up"]:
                 triggered_conditions.append(f"memory_change({memory_change:.1f}%)")
-            if request_change > self.scaling_thresholds["request_change_up"]:
-                triggered_conditions.append(f"request_change({request_change:.1f}%)")
             if resource_aware_scaling:
                 triggered_conditions.append("resource_limits")
                 
@@ -558,9 +504,8 @@ class LoadForecaster:
             if load_trend < self.scaling_thresholds["load_trend_down"]:
                 triggered_conditions.append(f"load_trend({load_trend:.3f})")
             if (cpu_change < self.scaling_thresholds["cpu_change_down"] and 
-                memory_change < self.scaling_thresholds["memory_change_down"] and
-                request_change < self.scaling_thresholds["request_change_down"]):
-                triggered_conditions.append(f"all_metrics_decreasing")
+                memory_change < self.scaling_thresholds["memory_change_down"]):
+                triggered_conditions.append(f"cpu_and_memory_decreasing")
                 
             logger.info(f"🔽 Scale DOWN recommendation: {', '.join(triggered_conditions)}")
             return "scale_down"
@@ -615,7 +560,7 @@ class LoadForecaster:
             recent_data = feature_matrix[-self.min_data_quality_samples:]
             trends = {}
 
-            # Calculate trends for available features
+            # Calculate trends for available features (CPU and Memory only)
             for feature_name, idx in feature_indices.items():
                 if idx < feature_matrix.shape[1]:
                     feature_data = recent_data[:, idx]
@@ -628,19 +573,16 @@ class LoadForecaster:
             # Calculate per-replica trends
             current_values = feature_matrix[-1]
             
-            # Get per-replica metrics
+            # Get per-replica metrics for CPU and Memory only
             cpu_trend = trends.get("process_cpu_seconds_total_rate", 0.0) / current_replicas
             memory_trend = trends.get("process_resident_memory_bytes", 0.0) / current_replicas
-            request_trend = trends.get("http_requests_total_process_rate", 0.0) / current_replicas
 
             # Calculate percentage changes for consistency with LSTM path
             cpu_idx = feature_indices.get("process_cpu_seconds_total_rate")
             memory_idx = feature_indices.get("process_resident_memory_bytes")
-            request_idx = feature_indices.get("http_requests_total_process_rate")
 
             cpu_change_percent = 0.0
             memory_change_percent = 0.0
-            request_change_percent = 0.0
 
             if cpu_idx is not None and cpu_idx < len(current_values):
                 current_cpu_per_replica = current_values[cpu_idx] / current_replicas
@@ -658,22 +600,13 @@ class LoadForecaster:
                 else:
                     memory_change_percent = 0.0  # No significant change
 
-            if request_idx is not None and request_idx < len(current_values):
-                current_requests_per_replica = current_values[request_idx] / current_replicas
-                if current_requests_per_replica > 1e-3:  # Avoid division by near-zero
-                    request_change_percent = (request_trend / current_requests_per_replica) * 100
-                    request_change_percent = max(-500, min(500, request_change_percent))  # Clamp
-                else:
-                    request_change_percent = 0.0  # No significant change
-
-            overall_trend = (cpu_change_percent + memory_change_percent + request_change_percent) / 300  # Normalize to -1 to 1
+            overall_trend = (cpu_change_percent + memory_change_percent) / 200  # Normalize to -1 to 1 for CPU+Memory
             overall_trend = max(-5.0, min(5.0, overall_trend))  # Clamp to reasonable bounds
 
             # Use same recommendation logic as LSTM path
             forecast_summary = {
                 "cpu_change_percent": cpu_change_percent,
                 "memory_change_percent": memory_change_percent,
-                "request_change_percent": request_change_percent,
                 "overall_load_trend": overall_trend,
                 "per_replica_context": {}
             }
@@ -682,7 +615,6 @@ class LoadForecaster:
 
             logger.info(f"📊 Statistical forecast: cpu_change={cpu_change_percent:.1f}%, "
                        f"memory_change={memory_change_percent:.1f}%, "
-                       f"request_change={request_change_percent:.1f}%, "
                        f"recommendation={recommendation}")
 
             return {
@@ -806,5 +738,6 @@ class LoadForecaster:
             "model_info": self.lstm_trainer.get_model_info(),
             "config_summary": self._get_config_summary(),
             "scaling_thresholds": self.scaling_thresholds,
-            "confidence_weights": self.confidence_weights
+            "confidence_weights": self.confidence_weights,
+            "metrics_used": ["process_cpu_seconds_total_rate", "process_resident_memory_bytes"]
         }
