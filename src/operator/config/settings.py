@@ -107,6 +107,15 @@ class RewardConfig:
         self.forecast_weight = round(1.0 - self.current_weight, 10)  # Round to avoid floating-point precision issues
 
 
+class AIConfig:
+    def __init__(self):
+        self.model_name = os.getenv("AI_MODEL", "gpt-4-turbo")
+        self.temperature = float(os.getenv("AI_TEMPERATURE", "0.1"))
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        self.mcp_server_url = os.getenv("MCP_SERVER_URL", "http://mcp-server.nimbusguard.svc:8080")
+        self.enable_llm_validation = os.getenv("ENABLE_LLM_VALIDATION", "false").lower() == "true"
+
+
 class Config:
     """Main configuration object."""
 
@@ -119,6 +128,7 @@ class Config:
         self.logging = LoggingConfig()
         self.metrics = MetricsConfig()
         self.reward = RewardConfig()
+        self.ai = AIConfig()
 
 
 def load_config() -> Config:
