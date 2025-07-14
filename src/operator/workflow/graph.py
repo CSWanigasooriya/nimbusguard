@@ -6,10 +6,8 @@ import logging
 import uuid
 from typing import Dict, Any
 
-from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-
-from workflow.state import OperatorState, create_initial_state, get_state_summary, update_state_with_forecast, update_state_with_dqn, add_error
+from langgraph.graph import StateGraph, END
 from workflow.nodes import (
     collect_metrics_node,
     generate_forecast_node,
@@ -18,8 +16,11 @@ from workflow.nodes import (
     execute_scaling_node,
     calculate_reward_node
 )
+from workflow.state import OperatorState, create_initial_state, get_state_summary, update_state_with_forecast, \
+    update_state_with_dqn, add_error
 
 logger = logging.getLogger(__name__)
+
 
 class ScalingWorkflow:
     def __init__(self, graph, services, config):
@@ -27,13 +28,13 @@ class ScalingWorkflow:
         self.services = services
         self.config = config
         self.logger = logger
-    
+
     async def ainvoke(self, initial_input: Dict[str, Any], config_dict: Dict[str, Any] = None):
         """Execute the scaling workflow."""
         try:
             # Generate unique execution ID
             execution_id = str(uuid.uuid4())[:8]
-            
+
             # Get current replica count from initial input or services
             current_replicas = initial_input.get('current_replicas', 1)
             if 'k8s_client' in self.services and 'scaler' in self.services:
@@ -46,22 +47,22 @@ class ScalingWorkflow:
                         current_replicas = deployment_info['replicas']
                 except Exception as e:
                     self.logger.warning(f"Failed to get current replicas: {e}")
-            
+
             # Create initial state
             initial_state = create_initial_state(execution_id, current_replicas)
-            
+
             self.logger.info(f"🚀 Starting scaling workflow execution {execution_id}")
-            
+
             # Execute workflow
             final_state = await self.graph.ainvoke(
                 initial_state,
                 config={"configurable": {"thread_id": execution_id}}
             )
-            
+
             # Log execution summary
             summary = get_state_summary(final_state)
             self.logger.info(f"✅ Workflow {execution_id} completed: {summary}")
-            
+
             # Create result summary
             result = {
                 'execution_id': execution_id,
@@ -86,13 +87,13 @@ class ScalingWorkflow:
                 },
                 'errors': final_state['errors']
             }
-            
+
             # Update metrics if available
             if 'metrics' in self.services:
                 await self.services['metrics'].update_decision_metrics(result)
-            
+
             return result
-            
+
         except Exception as e:
             self.logger.error(f"❌ Workflow execution failed: {e}")
             return {
@@ -106,14 +107,14 @@ class ScalingWorkflow:
                     'reason': 'workflow_error'
                 }
             }
-    
+
     async def get_workflow_status(self):
         """Get current workflow status and statistics."""
         return {
             'workflow_type': 'proactive_scaling',
             'nodes': [
                 'collect_metrics',
-                'generate_forecast', 
+                'generate_forecast',
                 'dqn_decision',
                 'validate_decision',
                 'execute_scaling',
@@ -135,7 +136,7 @@ class ScalingWorkflow:
                 'max_replicas': self.config.scaling.max_replicas
             }
         }
-    
+
     def visualize_workflow(self):
         """Get a text representation of the workflow."""
         return """
@@ -176,32 +177,33 @@ class ScalingWorkflow:
 🔄 Result: Intelligent, proactive scaling decision
         """
 
+
 def create_workflow(services: Dict[str, Any], config: Any):
     """Create the LangGraph workflow for scaling decisions."""
-    
+
     # Create workflow with checkpointing for resilience
     workflow = StateGraph(OperatorState)
     checkpointer = MemorySaver()
-    
+
     # Define workflow nodes with service injection
     async def collect_metrics_wrapper(state: OperatorState) -> OperatorState:
         return await collect_metrics_node(state, services, config)
-    
+
     async def generate_forecast_wrapper(state: OperatorState) -> OperatorState:
         return await generate_forecast_node(state, services, config)
-    
+
     async def dqn_decision_wrapper(state: OperatorState) -> OperatorState:
         return await dqn_decision_node(state, services, config)
-    
+
     async def validate_decision_wrapper(state: OperatorState) -> OperatorState:
         return await validate_decision_node(state, services, config)
-    
+
     async def execute_scaling_wrapper(state: OperatorState) -> OperatorState:
         return await execute_scaling_node(state, services, config)
-    
+
     async def calculate_reward_wrapper(state: OperatorState) -> OperatorState:
         return await calculate_reward_node(state, services, config)
-    
+
     # Add nodes to workflow
     workflow.add_node("collect_metrics", collect_metrics_wrapper)
     workflow.add_node("generate_forecast", generate_forecast_wrapper)
@@ -209,10 +211,10 @@ def create_workflow(services: Dict[str, Any], config: Any):
     workflow.add_node("validate_decision", validate_decision_wrapper)
     workflow.add_node("execute_scaling", execute_scaling_wrapper)
     workflow.add_node("calculate_reward", calculate_reward_wrapper)
-    
+
     # Define workflow flow
     workflow.set_entry_point("collect_metrics")
-    
+
     # Linear workflow: metrics → forecast → DQN → validate → execute → reward
     workflow.add_edge("collect_metrics", "generate_forecast")
     workflow.add_edge("generate_forecast", "dqn_decision")
@@ -220,27 +222,27 @@ def create_workflow(services: Dict[str, Any], config: Any):
     workflow.add_edge("validate_decision", "execute_scaling")
     workflow.add_edge("execute_scaling", "calculate_reward")
     workflow.add_edge("calculate_reward", END)
-    
+
     # Compile workflow with checkpointing
     compiled_workflow = workflow.compile(checkpointer=checkpointer)
-    
+
     logger.info("✅ LangGraph workflow created with 6 nodes and checkpointing")
-    
+
     return ScalingWorkflow(compiled_workflow, services, config)
 
 
 def create_simple_workflow(services: Dict[str, Any], config: Any):
     """Create a simplified workflow for testing or minimal deployments."""
-    
+
     workflow = StateGraph(OperatorState)
-    
+
     # Simplified workflow: just metrics → DQN → execute
     async def simple_decision_node(state: OperatorState) -> OperatorState:
         """Simplified decision node that combines multiple steps."""
         try:
             # Collect metrics
             state = await collect_metrics_node(state, services, config)
-            
+
             # Make DQN decision (with fallback forecast)
             forecast_result = {
                 'predicted_metrics': state['current_metrics'].copy(),
@@ -249,27 +251,27 @@ def create_simple_workflow(services: Dict[str, Any], config: Any):
             }
             state = update_state_with_forecast(state, forecast_result)
             state = await dqn_decision_node(state, services, config)
-            
+
             # Validate and execute
             state = await validate_decision_node(state, services, config)
             if state['validation_passed']:
                 state = await execute_scaling_node(state, services, config)
-            
+
             # Calculate reward
             state = await calculate_reward_node(state, services, config)
-            
+
             return state
-            
+
         except Exception as e:
             logger.error(f"Simple workflow failed: {e}")
             state = add_error(state, f"simple_workflow: {str(e)}")
             return state
-    
+
     workflow.add_node("simple_decision", simple_decision_node)
     workflow.set_entry_point("simple_decision")
     workflow.add_edge("simple_decision", END)
-    
+
     compiled_workflow = workflow.compile()
-    
+
     logger.info("✅ Simple LangGraph workflow created")
-    return ScalingWorkflow(compiled_workflow, services, config) 
+    return ScalingWorkflow(compiled_workflow, services, config)

@@ -1,6 +1,7 @@
 # NimbusGuard Load Generator
 
-A comprehensive load testing tool designed to test KEDA autoscaling behavior by generating realistic CPU and memory load against the NimbusGuard consumer service.
+A comprehensive load testing tool designed to test KEDA autoscaling behavior by generating realistic CPU and memory load
+against the NimbusGuard consumer service.
 
 ## Features
 
@@ -13,6 +14,7 @@ A comprehensive load testing tool designed to test KEDA autoscaling behavior by 
 ## Quick Start
 
 ### Local Development
+
 ```bash
 # Install dependencies
 pip install -r requirements.txt
@@ -28,6 +30,7 @@ python load_generator.py --test all --monitor --cleanup
 ```
 
 ### With Docker
+
 ```bash
 # Build the generator image
 docker build -t nimbusguard-generator .
@@ -41,15 +44,15 @@ docker run --rm --network host nimbusguard-generator --test heavy --cleanup
 
 ## Available Load Tests
 
-| Test | Description | Concurrent | Total Requests | CPU | Memory | Duration |
-|------|-------------|------------|----------------|-----|--------|----------|
-| `light` | Baseline load | 2 | 10 | 2 | 20MB | 5s |
-| `medium` | Moderate load | 5 | 20 | 6 | 80MB | 15s |
-| `heavy` | High load | 10 | 30 | 9 | 150MB | 20s |
-| `sustained` | Long-running background | 8 | 25 | 8 | 120MB | 60s |
-| `burst` | Quick intense burst | 15 | 40 | 10 | 100MB | 10s |
-| `memory_stress` | Memory-focused | 6 | 15 | 3 | 250MB | 30s |
-| `cpu_stress` | CPU-focused | 8 | 20 | 10 | 50MB | 25s |
+| Test            | Description             | Concurrent | Total Requests | CPU | Memory | Duration |
+|-----------------|-------------------------|------------|----------------|-----|--------|----------|
+| `light`         | Baseline load           | 2          | 10             | 2   | 20MB   | 5s       |
+| `medium`        | Moderate load           | 5          | 20             | 6   | 80MB   | 15s      |
+| `heavy`         | High load               | 10         | 30             | 9   | 150MB  | 20s      |
+| `sustained`     | Long-running background | 8          | 25             | 8   | 120MB  | 60s      |
+| `burst`         | Quick intense burst     | 15         | 40             | 10  | 100MB  | 10s      |
+| `memory_stress` | Memory-focused          | 6          | 15             | 3   | 250MB  | 30s      |
+| `cpu_stress`    | CPU-focused             | 8          | 20             | 10  | 50MB   | 25s      |
 
 ## Command Line Options
 
@@ -68,6 +71,7 @@ Options:
 ## Testing KEDA Autoscaling
 
 ### 1. Deploy Your Application with KEDA
+
 ```bash
 cd /path/to/nimbusguard
 make keda-install
@@ -76,6 +80,7 @@ make forward
 ```
 
 ### 2. Monitor Scaling in Another Terminal
+
 ```bash
 # Watch pods scale
 kubectl get pods -n nimbusguard -w
@@ -90,16 +95,19 @@ kubectl top pods -n nimbusguard
 ### 3. Generate Load to Trigger Scaling
 
 **Quick Test (should trigger scaling):**
+
 ```bash
 python load_generator.py --test heavy --monitor
 ```
 
 **Sustained Load (maintains scaling):**
+
 ```bash
 python load_generator.py --test sustained --monitor
 ```
 
 **Complete Test Suite:**
+
 ```bash
 python load_generator.py --test all --cleanup --monitor
 ```
@@ -137,6 +145,7 @@ The load generator works seamlessly with your existing monitoring stack:
 ## Troubleshooting
 
 **Service not responding:**
+
 ```bash
 # Check if consumer is running
 kubectl get pods -n nimbusguard
@@ -146,6 +155,7 @@ curl http://localhost:8000/health
 ```
 
 **KEDA not scaling:**
+
 ```bash
 # Check KEDA operator logs
 kubectl logs -n keda -l app.kubernetes.io/name=keda-operator
@@ -155,6 +165,7 @@ kubectl describe scaledobject consumer-scaledobject -n nimbusguard
 ```
 
 **High memory usage:**
+
 ```bash
 # Cleanup service memory
 python load_generator.py --cleanup
