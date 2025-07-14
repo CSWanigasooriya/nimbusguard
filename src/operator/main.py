@@ -31,6 +31,9 @@ from k8s.scaler import DirectScaler
 from metrics.collector import MetricsCollector
 from prometheus.client import PrometheusClient
 from workflow.graph import create_workflow
+from langchain_openai import ChatOpenAI
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
 
 # Global configuration and services
 config = load_config()
@@ -87,6 +90,37 @@ def storage_probe(**kwargs):
         return {"minio": f"error: {str(e)}"}
 
 
+async def setup_langgraph_agent():
+    """Initialize LangGraph agent (LLM + MCP tools) if LLM validation is enabled."""
+    if not getattr(config.ai, "enable_llm_validation", False):
+        logger.info("LLM validation is disabled by config; skipping LangGraph agent setup.")
+        return
+    try:
+        llm = ChatOpenAI(
+            model=config.ai.model_name,
+            temperature=config.ai.temperature,
+            api_key=config.ai.openai_api_key
+        )
+        services['llm'] = llm
+
+        mcp_client = MultiServerMCPClient(
+            connections={
+                "kubernetes": {
+                    "url": f"{config.ai.mcp_server_url}/sse",
+                    "transport": "sse"
+                }
+            }
+        )
+        services['mcp_client'] = mcp_client
+
+        tools = await mcp_client.get_tools()
+        agent = create_react_agent(llm, tools)
+        services['langgraph_agent'] = agent
+        logger.info("✅ LangGraph agent initialized (LLM + MCP tools)")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize LangGraph agent: {e}")
+
+
 @kopf.on.startup()
 async def startup_handler(settings: kopf.OperatorSettings, **kwargs):
     """Initialize the operator with all components."""
@@ -135,6 +169,9 @@ async def startup_handler(settings: kopf.OperatorSettings, **kwargs):
     # Setup metrics collection
     services['metrics'] = MetricsCollector(config.metrics)
     logger.info("✅ Metrics collector initialized")
+
+    # Initialize LangGraph agent if needed
+    await setup_langgraph_agent()
 
     # Start HTTP server for metrics and health
     await start_http_server()

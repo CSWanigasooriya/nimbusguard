@@ -12,6 +12,7 @@ from workflow.state import (
     add_node_output,
     add_error
 )
+import json
 
 
 # Helper functions for state updates
@@ -381,7 +382,6 @@ async def dqn_decision_node(state: OperatorState, services: Dict[str, Any], conf
 
 
 async def validate_decision_node(state: OperatorState, services: Dict[str, Any], config: Any) -> OperatorState:
-    """Validate the scaling decision before execution."""
     start_time = time.time()
 
     try:
@@ -391,7 +391,68 @@ async def validate_decision_node(state: OperatorState, services: Dict[str, Any],
         if not scaler:
             raise Exception("Scaler not available")
 
-        # Validate scaling decision
+        # LLM validation logic
+        llm_validation_enabled = hasattr(config, "ai") and getattr(config.ai, "enable_llm_validation", False)
+        agent = services.get("langgraph_agent")
+        llm_blocked = False
+        llm_reason = None
+        if llm_validation_enabled:
+            if agent:
+                try:
+                    # Build detailed safety monitor prompt
+                    dqn_prediction = state.get('dqn_prediction', {'action_name': state.get('scaling_decision', 'keep_same')})
+                    action_name = dqn_prediction.get('action_name', state.get('scaling_decision', 'keep_same'))
+                    dqn_confidence = dqn_prediction.get('confidence', state.get('dqn_confidence', 'unknown'))
+                    dqn_risk = dqn_prediction.get('risk_assessment', 'unknown')
+                    dqn_explanation = dqn_prediction.get('explanation', {})
+                    metrics = state.get('current_metrics', {})
+                    # Build the prompt string
+                    prompt = f"""You are a SAFETY MONITOR for Kubernetes autoscaling. Your ONLY role is to detect and prevent EXTREME or DANGEROUS scaling decisions that could harm the cluster.\n\n🚨 CRITICAL: Only intervene for EXTREME decisions. Allow normal DQN learning to proceed uninterrupted.\n\nDQN SCALING DECISION TO EVALUATE:\n- Recommended Action: {action_name}\n- Current Replicas: {state.get('current_replicas', 1)}\n- DQN Confidence: {dqn_confidence}\n- DQN Risk Assessment: {dqn_risk}\n\nDQN REASONING FACTORS:\n{chr(10).join(f'- {factor}' for factor in dqn_explanation.get('reasoning_factors', ['No DQN reasoning available']))}\n\nCURRENT SYSTEM METRICS:\n- Pod Readiness: {metrics.get('kube_pod_container_status_ready', 1.0):.1%}\n- Unavailable Replicas: {metrics.get('kube_deployment_status_replicas_unavailable', 0)}\n- CPU Limits: {metrics.get('kube_pod_container_resource_limits_cpu', 0):.2f} cores\n- Memory Limits: {metrics.get('kube_pod_container_resource_limits_memory', 0)/1000000:.0f} MB\n- Running Containers: {metrics.get('kube_pod_container_status_running', 0)}\n\n🔍 EXTREME DECISION CRITERIA (Block these ONLY):\n\n1. **RUNAWAY SCALING**: Scaling to >15 replicas without clear justification\n2. **RESOURCE EXHAUSTION**: Scaling up when cluster resources are constrained  \n3. **MASSIVE OVER-SCALING**: Requesting 3x+ more replicas than needed (consider system capacity)\n4. **DANGEROUS DOWN-SCALING**: Scaling to 0 or very low when system shows stress\n5. **RAPID OSCILLATION**: Frequent large scaling changes without stabilization\n6. **IGNORES HIGH RISK**: DQN marked decision as \"high\" risk but proceeding anyway\n\n⚠️  **DEFAULT: APPROVE** - Only block if decision meets extreme criteria above.\n\n🛡️  **MANDATORY KUBERNETES VERIFICATION**: You MUST use the available Kubernetes MCP tools to verify cluster state before making any safety decision.\n\nTARGET DEPLOYMENT DETAILS:\n- Namespace: {getattr(config.scaling, 'target_namespace', 'nimbusguard')}\n- Deployment Name: {getattr(config.scaling, 'target_deployment', 'consumer')}\n- Current Replicas: {state.get('current_replicas', 1)}\n\nREQUIRED ASSESSMENT PROTOCOL:\n1. **USE RELEVANT TOOLS ONLY** - Choose the tools that are most relevant for this specific safety decision:\n   \n   **Available Tools:**\n   - `mcp_kubernetes_pods_list` - Check current pod status and health in \"{getattr(config.scaling, 'target_namespace', 'nimbusguard')}\" namespace\n   - `mcp_kubernetes_pods_top` - Verify actual resource consumption for \"{getattr(config.scaling, 'target_deployment', 'consumer')}\" pods  \n   - `mcp_kubernetes_resources_get` - Check deployment status (apiVersion: apps/v1, kind: Deployment, name: {getattr(config.scaling, 'target_deployment', 'consumer')}, namespace: {getattr(config.scaling, 'target_namespace', 'nimbusguard')})\n   - `mcp_kubernetes_events_list` - Look for recent cluster issues or warnings in \"{getattr(config.scaling, 'target_namespace', 'nimbusguard')}\" namespace\n\n   **Tool Selection Guide:**\n   - For scaling decisions: Use `mcp_kubernetes_resources_get` to verify current deployment state\n   - For resource concerns: Use `mcp_kubernetes_pods_top` to check actual resource consumption\n   - For stability issues: Use `mcp_kubernetes_events_list` to check for recent problems\n   - For health verification: Use `mcp_kubernetes_pods_list` to verify pod status\n\n2. **EFFICIENT VERIFICATION**: Use only 1-2 tools that provide the most relevant data for your safety assessment\n\n3. **MAKE INFORMED DECISION** based on:\n   - Real-time cluster data from the tools you chose to use\n   - Provided DQN metrics and reasoning\n\nCRITICAL REQUIREMENTS:\n1. You MUST use at least 1 relevant MCP Kubernetes tool before making a decision\n2. Choose tools based on what's most important for the specific scaling decision being evaluated\n3. Set \"cluster_check_performed\": true in your response (required)\n4. Include specific findings from the tools you used in your reasoning\n5. If tools show different data than provided metrics, prioritize tool data\n\nIMPORTANT: All tools are READ-ONLY. You cannot modify the cluster - only observe and assess.\n\nCRITICAL: Respond with ONLY a valid JSON object. No markdown, no explanations.\n\nExample for NORMAL decision (approve):\n{{\n    \"approved\": true,\n    \"confidence\": \"high\",\n    \"reasoning\": \"Verified with mcp_kubernetes_resources_get: deployment shows 3 healthy replicas. DQN scale-down decision is safe.\",\n    \"safety_risk\": \"none\",\n    \"extreme_factors\": [],\n    \"cluster_check_performed\": true,\n    \"tool_findings\": [\"Deployment has 3 healthy replicas\", \"No resource pressure indicated\"]\n}}\n\nExample for EXTREME decision (block):\n{{\n    \"approved\": false,\n    \"confidence\": \"high\",\n    \"reasoning\": \"EXTREME: mcp_kubernetes_events_list shows OutOfMemory errors. Scaling up to 25 replicas would exhaust cluster resources.\",\n    \"safety_risk\": \"high\",\n    \"extreme_factors\": [\"runaway_scaling\", \"resource_exhaustion_risk\"],\n    \"alternative_suggestion\": \"Investigate memory issues before scaling. Consider 8-10 replicas maximum.\",\n    \"cluster_check_performed\": true,\n    \"tool_findings\": [\"OutOfMemory events detected\", \"Cluster showing resource pressure\"]\n}}\n\nYour JSON response:"""
+                    logger.info("LLM validation: invoking agent for scaling decision safety check with detailed prompt...")
+                    response = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
+                    # Parse the last message as JSON
+                    last_message = None
+                    if isinstance(response, dict) and 'messages' in response and response['messages']:
+                        last_message = response['messages'][-1].get('content', '')
+                    elif isinstance(response, str):
+                        last_message = response
+                    else:
+                        last_message = str(response)
+                    logger.info(f"LLM validation response chars={len(last_message) if last_message else 0}")
+                    if last_message:
+                        logger.debug(f"LLM RAW RESPONSE: {last_message[:200]}...")
+                    # Try to parse JSON
+                    try:
+                        validation_result = json.loads(last_message)
+                    except Exception as e:
+                        logger.error(f"LLM JSON parsing error: {e}")
+                        validation_result = {"approved": True, "confidence": "low", "reasoning": f"LLM error: {e}", "cluster_check_performed": False}
+                    # If LLM blocks, override validation
+                    if not validation_result.get("approved", True):
+                        llm_blocked = True
+                        llm_reason = validation_result.get("reasoning", "Blocked by LLM safety monitor.")
+                        state["llm_validation_response"] = validation_result
+                except Exception as e:
+                    logger.error(f"LLM validation error: {e}")
+                    # Fallback: approve if LLM fails
+            else:
+                logger.warning("LLM validation enabled but agent not initialized; skipping LLM validation.")
+                # Fallback: approve if agent missing
+        # If LLM blocked, override validation
+        if llm_blocked:
+            state = update_state_with_validation(state, False, [llm_reason or "Blocked by LLM safety monitor."])
+            logger.warning(f"SCALING BLOCKED BY LLM: {llm_reason}")
+            execution_time = (time.time() - start_time) * 1000
+            state = add_node_output(state, 'validate_decision', {
+                'valid': False,
+                'reason': llm_reason,
+                'current_replicas': state['current_replicas'],
+                'desired_replicas': state['desired_replicas'],
+                'llm_blocked': True
+            }, execution_time)
+            return state
+
+        # Normal validation
         current_replicas = state['current_replicas']
         desired_replicas = state['desired_replicas']
 
@@ -432,6 +493,20 @@ async def execute_scaling_node(state: OperatorState, services: Dict[str, Any], c
 
     try:
         logger.info(f"🚀 Executing scaling for execution {state['execution_id']}")
+
+        # Check for LLM validation block
+        llm_validation = state.get("llm_validation_response")
+        if llm_validation and not llm_validation.get("approved", True):
+            logger.warning(f"Skipping scaling execution: Blocked by LLM. Reason: {llm_validation.get('reasoning')}")
+            state['scaling_applied'] = False
+            state['scaling_error'] = llm_validation.get('reasoning', 'Blocked by LLM')
+            execution_time = (time.time() - start_time) * 1000
+            state = add_node_output(state, 'execute_scaling', {
+                'skipped': True,
+                'reason': llm_validation.get('reasoning', 'Blocked by LLM'),
+                'llm_blocked': True
+            }, execution_time)
+            return state
 
         # Skip if validation failed
         if not state['validation_passed']:
