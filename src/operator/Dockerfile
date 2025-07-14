@@ -15,6 +15,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy the application code into the container
 COPY . .
 
+# Copy the feature scaler into /tmp for runtime use
+COPY feature_scaler.pkl /tmp/feature_scaler.pkl
+
 # Expose the ports the app runs on
 EXPOSE 8080 8081
 

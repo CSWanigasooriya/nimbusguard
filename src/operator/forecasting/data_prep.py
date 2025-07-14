@@ -52,11 +52,11 @@ class DataPreprocessor:
             return False
 
     def transform(self, data: np.ndarray) -> np.ndarray:
-        """Transform data using freshly fitted scaler (always retrain)."""
+        """Transform data using the already-fitted scaler."""
+        if not self.is_fitted:
+            logger.error("Scaler not fitted, cannot transform data")
+            return data
         try:
-            # Always fit scaler on the provided data
-            self.fit_scaler(data)
-            # Convert to DataFrame with feature names to match how scaler was fitted
             import pandas as pd
             data_df = pd.DataFrame(data, columns=config.scaling.selected_features)
             scaled_data = self.scaler.transform(data_df)

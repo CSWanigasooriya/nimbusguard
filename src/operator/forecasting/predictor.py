@@ -37,27 +37,43 @@ class LoadForecaster:
     def initialize(self) -> bool:
         """Initialize the forecasting system."""
         try:
+            logger.debug("[initialize] Starting initialization of LoadForecaster")
             # Check Prometheus connectivity
             if not self.prometheus_client.health_check():
                 logger.error("Prometheus health check failed")
                 return False
+            logger.debug("[initialize] Prometheus health check passed")
 
             # Try to load existing models
-            self.data_preprocessor.load_scaler()
+            scaler_loaded = self.data_preprocessor.load_scaler()
+            logger.debug(f"[initialize] Scaler loaded: {scaler_loaded}")
 
             # Try to collect some initial data to determine input size
             feature_matrix = self.prometheus_client.get_feature_matrix(
                 config.forecasting.lookback_minutes
             )
+            logger.debug(f"[initialize] Feature matrix type: {type(feature_matrix)}, shape: {getattr(feature_matrix, 'shape', None)}")
+
+            # Fit scaler if not loaded and data is available
+            if not scaler_loaded and feature_matrix is not None and feature_matrix.size > 0:
+                logger.info("[initialize] Scaler not loaded, fitting scaler on initial feature matrix")
+                self.data_preprocessor.fit_scaler(feature_matrix)
+                logger.info("[initialize] Scaler fitted and saved on startup")
 
             if feature_matrix is not None and feature_matrix.size > 0:
                 input_size = feature_matrix.shape[1]  # Number of features
+                logger.debug(f"[initialize] Input size determined: {input_size}")
                 self.lstm_trainer.load_model(input_size)
+                logger.debug(f"[initialize] LSTM model loaded. is_trained: {self.lstm_trainer.is_trained}")
 
                 # If we have enough data and no trained model, train one
                 if not self.lstm_trainer.is_trained and len(feature_matrix) >= 40:
                     logger.info("No trained model found, training initial model")
                     self._train_model_async(feature_matrix)
+                else:
+                    logger.debug(f"[initialize] Skipping training: is_trained={self.lstm_trainer.is_trained}, data_len={len(feature_matrix)}")
+            else:
+                logger.warning("[initialize] Feature matrix is None or empty, skipping model loading and training")
 
             self.is_initialized = True
             logger.info("LoadForecaster initialized successfully")

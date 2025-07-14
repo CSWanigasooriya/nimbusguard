@@ -59,6 +59,8 @@ class ProactiveDQNAgent:
 
         # Feature scaler for preprocessing
         self.scaler = None
+        self.scaler_path = "/tmp/feature_scaler.pkl"  # Must match DataPreprocessor
+        self._load_feature_scaler()
 
         # State and action dimensions
         # 9 current + 9 forecast + 4 meta = 22 total features
@@ -114,59 +116,17 @@ class ProactiveDQNAgent:
         logger.info(f"ProactiveDQNAgent initialized with async training: "
                     f"state_dim={self.state_dim}, action_dim={self.action_dim}, device={self.device}")
 
-    async def load_feature_scaler(self, scaler_name: str = "feature_scaler.gz",
-                                  local_path: str = "/app/feature_scaler.gz") -> bool:
-        """
-        Load feature scaler from MinIO or local file.
-        """
-        try:
-            # Try loading from MinIO first
-            if self.minio_client:
-                try:
-                    logger.info(f"Loading feature scaler from MinIO: {scaler_name}")
-                    response = self.minio_client.get_object("models", scaler_name)
-                    buffer = BytesIO(response.read())
-                    self.scaler = joblib.load(buffer)
-                    logger.info(f"✅ Feature scaler loaded from MinIO: {type(self.scaler).__name__}")
-                    return True
-                except Exception as e:
-                    logger.warning(f"Failed to load scaler from MinIO: {e}")
-
-            # Fallback to local file
-            if os.path.exists(local_path):
-                logger.info(f"Loading feature scaler from local file: {local_path}")
-                self.scaler = joblib.load(local_path)
-                logger.info(f"✅ Feature scaler loaded from local file: {type(self.scaler).__name__}")
-
-                # Upload to MinIO for future use
-                if self.minio_client:
-                    await self._upload_scaler_to_minio(local_path, scaler_name)
-
-                return True
-            else:
-                logger.error(f"Feature scaler not found at {local_path}")
-                return False
-
-        except Exception as e:
-            logger.error(f"Failed to load feature scaler: {e}")
-            return False
-
-    async def _upload_scaler_to_minio(self, local_path: str, scaler_name: str):
-        """Upload local feature scaler to MinIO."""
-        try:
-            with open(local_path, 'rb') as f:
-                scaler_data = f.read()
-
-            self.minio_client.put_object(
-                bucket_name="models",
-                object_name=scaler_name,
-                data=BytesIO(scaler_data),
-                length=len(scaler_data),
-                content_type='application/gzip'
-            )
-            logger.info(f"✅ Feature scaler uploaded to MinIO: {scaler_name} ({len(scaler_data)} bytes)")
-        except Exception as e:
-            logger.warning(f"Failed to upload scaler to MinIO: {e}")
+    def _load_feature_scaler(self):
+        if os.path.exists(self.scaler_path):
+            try:
+                self.scaler = joblib.load(self.scaler_path)
+                logger.info(f"Loaded feature scaler from {self.scaler_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load feature scaler: {e}")
+                self.scaler = None
+        else:
+            logger.warning(f"Feature scaler file not found at {self.scaler_path}")
+            self.scaler = None
 
     def _scale_features(self, raw_features: List[float]) -> List[float]:
         """
