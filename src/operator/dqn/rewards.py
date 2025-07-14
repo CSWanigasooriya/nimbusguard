@@ -408,8 +408,8 @@ class ProactiveRewardCalculator:
         # More aggressive reward matrix for better scaling responsiveness
         reward_matrix = {
             "EMERGENCY": {"scale_up": 5.0, "keep_same": -5.0, "scale_down": -10.0},  # Emergency: must scale up
-            "ZERO": {"scale_up": 2.0, "keep_same": -1.0, "scale_down": -2.0},
-            "LOW": {"scale_up": -0.2, "keep_same": 1.0, "scale_down": 0.5},        # Prefer keep_same for low load
+            "ZERO": {"scale_up": -1.0, "keep_same": -0.5, "scale_down": 2.0},       # Strong scale_down incentive for zero load
+            "LOW": {"scale_up": -0.5, "keep_same": 0.3, "scale_down": 1.2},        # Prefer scale_down for low load
             "MEDIUM": {"scale_up": 1.2, "keep_same": -0.2, "scale_down": -1.0},    # More aggressive scale_up for medium
             "HIGH": {"scale_up": 2.0, "keep_same": -1.0, "scale_down": -2.0}       # Strong scale_up for high load
         }
@@ -436,11 +436,31 @@ class ProactiveRewardCalculator:
         resource_efficiency = self._calculate_resource_efficiency(current_metrics, current_replicas, deployment_info)
         resource_bonus = resource_efficiency * 0.3
         
-        total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus
+        # SCALE-DOWN BONUS: Extra reward for scaling down during low load
+        scale_down_bonus = 0.0
+        if action == "scale_down" and load_class in ["ZERO", "LOW"]:
+            # Get CPU and memory utilization for bonus calculation
+            cpu_rate = current_metrics.get("process_cpu_seconds_total_rate", 0.0)
+            memory_bytes = current_metrics.get("process_resident_memory_bytes", 0.0)
+            cpu_per_replica = cpu_rate / current_replicas
+            memory_per_replica = memory_bytes / current_replicas
+            
+            # Calculate how underutilized the system is
+            cpu_underutil = max(0, 0.3 - cpu_per_replica) / 0.3  # 0.3 cores = 60% of 500m limit
+            memory_underutil = max(0, (400 * 1024 * 1024) - memory_per_replica) / (400 * 1024 * 1024)  # 400MB baseline
+            
+            underutil_score = (cpu_underutil + memory_underutil) / 2
+            scale_down_bonus = underutil_score * 0.8  # Up to +0.8 bonus for scaling down when very underutilized
+            
+            if scale_down_bonus > 0.1:
+                logger.info(f"Scale-down bonus: +{scale_down_bonus:.2f} for scaling down during {load_class} load")
+        
+        total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus + scale_down_bonus
         
         logger.debug(f"Current state reward: load={load_class}, action={action}, "
                      f"base={base_reward}, efficiency={efficiency_penalty}, "
-                     f"waste={waste_penalty}, resource_bonus={resource_bonus:.2f}, total={total_reward}")
+                     f"waste={waste_penalty}, resource_bonus={resource_bonus:.2f}, "
+                     f"scale_down_bonus={scale_down_bonus:.2f}, total={total_reward}")
         
         return total_reward
 
@@ -522,9 +542,9 @@ class ProactiveRewardCalculator:
                 logger.warning("🚨 CRITICAL: All metrics are zero with unhealthy pods - emergency scale up needed!")
                 return "EMERGENCY"
 
-            # Check for zero load
-            if cpu_rate == 0.0 and memory_bytes == 0.0:
-                logger.info(f"💤 NO WORKLOAD: CPU and memory are both 0.0 - no processing demand")
+            # Check for very low load (near zero) - More realistic thresholds
+            if cpu_rate < 0.01 and memory_bytes < (50 * 1024 * 1024):  # < 0.01 CPU cores and < 50MB
+                logger.info(f"💤 VERY LOW WORKLOAD: CPU={cpu_rate:.3f}, Memory={memory_bytes/1024/1024:.1f}MB - minimal processing demand")
                 return "ZERO"
 
             if not (deployment_info and deployment_info.get('resource_limits')):
@@ -533,9 +553,9 @@ class ProactiveRewardCalculator:
                 
                 # Use thresholds based on default Kubernetes resource configuration
                 # CPU: 500m limit, Memory: 1Gi limit - More aggressive scaling
-                if cpu_per_replica > 0.35 or memory_per_replica > (700 * 1024 * 1024):  # 70% of 1Gi
+                if cpu_per_replica > 0.3 or memory_per_replica > (600 * 1024 * 1024):  # 60% of 1Gi
                     return "HIGH"
-                elif cpu_per_replica > 0.2 or memory_per_replica > (400 * 1024 * 1024):  # 40% of 1Gi  
+                elif cpu_per_replica > 0.15 or memory_per_replica > (300 * 1024 * 1024):  # 30% of 1Gi  
                     return "MEDIUM"
                 else:
                     return "LOW"
@@ -547,9 +567,9 @@ class ProactiveRewardCalculator:
             if cpu_limit_total <= 0 or memory_limit_total <= 0:
                 logger.warning("Deployment resource limits missing or zero; using absolute thresholds.")
                 # Fallback to absolute thresholds based on 500m CPU / 1Gi memory - More aggressive
-                if cpu_per_replica > 0.35 or memory_per_replica > (700 * 1024 * 1024):  # 70% of limits
+                if cpu_per_replica > 0.3 or memory_per_replica > (600 * 1024 * 1024):  # 60% of limits
                     return "HIGH"
-                elif cpu_per_replica > 0.2 or memory_per_replica > (400 * 1024 * 1024):  # 40% of limits
+                elif cpu_per_replica > 0.15 or memory_per_replica > (300 * 1024 * 1024):  # 30% of limits
                     return "MEDIUM"
                 else:
                     return "LOW"
@@ -563,11 +583,11 @@ class ProactiveRewardCalculator:
 
             # CPU-first load classification for better scaling sensitivity
             # If CPU is high, immediately classify as high regardless of memory
-            if cpu_util > 0.75:  # 75% CPU utilization
-                logger.info(f"Classified as HIGH load: cpu_util={cpu_util:.2f} > 0.75 (CPU-first rule)")
+            if cpu_util > 0.7:  # 70% CPU utilization
+                logger.info(f"Classified as HIGH load: cpu_util={cpu_util:.2f} > 0.7 (CPU-first rule)")
                 return "HIGH"
-            elif cpu_util > 0.55:  # 55% CPU utilization
-                logger.info(f"Classified as MEDIUM load: cpu_util={cpu_util:.2f} > 0.55 (CPU-first rule)")
+            elif cpu_util > 0.45:  # 45% CPU utilization
+                logger.info(f"Classified as MEDIUM load: cpu_util={cpu_util:.2f} > 0.45 (CPU-first rule)")
                 return "MEDIUM"
             
             # For lower CPU, use composite score but with adjusted thresholds
@@ -575,10 +595,10 @@ class ProactiveRewardCalculator:
             
             logger.info(f"Load analysis: cpu_util={cpu_util:.2f}, memory_util={memory_util:.2f}, composite_score={composite_score:.2f}")
 
-            if composite_score > 0.7:  # Lowered from 0.8
+            if composite_score > 0.6:  # Lowered from 0.7
                 logger.info(f"Classified as HIGH load: composite_score={composite_score:.2f}")
                 return "HIGH"
-            elif composite_score > 0.4:  # Lowered from 0.5
+            elif composite_score > 0.3:  # Lowered from 0.4
                 logger.info(f"Classified as MEDIUM load: composite_score={composite_score:.2f}")
                 return "MEDIUM"
             else:
@@ -647,10 +667,22 @@ class ProactiveRewardCalculator:
         cpu_per_replica = cpu_rate / validated_current_replicas
         memory_per_replica = memory_bytes / validated_current_replicas
 
-        # If load is very low but maintaining high replica count
-        if (cpu_per_replica < 0.05 and memory_per_replica < (200 * 1024 * 1024) and  # 200MB (low usage)
-                desired_replicas >= validated_current_replicas > 2):
-            return -0.8  # Penalty for resource waste
+        # More aggressive waste penalty that applies to all replica counts
+        if (cpu_per_replica < 0.05 and memory_per_replica < (200 * 1024 * 1024)):  # Very low usage
+            # Scale penalty based on replica count - more replicas = bigger waste
+            if validated_current_replicas > 3:
+                waste_multiplier = 1.5  # Heavy penalty for >3 replicas
+            elif validated_current_replicas > 2:
+                waste_multiplier = 1.2  # Moderate penalty for 3 replicas
+            elif validated_current_replicas > 1:
+                waste_multiplier = 0.8  # Light penalty even for 2 replicas
+            else:
+                waste_multiplier = 0.0  # No penalty for single replica
+            
+            if desired_replicas >= validated_current_replicas and waste_multiplier > 0:
+                penalty = -0.6 * waste_multiplier
+                logger.info(f"Waste penalty: Very low usage with {validated_current_replicas} replicas → penalty {penalty:.2f}")
+                return penalty
 
         return 0.0
 
