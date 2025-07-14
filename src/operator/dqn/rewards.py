@@ -18,20 +18,33 @@ class ProactiveRewardCalculator:
     """Calculates rewards for DQN considering both current and predicted future state."""
 
     def __init__(self):
-        # No reward_config or reward_thresholds in config, so use hard-coded defaults for these values
-        self.forecast_confidence_threshold = 0.3
-        self.efficiency_targets = {
-            "cpu_utilization": 0.70,
-            "memory_utilization": 0.80,
-            "default_memory_mb": 1024,  # 1Gi limit
-            "default_cpu_cores": 0.5   # 500m limit
-        }
+        # Get configuration values from config with safe fallbacks
+        try:
+            self.forecast_confidence_threshold = getattr(config.reward, 'forecast_confidence_threshold', 0.2)
+            self.efficiency_targets = getattr(config.reward, 'efficiency_targets', {
+                "cpu_utilization": 0.70,
+                "memory_utilization": 0.80,
+                "default_memory_mb": 1024,  # 1Gi limit
+                "default_cpu_cores": 0.5   # 500m limit
+            })
+        except AttributeError as e:
+            logger.warning(f"Config access issue, using defaults: {e}")
+            self.forecast_confidence_threshold = 0.2
+            self.efficiency_targets = {
+                "cpu_utilization": 0.70,
+                "memory_utilization": 0.80,
+                "default_memory_mb": 1024,  # 1Gi limit
+                "default_cpu_cores": 0.5   # 500m limit
+            }
+        
         # Initialize action tracking for stability analysis
         self.recent_actions = []
         self.recent_load_classes = []
         self.max_action_history = 5
         self.max_load_history = 3
         logger.info(f"Initialized ProactiveRewardCalculator with CPU and memory metrics only.")
+        logger.info(f"Using forecast confidence threshold: {self.forecast_confidence_threshold}")
+        logger.info(f"Using efficiency targets: {self.efficiency_targets}")
 
     @staticmethod
     def _validate_metrics(metrics: Dict[str, float]) -> Dict[str, float]:
@@ -342,6 +355,9 @@ class ProactiveRewardCalculator:
             validated_current_replicas = self._validate_replicas(current_replicas, "in reward calculation")
             validated_desired_replicas = self._validate_replicas(desired_replicas, "for desired replicas")
 
+            # Get load classification for emergency detection
+            load_class = self._classify_load(validated_metrics, validated_current_replicas, deployment_info)
+
             # Base reward from current state
             current_reward = self._calculate_current_state_reward(
                 action, validated_metrics, validated_current_replicas, validated_desired_replicas, deployment_info
@@ -357,12 +373,11 @@ class ProactiveRewardCalculator:
             )
 
             # Stability analysis
-            load_class = self._classify_load(validated_metrics, validated_current_replicas, deployment_info)
             stability_reward = self._calculate_stability_penalty(
                 action, validated_metrics, validated_current_replicas, load_class
             )
 
-            # Forecast-based reward adjustment with configurable confidence threshold
+            # Forecast-based reward adjustment with confidence threshold from config
             forecast_reward = 0.0
             forecast_confidence = 0.0
             logger.debug(f"Forecast result in reward calculation: {forecast_result}")
@@ -377,9 +392,16 @@ class ProactiveRewardCalculator:
             else:
                 logger.debug(f"Skipping forecast reward: confidence={forecast_result.get('confidence', 0) if forecast_result else 0:.3f} <= threshold={self.forecast_confidence_threshold}")
 
-            # Use configurable weights for current and forecast rewards
-            current_weight = getattr(config, 'reward', {}).get('current_weight', 0.7)
-            forecast_weight = getattr(config, 'reward', {}).get('forecast_weight', 0.3)
+            # Use configurable weights for current and forecast rewards with safe fallbacks
+            try:
+                current_weight = getattr(config.reward, 'current_weight', 0.5)
+                forecast_weight = getattr(config.reward, 'forecast_weight', 0.5)
+            except AttributeError:
+                logger.warning("Config.reward not accessible, using default weights")
+                current_weight = 0.5
+                forecast_weight = 0.5
+            
+            logger.debug(f"Reward weights: current={current_weight}, forecast={forecast_weight}")
 
             # Combined reward 
             total_reward = (
@@ -391,6 +413,14 @@ class ProactiveRewardCalculator:
 
             logger.info(f"Reward calculation: current={current_reward:.2f}, forecast={forecast_reward:.2f}, "
                        f"cpu_memory={cpu_memory_reward:.2f}, stability={stability_reward:.2f}, total={total_reward:.2f}")
+            
+            # Special logging for emergency situations
+            if load_class == "EMERGENCY":
+                logger.error(f"🚨 EMERGENCY REWARD BREAKDOWN: action={action}, load_class={load_class}, total_reward={total_reward:.2f}")
+                if total_reward < 5.0:
+                    logger.error(f"🚨 WARNING: Emergency reward {total_reward:.2f} may be too low! DQN might ignore emergency scaling!")
+                else:
+                    logger.error(f"🚨 GOOD: Emergency reward {total_reward:.2f} should force emergency scaling!")
 
             return total_reward
 
@@ -407,7 +437,7 @@ class ProactiveRewardCalculator:
         """Calculate reward based on current system state."""
         # More aggressive reward matrix for better scaling responsiveness
         reward_matrix = {
-            "EMERGENCY": {"scale_up": 5.0, "keep_same": -5.0, "scale_down": -10.0},  # Emergency: must scale up
+            "EMERGENCY": {"scale_up": 10.0, "keep_same": -10.0, "scale_down": -20.0},  # EMERGENCY: MUST scale up immediately!
             "ZERO": {"scale_up": -1.0, "keep_same": -0.5, "scale_down": 2.0},       # Strong scale_down incentive for zero load
             "LOW": {"scale_up": -0.5, "keep_same": 0.3, "scale_down": 1.2},        # Prefer scale_down for low load
             "MEDIUM": {"scale_up": 1.2, "keep_same": -0.2, "scale_down": -1.0},    # More aggressive scale_up for medium
@@ -417,6 +447,15 @@ class ProactiveRewardCalculator:
         # Use a simple load classification for reward matrix selection
         load_class = self._classify_load(current_metrics, current_replicas, deployment_info)
         base_reward = reward_matrix.get(load_class, {}).get(action, 0.0)
+        
+        # Log emergency detection clearly
+        if load_class == "EMERGENCY":
+            logger.error(f"🚨🚨🚨 EMERGENCY DETECTED: Unhealthy pods with zero metrics - ACTION REQUIRED! 🚨🚨🚨")
+            logger.error(f"🚨 Current action: {action}, Base reward: {base_reward}")
+        
+        # Initialize bonus variables
+        scale_down_bonus = 0.0
+        emergency_bonus = 0.0
         
         # Penalties for invalid replica counts
         if desired_replicas < 1:
@@ -455,12 +494,25 @@ class ProactiveRewardCalculator:
             if scale_down_bonus > 0.1:
                 logger.info(f"Scale-down bonus: +{scale_down_bonus:.2f} for scaling down during {load_class} load")
         
-        total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus + scale_down_bonus
+        # EMERGENCY OVERRIDE: If this is an emergency, heavily override all other considerations
+        emergency_bonus = 0.0
+        if load_class == "EMERGENCY":
+            if action == "scale_up":
+                emergency_bonus = 20.0  # Massive bonus for scaling up during emergency
+                logger.warning(f"🚨 EMERGENCY SCALE-UP BONUS: +{emergency_bonus} for scaling up during pod health emergency!")
+            elif action == "keep_same":
+                emergency_bonus = -15.0  # Heavy penalty for not acting during emergency
+                logger.warning(f"🚨 EMERGENCY PENALTY: {emergency_bonus} for not scaling up during pod health emergency!")
+            elif action == "scale_down":
+                emergency_bonus = -25.0  # Severe penalty for scaling down during emergency
+                logger.warning(f"🚨 EMERGENCY SEVERE PENALTY: {emergency_bonus} for scaling down during pod health emergency!")
+        
+        total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus + scale_down_bonus + emergency_bonus
         
         logger.debug(f"Current state reward: load={load_class}, action={action}, "
                      f"base={base_reward}, efficiency={efficiency_penalty}, "
                      f"waste={waste_penalty}, resource_bonus={resource_bonus:.2f}, "
-                     f"scale_down_bonus={scale_down_bonus:.2f}, total={total_reward}")
+                     f"scale_down_bonus={scale_down_bonus:.2f}, emergency_bonus={emergency_bonus:.2f}, total={total_reward}")
         
         return total_reward
 
@@ -536,13 +588,12 @@ class ProactiveRewardCalculator:
                 logger.warning("🚨 CRITICAL: No healthy pods available - emergency scale up needed!")
                 return "EMERGENCY"  # New classification for pod health issues
             
-            # CRITICAL: Check if all metrics are zero which indicates unhealthy pods
-            if (cpu_rate == 0.0 and memory_bytes == 0.0 and 
-                deployment_info and deployment_info.get('ready_replicas', validated_replicas) < validated_replicas):
-                logger.warning("🚨 CRITICAL: All metrics are zero with unhealthy pods - emergency scale up needed!")
-                return "EMERGENCY"
-
-            # Check for very low load (near zero) - More realistic thresholds
+            # CRITICAL: Check if all metrics are truly zero which indicates unhealthy pods
+            if cpu_rate == 0.0 and memory_bytes == 0.0:
+                logger.warning("🚨 CRITICAL: All metrics are zero - unhealthy/crashed pods detected!")
+                return "EMERGENCY"  # This is a pod health emergency, not low load
+            
+            # Check for very low load (near zero) - More realistic thresholds for healthy pods
             if cpu_rate < 0.01 and memory_bytes < (50 * 1024 * 1024):  # < 0.01 CPU cores and < 50MB
                 logger.info(f"💤 VERY LOW WORKLOAD: CPU={cpu_rate:.3f}, Memory={memory_bytes/1024/1024:.1f}MB - minimal processing demand")
                 return "ZERO"
@@ -550,6 +601,11 @@ class ProactiveRewardCalculator:
             if not (deployment_info and deployment_info.get('resource_limits')):
                 # Fallback to absolute thresholds when no deployment limits available
                 logger.warning("No deployment resource limits available; using absolute thresholds for load classification.")
+                
+                # CRITICAL: Check for unhealthy pods first
+                if cpu_per_replica == 0.0 and memory_per_replica == 0.0:
+                    logger.warning("🚨 CRITICAL: Zero metrics per replica - unhealthy pods detected!")
+                    return "EMERGENCY"
                 
                 # Use thresholds based on default Kubernetes resource configuration
                 # CPU: 500m limit, Memory: 1Gi limit - More aggressive scaling
@@ -566,6 +622,12 @@ class ProactiveRewardCalculator:
             
             if cpu_limit_total <= 0 or memory_limit_total <= 0:
                 logger.warning("Deployment resource limits missing or zero; using absolute thresholds.")
+                
+                # CRITICAL: Check for unhealthy pods first
+                if cpu_per_replica == 0.0 and memory_per_replica == 0.0:
+                    logger.warning("🚨 CRITICAL: Zero metrics per replica - unhealthy pods detected!")
+                    return "EMERGENCY"
+                
                 # Fallback to absolute thresholds based on 500m CPU / 1Gi memory - More aggressive
                 if cpu_per_replica > 0.3 or memory_per_replica > (600 * 1024 * 1024):  # 60% of limits
                     return "HIGH"
