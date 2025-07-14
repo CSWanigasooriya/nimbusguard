@@ -1,29 +1,28 @@
-# Intelligent Consumer Pod Feature Selection Results
+# Simplified Consumer Pod Feature Selection Results
 
 ## Methodology
-- **Auto-discovered**: 31 consumer pod metrics
-- **Auto-analyzed**: 41 metric characteristics  
-- **Auto-calculated**: Rate metrics from counters
-- **Auto-ensured**: Category diversity
+- **Focus**: CPU and Memory metrics only
+- **Auto-discovered**: 2 relevant consumer pod metrics
+- **Auto-analyzed**: 3 metric characteristics  
+- **Auto-calculated**: CPU rate from counter
+- **Resource Targets**: 0.5 CPU cores, 1024MB memory
 
 ## Dataset Summary
 - **Samples**: 45
-- **Features**: 9
-- **Scaling Actions**: {'scale_up': 44, 'keep_same': 1}
+- **Features**: 2
+- **Scaling Actions**: {'scale_down': 40, 'keep_same': 3, 'scale_up': 2}
 
-## Selected Features (Top 9)
-1. **`http_request_duration_seconds_sum_rate`** (category: network, type: gauge, relevance: 100.0)
-2. **`http_request_duration_seconds_count_rate`** (category: network, type: gauge, relevance: 95.0)
-3. **`process_cpu_seconds_total_rate`** (category: cpu, type: gauge, relevance: 115.0)
-4. **`process_resident_memory_bytes`** (category: memory, type: gauge, relevance: 120.0)
-5. **`http_requests_total_rate`** (category: network, type: gauge, relevance: 105.0)
-6. **`http_response_size_bytes_sum_rate`** (category: network, type: gauge, relevance: 90.0)
-7. **`process_open_fds`** (category: io, type: gauge, relevance: 90.0)
-8. **`http_requests_total`** (category: network, type: counter, relevance: 85.0)
-9. **`process_virtual_memory_bytes`** (category: memory, type: gauge, relevance: 115.0)
+## Selected Features
+1. **`process_cpu_seconds_total_rate`** (category: cpu, type: gauge, relevance: 100.0)
+2. **`process_resident_memory_bytes`** (category: memory, type: gauge, relevance: 100.0)
 
-## Category Distribution
-- **NETWORK**: 5 features
-- **CPU**: 1 features
-- **MEMORY**: 2 features
-- **IO**: 1 features
+## Resource Configuration
+- **CPU Limit**: 0.5 cores (500m)
+- **Memory Limit**: 1024MB (1Gi)
+- **CPU Target**: 70.0% utilization
+- **Memory Target**: 80.0% utilization
+
+## Scaling Logic
+- **Scale Up**: When pressure score > 120% of target capacity
+- **Scale Down**: When pressure score < 50% of target capacity
+- **Keep Same**: When pressure score is between 50-120% of target

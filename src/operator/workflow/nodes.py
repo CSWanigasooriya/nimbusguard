@@ -47,115 +47,6 @@ def update_state_with_reward(state: OperatorState, reward: float) -> OperatorSta
     return state
 
 
-def _calculate_trend_velocity(current_metrics: Dict[str, float], forecast_result: Dict[str, Any]) -> float:
-    """Calculate trend velocity based on actual rate of change in key metrics."""
-    try:
-        # Get current values
-        current_cpu = current_metrics.get('process_cpu_seconds_total_rate', 0)
-        current_memory = current_metrics.get('process_resident_memory_bytes', 0) / 1e6  # Convert to MB
-        current_requests = current_metrics.get('http_requests_total_rate', 0)
-
-        # Get forecast summary if available
-        forecast_summary = forecast_result.get('forecast_summary', {})
-
-        if forecast_summary:
-            # Calculate velocity based on predicted changes
-            cpu_change_rate = forecast_summary.get('cpu_change_percent', 0) / 100.0  # Convert to ratio
-            memory_change_rate = forecast_summary.get('memory_change_percent', 0) / 100.0
-            request_change_rate = forecast_summary.get('request_change_percent', 0) / 100.0
-
-            # Weighted average of change rates (higher weight for more impactful metrics)
-            velocity = (
-                    abs(cpu_change_rate) * 0.4 +  # CPU changes are critical
-                    abs(memory_change_rate) * 0.3 +  # Memory changes are important
-                    abs(request_change_rate) * 0.3  # Request changes indicate load
-            )
-
-            # Normalize to 0-1 range (velocities > 50% change are considered high)
-            normalized_velocity = min(1.0, velocity / 0.5)
-
-            logger.debug(f"Calculated trend velocity: cpu_change={cpu_change_rate:.3f}, "
-                         f"memory_change={memory_change_rate:.3f}, request_change={request_change_rate:.3f}, "
-                         f"velocity={velocity:.3f}, normalized={normalized_velocity:.3f}")
-
-            return normalized_velocity
-        else:
-            # Fallback: estimate velocity from current metric magnitudes
-            # High current values suggest potential for change
-            cpu_pressure = min(1.0, current_cpu / 0.5)  # Normalize by 50% CPU
-            memory_pressure = min(1.0, current_memory / 500)  # Normalize by 500MB
-            request_pressure = min(1.0, current_requests / 10)  # Normalize by 10 req/s
-
-            estimated_velocity = (cpu_pressure + memory_pressure + request_pressure) / 3.0
-
-            logger.debug(f"Estimated trend velocity from current metrics: {estimated_velocity:.3f}")
-            return estimated_velocity
-
-    except Exception as e:
-        logger.warning(f"Failed to calculate trend velocity: {e}")
-        return 0.5  # Neutral default
-
-
-def _calculate_pattern_confidence(forecast_result: Dict[str, Any], current_metrics: Dict[str, float]) -> float:
-    """Calculate pattern confidence based on forecasting method, data quality, and pattern consistency."""
-    try:
-        method = forecast_result.get('method', 'fallback')
-        base_confidence = forecast_result.get('confidence', 0.1)
-
-        # Base confidence by method (more realistic ranges)
-        method_confidence = {
-            'lstm': min(0.9, 0.6 + base_confidence * 0.3),  # 0.6-0.9 range for LSTM
-            'statistical': min(0.7, 0.4 + base_confidence * 0.3),  # 0.4-0.7 range for statistical
-            'current_metrics_fallback': 0.3,  # Fixed low confidence for fallback
-            'fallback': 0.2  # Fixed very low confidence for fallback
-        }.get(method, 0.2)
-
-        # Data quality factor based on metric availability and values
-        data_quality = 0.3  # Base quality
-        if current_metrics:
-            # Check if we have meaningful data (not all zeros)
-            has_cpu = current_metrics.get('process_cpu_seconds_total_rate', 0) > 0.001
-            has_memory = current_metrics.get('process_resident_memory_bytes', 0) > 1e6  # > 1MB
-            has_requests = current_metrics.get('http_requests_total_rate', 0) >= 0  # Can be 0
-
-            # Quality increases with available metrics
-            metric_availability = sum([has_cpu, has_memory, has_requests]) / 3.0
-            data_quality = 0.3 + (metric_availability * 0.4)  # 0.3 to 0.7 range
-
-        # Pattern consistency factor based on forecast quality and method
-        pattern_consistency = 0.5  # Default
-        if method == 'lstm' and base_confidence > 0.5:
-            # High confidence LSTM predictions suggest good patterns
-            pattern_consistency = min(0.9, 0.5 + base_confidence * 0.4)
-        elif method == 'statistical':
-            # Statistical methods have moderate pattern recognition
-            pattern_consistency = min(0.7, 0.4 + base_confidence * 0.3)
-
-        # Add time-based variation to make it more dynamic
-        import time
-        time_factor = 0.1 * np.sin(time.time() / 60.0)  # Slow oscillation over minutes
-
-        # Combined pattern confidence with time variation
-        final_confidence = (
-                                   method_confidence * 0.5 +  # 50% method reliability
-                                   data_quality * 0.3 +  # 30% data quality
-                                   pattern_consistency * 0.2  # 20% pattern consistency
-                           ) + time_factor
-
-        # Clamp to reasonable range
-        result = max(0.1, min(1.0, final_confidence))
-
-        logger.debug(f"Pattern confidence calculation: method={method}, base={base_confidence:.3f}, "
-                     f"method_conf={method_confidence:.3f}, data_qual={data_quality:.3f}, "
-                     f"pattern_cons={pattern_consistency:.3f}, final={result:.3f}")
-
-        return result
-
-    except Exception as e:
-        logger.warning(f"Failed to calculate pattern confidence: {e}")
-        return 0.3  # Safe default
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -324,13 +215,6 @@ async def generate_forecast_node(state: OperatorState, services: Dict[str, Any],
                         1 + forecast_result.get('confidence', 0.5) * 0.1))
             lstm_features['next_60sec_pressure'] = min(1.0, base_pressure * (
                         1 + forecast_result.get('confidence', 0.5) * 0.2))
-
-            # Calculate proper trend velocity based on actual rate of change
-            lstm_features['trend_velocity'] = _calculate_trend_velocity(state['current_metrics'], forecast_result)
-
-            # Calculate proper pattern confidence based on method and data quality
-            pattern_confidence = _calculate_pattern_confidence(forecast_result, state['current_metrics'])
-            lstm_features['pattern_confidence'] = pattern_confidence
 
             await services['metrics'].update_lstm_features(lstm_features)
 

@@ -101,20 +101,6 @@ class LSTMForecaster(nn.Module):
 
         return out
 
-        # LSTM forward pass
-        lstm_out, (hidden, cell) = self.lstm(x)
-
-        # Use the last output from LSTM
-        last_output = lstm_out[:, -1, :]  # [batch_size, hidden_size]
-
-        # Project to forecast horizon
-        output = self.fc(last_output)  # [batch_size, input_size * forecast_horizon]
-
-        # Reshape to [batch_size, forecast_horizon, input_size]
-        output = output.view(batch_size, self.forecast_horizon, self.input_size)
-
-        return output
-
     def init_hidden(self, batch_size: int):
         """Initialize hidden states."""
         device = next(self.parameters()).device

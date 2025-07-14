@@ -71,15 +71,8 @@ class ScalingConfig:
         # Consumer-focused features based on HPA baseline analysis
         # These features directly correlate with scaling decisions
         self.selected_features = [
-            'http_request_duration_seconds_sum_rate',  # PRIMARY: Request latency (35-542s spikes)
-            'http_request_duration_seconds_count_rate',  # Request rate (actual workload)
             'process_cpu_seconds_total_rate',  # CPU per pod (0.48-15.51s spikes)
             'process_resident_memory_bytes',  # Memory per pod (61-197MB spikes)
-            'http_requests_total_process_rate',  # Actual /process endpoint requests
-            'http_response_size_bytes_sum_rate',  # Response throughput
-            'process_open_fds',  # Connection pressure
-            'kube_pod_container_resource_limits_cpu',  # Resource constraints
-            'http_server_active_connections'  # Active connections (if available)
         ]
 
 

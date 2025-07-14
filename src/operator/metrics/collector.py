@@ -105,16 +105,6 @@ class MetricsCollector:
             'LSTM forecast for next 60 seconds pressure'
         )
 
-        self.dqn_lstm_trend_velocity = Gauge(
-            'dqn_lstm_trend_velocity',
-            'LSTM trend velocity analysis'
-        )
-
-        self.dqn_lstm_pattern_confidence = Gauge(
-            'dqn_lstm_pattern_confidence',
-            'LSTM pattern recognition confidence'
-        )
-
         # DQN Q-Value Distribution
         self.dqn_q_value_scale_up = Gauge(
             'dqn_q_value_scale_up',
@@ -327,12 +317,6 @@ class MetricsCollector:
 
             if 'next_60sec_pressure' in lstm_features:
                 self.dqn_lstm_next_60sec_pressure.set(lstm_features['next_60sec_pressure'])
-
-            if 'trend_velocity' in lstm_features:
-                self.dqn_lstm_trend_velocity.set(lstm_features['trend_velocity'])
-
-            if 'pattern_confidence' in lstm_features:
-                self.dqn_lstm_pattern_confidence.set(lstm_features['pattern_confidence'])
 
             self.logger.debug("Updated LSTM feature metrics")
 
