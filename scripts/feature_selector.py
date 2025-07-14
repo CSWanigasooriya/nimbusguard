@@ -344,103 +344,91 @@ class IntelligentConsumerFeatureSelector:
         return rate_df
     
     def ensure_category_diversity(self, ranked_features: List[str]) -> List[str]:
-        """Ensure diverse representation across metric categories with intelligence."""
-        logger.info("🎯 Ensuring intelligent category diversity...")
+        """Ensure diverse representation and prioritize DQN-required features."""
+        logger.info("🎯 Ensuring DQN-required features are selected...")
+        
+        # DQN requires these specific features
+        dqn_required_features = [
+            'http_request_duration_seconds_sum_rate',
+            'http_request_duration_seconds_count_rate', 
+            'process_cpu_seconds_total_rate',
+            'process_resident_memory_bytes',
+            'http_requests_total_process_rate',
+            'http_response_size_bytes_sum_rate',
+            'process_open_fds',
+            'kube_pod_container_resource_limits_cpu',
+            'http_server_active_connections'
+        ]
         
         selected = []
         category_counts = {}
         
-        # Intelligent category targets based on scaling importance
-        category_targets = {
-            'cpu': 2,           # Critical: CPU utilization + rate
-            'memory': 2,        # Critical: Physical + virtual memory (prioritize direct usage)
-            'network': 3,       # Important: Request rate + latency + throughput
-            'io': 1,            # Important: File descriptors or I/O rate
-            'performance': 1,   # Useful: Latency or performance indicators
-            'monitoring': 0,    # Avoid: Monitoring overhead
-            'other': 1          # Backup: Other useful metrics
-        }
-        
-        # First pass: prioritize high-impact categories with intelligent sorting
-        priority_categories = ['cpu', 'memory', 'network', 'io']
-        
-        for category in priority_categories:
-            count = 0
-            target = category_targets.get(category, 0)
+        # PRIORITY 1: Select DQN-required features first (with variations)
+        for required_feature in dqn_required_features:
+            found = False
             
-            # For memory category, prioritize direct usage metrics over GC metrics
-            if category == 'memory':
-                # Sort memory features by scaling relevance (direct memory usage first)
-                memory_features = []
-                for feature in ranked_features:
-                    if (feature in self.metric_analysis and 
-                        self.metric_analysis[feature]['category'] == 'memory'):
-                        memory_features.append((feature, self.metric_analysis[feature]['scaling_relevance']))
+            # Try exact match first
+            for feature in ranked_features:
+                if feature == required_feature:
+                    selected.append(feature)
+                    category = self.metric_analysis.get(feature, {}).get('category', 'unknown')
+                    category_counts[category] = category_counts.get(category, 0) + 1
+                    logger.info(f"  ✓ Selected required: {feature} (exact match)")
+                    found = True
+                    break
+            
+            if not found:
+                # Try variations
+                variations = [
+                    required_feature.replace('_process_rate', '_rate'),
+                    required_feature.replace('_rate', ''),
+                    required_feature.replace('http_requests_total_process_rate', 'http_requests_total'),
+                    required_feature.replace('http_server_active_connections', 'http_requests_total')
+                ]
                 
-                # Sort by relevance score (highest first)
-                memory_features.sort(key=lambda x: x[1], reverse=True)
-                memory_feature_order = [f[0] for f in memory_features]
-                
-                # Select from prioritized memory features
-                for feature in memory_feature_order:
-                    if len(selected) >= self.target_features or count >= target:
+                for variation in variations:
+                    for feature in ranked_features:
+                        if feature == variation and feature not in selected:
+                            selected.append(feature)
+                            category = self.metric_analysis.get(feature, {}).get('category', 'unknown')
+                            category_counts[category] = category_counts.get(category, 0) + 1
+                            logger.info(f"  ✓ Selected required: {feature} (variation of {required_feature})")
+                            found = True
+                            break
+                    if found:
                         break
-                        
-                    if feature in selected:
+            
+            if not found:
+                logger.warning(f"  ⚠️ Could not find required feature: {required_feature}")
+        
+        logger.info(f"Selected {len(selected)} DQN-required features")
+        
+        # PRIORITY 2: Fill remaining slots if target not reached
+        if len(selected) < self.target_features:
+            remaining_slots = self.target_features - len(selected)
+            logger.info(f"Filling {remaining_slots} remaining slots with best available features...")
+            
+            for feature in ranked_features:
+                if len(selected) >= self.target_features:
+                    break
+                    
+                if feature not in selected and feature in self.metric_analysis:
+                    analysis = self.metric_analysis[feature]
+                    
+                    # Skip monitoring overhead and raw counters
+                    if analysis['category'] == 'monitoring':
                         continue
                         
-                    feature_type = self.metric_analysis[feature]['type']
-                    
-                    # Extra validation: avoid counters even in priority categories
-                    if feature_type != 'counter' or 'rate' in feature:
-                        selected.append(feature)
-                        category_counts[category] = category_counts.get(category, 0) + 1
-                        count += 1
-                        logger.info(f"  ✓ Selected {feature} (category: {category}, type: {feature_type}, relevance: {self.metric_analysis[feature]['scaling_relevance']:.1f})")
-            else:
-                # For other categories, use normal ranking order
-                for feature in ranked_features:
-                    if len(selected) >= self.target_features or count >= target:
-                        break
-                        
-                    if feature in selected:
+                    if analysis['type'] == 'counter' and 'rate' not in feature:
                         continue
-                        
-                    if feature in self.metric_analysis:
-                        feature_category = self.metric_analysis[feature]['category']
-                        feature_type = self.metric_analysis[feature]['type']
-                        
-                        if feature_category == category:
-                            # Extra validation: avoid counters even in priority categories
-                            if feature_type != 'counter' or 'rate' in feature:
-                                selected.append(feature)
-                                category_counts[category] = category_counts.get(category, 0) + 1
-                                count += 1
-                                logger.info(f"  ✓ Selected {feature} (category: {category}, type: {feature_type})")
-        
-        # Second pass: fill remaining slots with best available (avoid monitoring)
-        for feature in ranked_features:
-            if len(selected) >= self.target_features:
-                break
-                
-            if feature not in selected and feature in self.metric_analysis:
-                analysis = self.metric_analysis[feature]
-                
-                # Skip monitoring overhead and raw counters
-                if analysis['category'] == 'monitoring':
-                    logger.info(f"  ✗ Skipped {feature} (monitoring overhead)")
-                    continue
                     
-                if analysis['type'] == 'counter' and 'rate' not in feature:
-                    logger.info(f"  ✗ Skipped {feature} (raw counter, prefer rate)")
-                    continue
-                
-                selected.append(feature)
-                category = analysis['category']
-                category_counts[category] = category_counts.get(category, 0) + 1
-                logger.info(f"  ✓ Added {feature} (category: {category}, type: {analysis['type']})")
+                    selected.append(feature)
+                    category = analysis['category']
+                    category_counts[category] = category_counts.get(category, 0) + 1
+                    logger.info(f"  ✓ Added {feature} (category: {category}, type: {analysis['type']})")
         
-        logger.info(f"📊 Final intelligent category distribution: {category_counts}")
+        logger.info(f"📊 Final category distribution: {category_counts}")
+        logger.info(f"📊 Total selected features: {len(selected)}")
         return selected
     
     def load_and_analyze_data(self) -> pd.DataFrame:
@@ -584,6 +572,228 @@ class IntelligentConsumerFeatureSelector:
         
         return pd.Series(actions, index=df.index)
     
+    def create_dqn_scaler(self, feature_df: pd.DataFrame, output_dir: Path):
+        """Create a scaler specifically for the DQN agent's expected features."""
+        logger.info("🎯 Creating DQN-compatible scaler...")
+        
+        # DQN expects these exact features (from config/settings.py)
+        dqn_expected_features = [
+            'http_request_duration_seconds_sum_rate',
+            'http_request_duration_seconds_count_rate', 
+            'process_cpu_seconds_total_rate',
+            'process_resident_memory_bytes',
+            'http_requests_total_process_rate',
+            'http_response_size_bytes_sum_rate',
+            'process_open_fds',
+            'kube_pod_container_resource_limits_cpu',
+            'http_server_active_connections'
+        ]
+        
+        # Find available features in the data (with fallbacks)
+        available_features = []
+        feature_mapping = {}
+        
+        for expected_feature in dqn_expected_features:
+            found = False
+            
+            # Try exact match first
+            if expected_feature in feature_df.columns:
+                available_features.append(expected_feature)
+                feature_mapping[expected_feature] = expected_feature
+                found = True
+                logger.info(f"  ✓ Found exact match: {expected_feature}")
+            else:
+                # Try common variations
+                variations = [
+                    expected_feature.replace('_process_rate', '_rate'),
+                    expected_feature.replace('_rate', ''),
+                    expected_feature.replace('http_requests_total_process_rate', 'http_requests_total_rate'),
+                    expected_feature.replace('http_server_active_connections', 'http_requests_total_rate')  # fallback
+                ]
+                
+                for variation in variations:
+                    if variation in feature_df.columns:
+                        available_features.append(variation)
+                        feature_mapping[expected_feature] = variation
+                        found = True
+                        logger.info(f"  ✓ Found variation: {expected_feature} -> {variation}")
+                        break
+            
+            if not found:
+                logger.warning(f"  ⚠️ Missing feature: {expected_feature} (will use zeros)")
+                # Add placeholder column of zeros
+                feature_df[expected_feature] = 0.0
+                available_features.append(expected_feature)
+                feature_mapping[expected_feature] = expected_feature
+        
+        # Create dataframe with exact DQN feature names and order
+        dqn_feature_df = pd.DataFrame()
+        for expected_feature in dqn_expected_features:
+            source_feature = feature_mapping[expected_feature]
+            dqn_feature_df[expected_feature] = feature_df[source_feature]
+        
+        # Create and fit the scaler
+        dqn_scaler = RobustScaler()
+        dqn_scaler.fit(dqn_feature_df)
+        
+        # Save as .pkl (not .gz) for DQN compatibility
+        scaler_path = output_dir / 'feature_scaler.pkl'
+        joblib.dump(dqn_scaler, scaler_path)
+        
+        logger.info(f"✅ DQN-compatible scaler saved to {scaler_path}")
+        logger.info(f"   Scaler fitted on {len(dqn_expected_features)} features: {dqn_expected_features}")
+        
+        # Create feature mapping log
+        mapping_path = output_dir / 'dqn_feature_mapping.json'
+        with open(mapping_path, 'w') as f:
+            json.dump(feature_mapping, f, indent=2)
+        logger.info(f"   Feature mapping saved to {mapping_path}")
+    
+    def validate_dqn_compatibility(self, output_dir: Path) -> bool:
+        """Validate that created files are compatible with DQN agent."""
+        logger.info("🔍 Validating DQN compatibility...")
+        
+        try:
+            # Expected DQN features (from config/settings.py)
+            expected_features = [
+                'http_request_duration_seconds_sum_rate',
+                'http_request_duration_seconds_count_rate', 
+                'process_cpu_seconds_total_rate',
+                'process_resident_memory_bytes',
+                'http_requests_total_process_rate',
+                'http_response_size_bytes_sum_rate',
+                'process_open_fds',
+                'kube_pod_container_resource_limits_cpu',
+                'http_server_active_connections'
+            ]
+            
+            # 1. Check if scaler file exists and has correct format
+            scaler_path = output_dir / 'feature_scaler.pkl'
+            if not scaler_path.exists():
+                logger.error(f"❌ Scaler file not found: {scaler_path}")
+                return False
+            
+            # 2. Load and validate scaler
+            try:
+                import pandas as pd
+                scaler = joblib.load(scaler_path)
+                logger.info(f"✅ Scaler loaded successfully from {scaler_path}")
+                
+                # Check scaler type
+                if not hasattr(scaler, 'transform') or not hasattr(scaler, 'fit'):
+                    logger.error("❌ Invalid scaler: missing transform/fit methods")
+                    return False
+                
+                logger.info(f"✅ Scaler type: {type(scaler).__name__}")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to load scaler: {e}")
+                return False
+            
+            # 3. Test scaler with expected feature structure
+            try:
+                # Create test data with expected features
+                test_data = pd.DataFrame({
+                    feature: [0.0] for feature in expected_features
+                })
+                
+                # Test transform
+                scaled_data = scaler.transform(test_data)
+                
+                if scaled_data.shape != (1, len(expected_features)):
+                    logger.error(f"❌ Scaler output shape mismatch: expected (1, {len(expected_features)}), got {scaled_data.shape}")
+                    return False
+                
+                logger.info(f"✅ Scaler transform works correctly: input shape {test_data.shape} -> output shape {scaled_data.shape}")
+                
+            except Exception as e:
+                logger.error(f"❌ Scaler transform failed: {e}")
+                return False
+            
+            # 4. Check feature mapping
+            mapping_path = output_dir / 'dqn_feature_mapping.json'
+            if mapping_path.exists():
+                try:
+                    import json
+                    with open(mapping_path, 'r') as f:
+                        feature_mapping = json.load(f)
+                    
+                    # Validate all expected features are mapped
+                    missing_features = []
+                    for expected_feature in expected_features:
+                        if expected_feature not in feature_mapping:
+                            missing_features.append(expected_feature)
+                    
+                    if missing_features:
+                        logger.warning(f"⚠️ Missing features in mapping: {missing_features}")
+                    else:
+                        logger.info("✅ All expected features are mapped")
+                    
+                    logger.info(f"✅ Feature mapping loaded: {len(feature_mapping)} features mapped")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to load feature mapping: {e}")
+                    return False
+            else:
+                logger.warning(f"⚠️ Feature mapping file not found: {mapping_path}")
+            
+            # 5. Simulate DQN agent usage
+            try:
+                logger.info("🧪 Simulating DQN agent usage...")
+                
+                # Test with realistic metric values
+                realistic_metrics = {
+                    'http_request_duration_seconds_sum_rate': 5.2,
+                    'http_request_duration_seconds_count_rate': 10.5,
+                    'process_cpu_seconds_total_rate': 0.8,
+                    'process_resident_memory_bytes': 150000000.0,  # 150MB
+                    'http_requests_total_process_rate': 8.3,
+                    'http_response_size_bytes_sum_rate': 1500000.0,  # 1.5MB/s
+                    'process_open_fds': 45.0,
+                    'kube_pod_container_resource_limits_cpu': 1.0,
+                    'http_server_active_connections': 15.0
+                }
+                
+                # Create DataFrame as DQN agent would
+                test_df = pd.DataFrame([realistic_metrics])
+                
+                # Test scaling
+                scaled_result = scaler.transform(test_df)
+                
+                # Check for reasonable scaling (values should be roughly in [-3, 3] range for RobustScaler)
+                if np.any(np.abs(scaled_result) > 10):
+                    logger.warning(f"⚠️ Some scaled values are extreme: {scaled_result[0]}")
+                    logger.warning("   This might indicate scaling issues")
+                else:
+                    logger.info(f"✅ Scaled values look reasonable: {scaled_result[0]}")
+                
+                # Check for NaN or infinite values
+                if np.any(~np.isfinite(scaled_result)):
+                    logger.error("❌ Scaled values contain NaN or infinite values")
+                    return False
+                
+                logger.info("✅ DQN simulation successful")
+                
+            except Exception as e:
+                logger.error(f"❌ DQN simulation failed: {e}")
+                return False
+            
+            # 6. Final compatibility summary
+            logger.info("🎯 DQN Compatibility Summary:")
+            logger.info(f"   ✅ Scaler file: {scaler_path}")
+            logger.info(f"   ✅ Scaler type: {type(scaler).__name__}")
+            logger.info(f"   ✅ Expected features: {len(expected_features)}")
+            logger.info(f"   ✅ Feature mapping: {mapping_path}")
+            logger.info(f"   ✅ Transform test: PASSED")
+            logger.info(f"   ✅ DQN simulation: PASSED")
+            
+            logger.info("🎉 All DQN compatibility checks PASSED!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Validation failed with error: {e}")
+            return False
+    
     def run(self, output_dir: Path):
         """Execute intelligent feature selection pipeline."""
         output_dir = Path(output_dir)
@@ -614,6 +824,9 @@ class IntelligentConsumerFeatureSelector:
         # Save outputs
         final_df.to_parquet(output_dir / 'dqn_features.parquet')
         joblib.dump(scaler, output_dir / 'feature_scaler.gz')
+        
+        # Create DQN-compatible scaler for the exact features DQN expects
+        self.create_dqn_scaler(feature_df, output_dir)
         
         # Create comprehensive metadata
         metadata = {
@@ -671,6 +884,15 @@ class IntelligentConsumerFeatureSelector:
         
         logger.info(f"✅ Intelligent feature selection complete! Output saved to {output_dir}")
         logger.info(f"Selected features: {selected_features}")
+        
+        # Validate DQN compatibility
+        logger.info("\n" + "="*60)
+        if self.validate_dqn_compatibility(output_dir):
+            logger.info("🎉 SUCCESS: All files are DQN-compatible!")
+        else:
+            logger.error("❌ FAILURE: DQN compatibility issues found!")
+            logger.error("   Please check the logs above for details")
+        logger.info("="*60)
 
 if __name__ == "__main__":
     import argparse
