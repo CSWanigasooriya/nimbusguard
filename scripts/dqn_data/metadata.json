@@ -1,18 +1,18 @@
 {
-  "timestamp": "2025-07-13T02:36:33.823867",
+  "timestamp": "2025-07-14T22:10:20.890799",
   "methodology": "Intelligent data-driven feature selection",
   "discovered_metrics": 31,
   "analyzed_metrics": 41,
   "selected_features": [
+    "http_request_duration_seconds_sum_rate",
+    "http_request_duration_seconds_count_rate",
     "process_cpu_seconds_total_rate",
     "process_resident_memory_bytes",
-    "process_virtual_memory_bytes",
-    "http_request_duration_seconds_sum_rate",
     "http_requests_total_rate",
-    "http_request_duration_seconds_count_rate",
-    "process_open_fds",
     "http_response_size_bytes_sum_rate",
-    "http_request_size_bytes_count_rate"
+    "process_open_fds",
+    "http_requests_total",
+    "process_virtual_memory_bytes"
   ],
   "metric_analysis": {
     "http_request_duration_highr_seconds_bucket": {
