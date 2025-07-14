@@ -15,9 +15,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy the application code into the container
 COPY . .
 
-# Copy the scientifically selected feature scaler
-COPY feature_scaler.gz /app/feature_scaler.gz
-
 # Expose the ports the app runs on
 EXPOSE 8080 8081
 

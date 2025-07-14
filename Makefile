@@ -4,6 +4,7 @@
 .PHONY: load-test-light load-test-medium load-test-heavy load-test-sustained load-test-burst load-test-memory load-test-cpu
 .PHONY: load-clean load-status
 .PHONY: helm-install helm-upgrade helm-uninstall helm-dev helm-prod helm-test helm-lint helm-template
+.PHONY: backup-models restore-models clean-backups
 
 help: ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "%-20s %s\n", $$1, $$2}'
@@ -242,6 +243,16 @@ load-test-cpu: docker-build ## Run CPU stress test (test CPU-based scaling)
 	@kubectl apply -f kubernetes-manifests/components/load-generator/job-cpu-stress.yaml -n nimbusguard
 	@echo "✅ CPU stress test job applied. Monitor with k9s in nimbusguard namespace."
 
+load-test-single-pod: ## Run single pod optimized load test
+	@echo "🎯 Starting single pod optimized load test..."
+	@echo "📊 Gradual load increase designed for 1 replica"
+	@echo ""
+	@kubectl delete job load-test-single-pod -n nimbusguard 2>/dev/null || true
+	@kubectl apply -f kubernetes-manifests/components/load-generator/job-single-pod-test.yaml -n nimbusguard
+	@echo "✅ Single pod load test started. Monitor with:"
+	@echo "   kubectl logs -f job/load-test-single-pod -n nimbusguard"
+	@echo "   kubectl get pods -n nimbusguard -w"
+
 load-status: ## Show status of all load test jobs and consumer pods
 	@echo "📊 Load Test Status Report"
 	@echo "=========================="
@@ -441,3 +452,36 @@ test-dqn-baseline: ## Run DQN test with identical deterministic load
 	kubectl apply -f kubernetes-manifests/components/load-generator/job-comparison-baseline.yaml -n nimbusguard
 	@echo "✅ DQN test started. Monitor with: kubectl logs -f job/load-test-comparison-baseline"
 	@echo "⏱️  Test duration: 30 minutes"
+
+# === MODEL PERSISTENCE COMMANDS ===
+
+backup-models: ## Backup DQN models from MinIO before cluster restart
+	@echo "💾 Backing up DQN models from MinIO..."
+	@echo "⚠️  Run this BEFORE restarting your Kind cluster to preserve trained models"
+	@echo ""
+	@if ! kubectl get pods -n nimbusguard -l app=minio --no-headers 2>/dev/null | grep -q Running; then \
+		echo "❌ MinIO pod not running. Please ensure cluster is up first."; \
+		exit 1; \
+	fi
+	@python3 scripts/backup_models.py
+
+restore-models: ## Restore DQN models to MinIO after cluster restart
+	@echo "📥 Restoring DQN models to MinIO..."
+	@echo "💡 Run this AFTER restarting your Kind cluster to restore trained models"
+	@echo ""
+	@if ! kubectl get pods -n nimbusguard -l app=minio --no-headers 2>/dev/null | grep -q Running; then \
+		echo "❌ MinIO pod not running. Please ensure cluster is deployed first."; \
+		echo "💡 Try: make dev"; \
+		exit 1; \
+	fi
+	@python3 scripts/restore_models.py
+
+clean-backups: ## Clean old model backups (keeps latest 5)
+	@echo "🧹 Cleaning old model backups..."
+	@if [ -d "./model_backups" ]; then \
+		cd "./model_backups" && \
+		ls -t | grep "backup_" | tail -n +6 | xargs -r rm -rf && \
+		echo "✅ Cleaned old backups (kept latest 5)"; \
+	else \
+		echo "ℹ️  No backups directory found"; \
+	fi

@@ -7,22 +7,22 @@ name = "nimbusguard-operator"
 version = "1.0.0"
 description = "NimbusGuard Proactive Scaling Operator - Intelligent Kubernetes autoscaling with LSTM forecasting and DQN"
 readme = "README.md"
-license = {text = "MIT"}
+license = { text = "MIT" }
 authors = [
-    {name = "Chamath Wanigasooriya", email = "chamathwanigasooriya@gmail.com"}
+    { name = "Chamath Wanigasooriya", email = "chamathwanigasooriya@gmail.com" }
 ]
 maintainers = [
-    {name = "Chamath Wanigasooriya", email = "chamathwanigasooriya@gmail.com"}
+    { name = "Chamath Wanigasooriya", email = "chamathwanigasooriya@gmail.com" }
 ]
 keywords = [
-    "kubernetes", 
-    "autoscaling", 
-    "machine-learning", 
-    "deep-q-network", 
+    "kubernetes",
+    "autoscaling",
+    "machine-learning",
+    "deep-q-network",
     "dqn",
     "lstm",
-    "forecasting", 
-    "prometheus", 
+    "forecasting",
+    "prometheus",
     "devops",
     "kopf",
     "langgraph"
@@ -51,41 +51,32 @@ requires-python = ">=3.9"
 dependencies = [
     # Web framework and HTTP
     "aiohttp>=3.8.0",
-    
     # Kubernetes operator framework
     "kopf>=1.37.0",
     "kubernetes>=28.1.0",
-    
     # AI/ML frameworks
     "torch>=2.0.0",
     "numpy>=1.24.0",
     "scikit-learn>=1.3.0",
     "pandas>=2.0.0",
-    
     # LangGraph for workflow orchestration
     "langgraph>=0.0.40",
     "langchain>=0.1.0",
     "langchain-core>=0.1.0",
-    
     # Data processing and storage
     "minio>=7.1.0",
     "redis>=5.0.0",
-    
     # Monitoring and metrics
     "prometheus-client>=0.17.0",
-    
     # HTTP clients
     "httpx>=0.25.0",
-    
     # Data science and utilities
     "joblib>=1.3.0",
     "pytz>=2023.3",
     "python-dateutil>=2.8.2",
-    
     # Logging and configuration
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    
     # Async utilities
     "asyncio-throttle>=1.0.2",
 ]

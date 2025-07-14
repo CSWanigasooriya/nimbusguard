@@ -86,11 +86,11 @@ src/operator/
 ## Operator Workflow
 
 1. **Kopf Event**: Deployment changes trigger operator
-2. **LangGraph Execution**: 
-   - Collect current metrics
-   - Generate LSTM forecast
-   - DQN makes proactive scaling decision
-   - Validate and execute
+2. **LangGraph Execution**:
+    - Collect current metrics
+    - Generate LSTM forecast
+    - DQN makes proactive scaling decision
+    - Validate and execute
 3. **Continuous Learning**: DQN trains on outcomes
 4. **Background Retraining**: LSTM model updates every 60 minutes
 
