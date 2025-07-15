@@ -49,7 +49,7 @@ class KubernetesClient:
             # Extract min/max replicas from annotations (common HPA pattern)
             annotations = deployment.metadata.annotations or {}
             min_replicas = self._extract_replica_limit(annotations, 'min', default=1)
-            max_replicas = self._extract_replica_limit(annotations, 'max', default=10)
+            max_replicas = self._extract_replica_limit(annotations, 'max', default=50)
 
             # Extract resource limits and requests from container specs
             resource_info = self._extract_resource_limits(deployment)
