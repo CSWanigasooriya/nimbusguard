@@ -435,17 +435,22 @@ class ProactiveRewardCalculator:
                                         desired_replicas: int,
                                         deployment_info: Optional[Dict[str, Any]] = None) -> float:
         """Calculate reward based on current system state."""
+        
+        # Validate replicas first
+        validated_current_replicas = self._validate_replicas(current_replicas, "in current state reward calculation")
+        validated_desired_replicas = self._validate_replicas(desired_replicas, "for desired replicas in current state reward")
+        
         # More aggressive reward matrix for better scaling responsiveness
         reward_matrix = {
             "EMERGENCY": {"scale_up": 10.0, "keep_same": -10.0, "scale_down": -20.0},  # EMERGENCY: MUST scale up immediately!
             "ZERO": {"scale_up": -1.0, "keep_same": -0.5, "scale_down": 2.0},       # Strong scale_down incentive for zero load
-            "LOW": {"scale_up": -0.5, "keep_same": 0.3, "scale_down": 1.2},        # Prefer scale_down for low load
-            "MEDIUM": {"scale_up": 1.2, "keep_same": -0.2, "scale_down": -1.0},    # More aggressive scale_up for medium
+            "LOW": {"scale_up": -0.8, "keep_same": -0.2, "scale_down": 1.5},       # Strong scale_down incentive for low load
+            "MEDIUM": {"scale_up": 0.8, "keep_same": -0.5, "scale_down": 0.2},     # Slight scale_down preference for medium (to handle memory leaks)
             "HIGH": {"scale_up": 2.0, "keep_same": -1.0, "scale_down": -2.0}       # Strong scale_up for high load
         }
         
         # Use a simple load classification for reward matrix selection
-        load_class = self._classify_load(current_metrics, current_replicas, deployment_info)
+        load_class = self._classify_load(current_metrics, validated_current_replicas, deployment_info)
         base_reward = reward_matrix.get(load_class, {}).get(action, 0.0)
         
         # Log emergency detection clearly
@@ -456,6 +461,7 @@ class ProactiveRewardCalculator:
         # Initialize bonus variables
         scale_down_bonus = 0.0
         emergency_bonus = 0.0
+        excessive_replica_penalty = 0.0
         
         # Penalties for invalid replica counts
         if desired_replicas < 1:
@@ -507,12 +513,28 @@ class ProactiveRewardCalculator:
                 emergency_bonus = -25.0  # Severe penalty for scaling down during emergency
                 logger.warning(f"🚨 EMERGENCY SEVERE PENALTY: {emergency_bonus} for scaling down during pod health emergency!")
         
-        total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus + scale_down_bonus + emergency_bonus
+        # MASSIVE REPLICA WASTE PENALTY: Heavily penalize excessive replicas
+        excessive_replica_penalty = 0.0
+        if validated_current_replicas > 5:  # More than 5 replicas
+            cpu_rate = current_metrics.get("process_cpu_seconds_total_rate", 0.0)
+            cpu_per_replica = cpu_rate / validated_current_replicas
+            
+            if cpu_per_replica < 0.3:  # Low CPU per replica
+                excess_replicas = validated_current_replicas - 3  # Target ~3 replicas max for low load
+                if action in ["keep_same", "scale_up"]:
+                    excessive_replica_penalty = -2.0 * excess_replicas  # -2.0 per excess replica
+                    logger.warning(f"🚨 EXCESSIVE REPLICA PENALTY: {validated_current_replicas} replicas with low CPU → penalty {excessive_replica_penalty:.1f}")
+                elif action == "scale_down":
+                    excessive_replica_penalty = 1.0 * excess_replicas  # Bonus for scaling down
+                    logger.info(f"🎯 SCALE-DOWN REWARD: +{excessive_replica_penalty:.1f} for reducing {validated_current_replicas} excessive replicas")
+        
+        total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus + scale_down_bonus + emergency_bonus + excessive_replica_penalty
         
         logger.debug(f"Current state reward: load={load_class}, action={action}, "
                      f"base={base_reward}, efficiency={efficiency_penalty}, "
                      f"waste={waste_penalty}, resource_bonus={resource_bonus:.2f}, "
-                     f"scale_down_bonus={scale_down_bonus:.2f}, emergency_bonus={emergency_bonus:.2f}, total={total_reward}")
+                     f"scale_down_bonus={scale_down_bonus:.2f}, emergency_bonus={emergency_bonus:.2f}, "
+                     f"excessive_replica_penalty={excessive_replica_penalty:.2f}, total={total_reward}")
         
         return total_reward
 
@@ -607,6 +629,11 @@ class ProactiveRewardCalculator:
                     logger.warning("🚨 CRITICAL: Zero metrics per replica - unhealthy pods detected!")
                     return "EMERGENCY"
                 
+                # MEMORY LEAK DETECTION: High memory + Low CPU = Memory leak, not real load
+                if memory_per_replica > (800 * 1024 * 1024) and cpu_per_replica < 0.15:  # >800MB memory but <0.15 CPU
+                    logger.warning(f"🚨 MEMORY LEAK DETECTED: memory={memory_per_replica/1024/1024:.0f}MB, cpu={cpu_per_replica:.3f} - treating as LOW load")
+                    return "LOW"
+                
                 # Use thresholds based on default Kubernetes resource configuration
                 # CPU: 500m limit, Memory: 1Gi limit - More aggressive scaling
                 if cpu_per_replica > 0.3 or memory_per_replica > (600 * 1024 * 1024):  # 60% of 1Gi
@@ -627,6 +654,11 @@ class ProactiveRewardCalculator:
                 if cpu_per_replica == 0.0 and memory_per_replica == 0.0:
                     logger.warning("🚨 CRITICAL: Zero metrics per replica - unhealthy pods detected!")
                     return "EMERGENCY"
+                
+                # MEMORY LEAK DETECTION: High memory + Low CPU = Memory leak, not real load
+                if memory_per_replica > (800 * 1024 * 1024) and cpu_per_replica < 0.15:  # >800MB memory but <0.15 CPU
+                    logger.warning(f"🚨 MEMORY LEAK DETECTED: memory={memory_per_replica/1024/1024:.0f}MB, cpu={cpu_per_replica:.3f} - treating as LOW load")
+                    return "LOW"
                 
                 # Fallback to absolute thresholds based on 500m CPU / 1Gi memory - More aggressive
                 if cpu_per_replica > 0.3 or memory_per_replica > (600 * 1024 * 1024):  # 60% of limits
@@ -652,10 +684,19 @@ class ProactiveRewardCalculator:
                 logger.info(f"Classified as MEDIUM load: cpu_util={cpu_util:.2f} > 0.45 (CPU-first rule)")
                 return "MEDIUM"
             
-            # For lower CPU, use composite score but with adjusted thresholds
-            composite_score = (cpu_util * 0.8) + (memory_util * 0.2)  # Increased CPU weight
+            # MEMORY LEAK DETECTION: High memory + Low CPU = Memory leak, not real load
+            if memory_util > 0.8 and cpu_util < 0.3:  # Memory >80% but CPU <30%
+                logger.warning(f"🚨 MEMORY LEAK DETECTED: memory_util={memory_util:.2f}, cpu_util={cpu_util:.2f} - treating as LOW load for scaling")
+                return "LOW"  # Memory leak should trigger scale-down, not keep high replicas
             
-            logger.info(f"Load analysis: cpu_util={cpu_util:.2f}, memory_util={memory_util:.2f}, composite_score={composite_score:.2f}")
+            # For lower CPU, use composite score but prioritize CPU over memory
+            # When CPU is low, memory utilization shouldn't prevent scale-down
+            if cpu_util < 0.25:  # Very low CPU
+                composite_score = cpu_util * 0.9 + memory_util * 0.1  # Heavily prioritize CPU
+                logger.info(f"Low CPU detected: cpu_util={cpu_util:.2f}, using CPU-weighted composite_score={composite_score:.2f}")
+            else:
+                composite_score = (cpu_util * 0.8) + (memory_util * 0.2)  # Standard weighting
+                logger.info(f"Load analysis: cpu_util={cpu_util:.2f}, memory_util={memory_util:.2f}, composite_score={composite_score:.2f}")
 
             if composite_score > 0.6:  # Lowered from 0.7
                 logger.info(f"Classified as HIGH load: composite_score={composite_score:.2f}")
