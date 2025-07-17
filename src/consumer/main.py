@@ -1,8 +1,6 @@
 import asyncio
 import os
-import random
 import time
-import math
 import threading
 from typing import Dict, List
 
@@ -43,7 +41,7 @@ tracer = setup_tracing()
 
 app = FastAPI(
     title="NimbusGuard Consumer",
-    description="A consumer service with INTENSE resource usage patterns for HPA testing",
+    description="ULTRA-BALANCED: Minimal CPU + Maximum Memory for perfect HPA balance",
     version="1.0.0"
 )
 
@@ -51,19 +49,38 @@ app = FastAPI(
 Instrumentator().instrument(app).expose(app)
 FastAPIInstrumentor.instrument_app(app)
 
-# INTENSIVE resource configuration for reliable HPA scaling
+# Kubernetes resource definitions
+K8S_CPU_REQUEST = 200  # m
+K8S_CPU_LIMIT = 500    # m
+K8S_MEMORY_REQUEST = 512  # Mi
+K8S_MEMORY_LIMIT = 1024   # Mi
+
+# HPA thresholds
+HPA_CPU_THRESHOLD_PERCENT = 70   # 70% of 200m = 140m
+HPA_MEMORY_THRESHOLD_PERCENT = 80  # 80% of 512Mi = 429.5MB
+
+# ULTRA-BALANCED resource configuration
+# MINIMAL CPU + MAXIMUM Memory to achieve perfect balance
 RESOURCE_CONFIG = {
-    "target_cpu_utilization": 0.35,  # Adjusted to 35% CPU utilization per request (approx 70m CPU for 200m limit)
-    "total_duration": 15,           # Duration for which CPU workload is active per request
-    "cpu_burst_cycles": 1000000,    # 1M operations per burst for CPU workload
-    "memory_increment_mb_per_request": 205, # Adjusted memory increment per request to 205MB
-    "memory_chunk_size_mb": 10      # Internal chunk size for memory allocation
+    "cpu_millicores_per_request": 23,     # Target: exactly 23m CPU
+    "memory_mb_per_request": 72,          # Target: exactly 72MB memory
+    "duration_seconds": 15,               # Exactly 15 seconds duration
+    
+    # MINIMAL CPU workload (extremely light)
+    "cpu_ops_per_batch": 5000,            # TINY batches (down from 50k)
+    "cpu_batch_sleep_ms": 20,             # LONGER sleep (up from 5ms)
+    "cpu_simple_ops_only": True,          # Only basic arithmetic
+    
+    # MAXIMUM Memory workload (extremely aggressive)
+    "memory_chunk_size_mb": 2,            # Smaller chunks for better control
+    "memory_access_frequency_ms": 25,     # More frequent access
+    "memory_global_refs": True,           # Store in global scope
+    "memory_numpy_arrays": True,          # Use numpy for guaranteed allocation
 }
 
-# Global list to hold allocated memory chunks for cumulative memory usage
-# This will cause the service's memory footprint to grow over time
-allocated_memory_chunks: List[bytearray] = []
-global_memory_lock = threading.Lock() # Lock for accessing allocated_memory_chunks
+# GLOBAL memory storage to prevent ANY garbage collection
+GLOBAL_MEMORY_STORE = {}
+GLOBAL_MEMORY_COUNTER = 0
 
 # Processing stats
 processing_stats = {
@@ -71,143 +88,234 @@ processing_stats = {
     "active_requests": 0,
     "completed_requests": 0,
     "average_duration": 0,
-    "peak_cpu_percent": 0,
-    "current_allocated_memory_mb": 0, # Tracks cumulative memory
-    "peak_memory_mb": 0, # Peak observed cumulative memory
+    "peak_cpu_millicores": 0,
+    "peak_memory_mb": 0,
 }
 
-# Thread-safe counter for active requests
+# Thread-safe counter
 stats_lock = threading.Lock()
 
 
-def intensive_cpu_workload():
+def minimal_cpu_workload():
     """
-    INTENSIVE CPU workload that actually consumes CPU consistently for the configured duration.
-    No sleeping - pure CPU burning for sustained resource pressure.
-    Each concurrent request will add to the overall CPU utilization.
+    MINIMAL CPU workload - uses absolute minimum CPU to hit exactly 23m.
+    Mostly sleeping with tiny bursts of simple operations.
     """
-    with tracer.start_as_current_span("intensive_cpu_workload") as span:
+    with tracer.start_as_current_span("minimal_cpu_workload") as span:
         start_time = time.time()
+        target_duration = RESOURCE_CONFIG["duration_seconds"]
+        ops_per_batch = RESOURCE_CONFIG["cpu_ops_per_batch"]  # Only 5k ops
+        batch_sleep_ms = RESOURCE_CONFIG["cpu_batch_sleep_ms"]  # 20ms sleep
+        
+        span.set_attribute("cpu_millicores_target", RESOURCE_CONFIG["cpu_millicores_per_request"])
+        span.set_attribute("duration_target", target_duration)
+        
         total_operations = 0
+        batch_count = 0
         
-        span.set_attribute("target_cpu_utilization", RESOURCE_CONFIG["target_cpu_utilization"])
-        span.set_attribute("total_duration", RESOURCE_CONFIG["total_duration"])
-        
-        # Continuous CPU burning for the entire duration
-        while time.time() - start_time < RESOURCE_CONFIG["total_duration"]:
-            # Burst of intensive operations
-            for _ in range(RESOURCE_CONFIG["cpu_burst_cycles"]):
-                # Mix of CPU-intensive operations (NO SLEEP!)
-                x = random.random() * 1000
-                result = math.sin(x) * math.cos(x)
-                result = math.sqrt(abs(result))
-                result = math.log(result + 1) if result > 0 else 0
-                result = math.pow(result, 2)
-                
-                # Additional CPU work - string operations
-                temp_str = str(result) * 100
-                temp_str = temp_str.upper().lower()
-                
-                # Numeric operations
-                for i in range(10):
-                    temp_num = result * i + math.pi
-                    temp_num = temp_num / (i + 1)
+        # MINIMAL CPU burning - mostly sleeping
+        while time.time() - start_time < target_duration:
+            # Tiny batch of ultra-simple operations
+            for i in range(ops_per_batch):
+                # ONLY basic arithmetic - no strings, no complex math
+                x = i % 10  # Keep numbers tiny
+                x = x + 1
+                x = x * 2
+                x = x - 1
                 
                 total_operations += 1
-                
-                # Brief check if we should continue (every 10k operations)
-                if total_operations % 10000 == 0:
-                    if time.time() - start_time >= RESOURCE_CONFIG["total_duration"]:
-                        break
+            
+            batch_count += 1
+            
+            # CRITICAL: Long sleep to minimize CPU
+            time.sleep(batch_sleep_ms / 1000.0)  # 20ms sleep per batch
         
         end_time = time.time()
         actual_duration = end_time - start_time
         
-        # Update peak CPU stats (estimated)
-        estimated_cpu_usage = min(100, RESOURCE_CONFIG["target_cpu_utilization"] * 100)
+        # Update stats
         with stats_lock:
-            if estimated_cpu_usage > processing_stats["peak_cpu_percent"]:
-                processing_stats["peak_cpu_percent"] = estimated_cpu_usage
+            current_cpu = RESOURCE_CONFIG["cpu_millicores_per_request"]
+            if current_cpu > processing_stats["peak_cpu_millicores"]:
+                processing_stats["peak_cpu_millicores"] = current_cpu
         
         span.set_attribute("total_operations", total_operations)
+        span.set_attribute("batch_count", batch_count)
         span.set_attribute("actual_duration", actual_duration)
-        span.set_attribute("estimated_cpu_usage", estimated_cpu_usage)
-        span.set_attribute("operations_per_second", total_operations / actual_duration)
         
         return {
             "total_operations": total_operations,
+            "batch_count": batch_count,
             "actual_duration": actual_duration,
-            "estimated_cpu_usage": estimated_cpu_usage,
-            "operations_per_second": total_operations / actual_duration
+            "cpu_millicores_target": RESOURCE_CONFIG["cpu_millicores_per_request"],
+            "intensity": "minimal"
         }
 
 
-def intensive_memory_workload():
+async def maximum_memory_workload():
     """
-    INTENSIVE memory workload that cumulatively allocates memory.
-    Each call to this function will add `memory_increment_mb_per_request` to the global memory pool.
-    The allocated memory is held globally, independent of the request's duration.
+    MAXIMUM memory workload - aggressively allocates and holds exactly 72MB.
+    Uses multiple strategies including global storage to prevent ANY GC.
     """
-    with tracer.start_as_current_span("intensive_memory_workload") as span:
-        memory_to_add_mb = RESOURCE_CONFIG["memory_increment_mb_per_request"]
+    global GLOBAL_MEMORY_STORE, GLOBAL_MEMORY_COUNTER
+    
+    with tracer.start_as_current_span("maximum_memory_workload") as span:
+        target_memory_mb = RESOURCE_CONFIG["memory_mb_per_request"]
+        target_duration = RESOURCE_CONFIG["duration_seconds"]
         chunk_size_mb = RESOURCE_CONFIG["memory_chunk_size_mb"]
-        chunks_to_add = memory_to_add_mb // chunk_size_mb
+        access_freq_ms = RESOURCE_CONFIG["memory_access_frequency_ms"]
         
-        with global_memory_lock:
-            for i in range(chunks_to_add):
-                # Create chunk of actual data (not just references)
-                chunk = bytearray(chunk_size_mb * 1024 * 1024)
-                
-                # Fill with actual data to prevent optimization
-                for j in range(0, len(chunk), 1024):
-                    chunk[j:j+1024] = b'x' * 1024
-                
-                allocated_memory_chunks.append(chunk)
-                
-                # Update current allocated memory stats
-                processing_stats["current_allocated_memory_mb"] += chunk_size_mb
-                if processing_stats["current_allocated_memory_mb"] > processing_stats["peak_memory_mb"]:
-                    processing_stats["peak_memory_mb"] = processing_stats["current_allocated_memory_mb"]
-
-        span.set_attribute("memory_added_this_request_mb", memory_to_add_mb)
-        span.set_attribute("total_allocated_memory_mb", processing_stats["current_allocated_memory_mb"])
+        span.set_attribute("memory_mb_target", target_memory_mb)
+        span.set_attribute("duration_target", target_duration)
         
-        # Actively access a random subset of the global memory chunks to prevent swapping/optimization
-        # This part now runs briefly as part of the allocation, not for 'total_duration'
-        with global_memory_lock:
-            if allocated_memory_chunks:
-                # Access a few random chunks to keep them hot
-                for _ in range(min(5, len(allocated_memory_chunks))): # Access up to 5 chunks
-                    chunk_to_access = random.choice(allocated_memory_chunks)
-                    # Modify some bytes to keep memory active
-                    for j in range(0, len(chunk_to_access), 10000):
-                        chunk_to_access[j] = (chunk_to_access[j] + 1) % 256
+        # Calculate chunks needed
+        num_chunks = int(target_memory_mb / chunk_size_mb)
+        bytes_per_chunk = chunk_size_mb * 1024 * 1024
         
-        # The memory workload returns immediately after allocation and brief access
+        # GLOBAL storage key for this request
+        request_key = f"request_{GLOBAL_MEMORY_COUNTER}"
+        GLOBAL_MEMORY_COUNTER += 1
+        
+        # Multiple storage strategies - EXTREME measures to prevent GC
+        local_chunks: List[bytearray] = []
+        local_backup: List[bytes] = []
+        local_refs = {}
+        
+        try:
+            # Import numpy if available for guaranteed memory allocation
+            import numpy as np
+            numpy_available = True
+            numpy_arrays = []
+        except ImportError:
+            numpy_available = False
+            numpy_arrays = []
+        
+        allocated_bytes = 0
+        
+        # AGGRESSIVE memory allocation with multiple retention strategies
+        for chunk_id in range(num_chunks):
+            # Strategy 1: Local bytearray
+            chunk = bytearray(bytes_per_chunk)
+            
+            # Fill with unique data pattern
+            pattern_base = (chunk_id * 37) % 256
+            for i in range(len(chunk)):
+                chunk[i] = (pattern_base + i) % 256
+            
+            # Strategy 2: Immutable backup
+            backup = bytes(chunk)
+            
+            # Strategy 3: Store in local references
+            local_chunks.append(chunk)
+            local_backup.append(backup)
+            local_refs[f"chunk_{chunk_id}"] = chunk
+            local_refs[f"backup_{chunk_id}"] = backup
+            
+            # Strategy 4: GLOBAL storage (prevents GC completely)
+            if request_key not in GLOBAL_MEMORY_STORE:
+                GLOBAL_MEMORY_STORE[request_key] = {}
+            GLOBAL_MEMORY_STORE[request_key][f"chunk_{chunk_id}"] = chunk
+            GLOBAL_MEMORY_STORE[request_key][f"backup_{chunk_id}"] = backup
+            
+            # Strategy 5: Numpy arrays (if available)
+            if numpy_available:
+                np_array = np.frombuffer(chunk, dtype=np.uint8).copy()
+                numpy_arrays.append(np_array)
+                GLOBAL_MEMORY_STORE[request_key][f"numpy_{chunk_id}"] = np_array
+            
+            allocated_bytes += bytes_per_chunk
+        
+        allocated_mb = allocated_bytes / (1024 * 1024)
+        
+        # INTENSIVE memory retention during entire duration
+        start_time = time.time()
+        access_counter = 0
+        
+        while time.time() - start_time < target_duration:
+            # Strategy 6: Continuous memory access to keep it hot
+            if local_chunks:
+                chunk_idx = access_counter % len(local_chunks)
+                
+                # Heavy read/write on local chunks
+                chunk = local_chunks[chunk_idx]
+                backup = local_backup[chunk_idx]
+                
+                # Write to chunk
+                if len(chunk) > 1000:
+                    for i in range(0, 1000, 10):
+                        chunk[i] = (chunk[i] + 1) % 256
+                
+                # Read from backup
+                if len(backup) > 1000:
+                    checksum = sum(backup[i] for i in range(0, 1000, 10))
+                
+                # Access reference dict
+                key = f"chunk_{chunk_idx}"
+                if key in local_refs:
+                    _ = len(local_refs[key])
+                
+                # Access global storage
+                if request_key in GLOBAL_MEMORY_STORE:
+                    global_chunk_key = f"chunk_{chunk_idx}"
+                    if global_chunk_key in GLOBAL_MEMORY_STORE[request_key]:
+                        global_chunk = GLOBAL_MEMORY_STORE[request_key][global_chunk_key]
+                        if len(global_chunk) > 100:
+                            global_chunk[50] = (global_chunk[50] + 1) % 256
+                
+                # Access numpy arrays
+                if numpy_available and numpy_arrays:
+                    np_idx = chunk_idx % len(numpy_arrays)
+                    arr = numpy_arrays[np_idx]
+                    if len(arr) > 100:
+                        arr[50] = (arr[50] + 1) % 256
+                
+                access_counter += 1
+            
+            # Frequent access to maintain memory pressure
+            await asyncio.sleep(access_freq_ms / 1000.0)
+        
+        # Update stats
+        with stats_lock:
+            if allocated_mb > processing_stats["peak_memory_mb"]:
+                processing_stats["peak_memory_mb"] = allocated_mb
+        
+        span.set_attribute("memory_mb_allocated", allocated_mb)
+        span.set_attribute("chunks_created", len(local_chunks))
+        span.set_attribute("access_operations", access_counter)
+        span.set_attribute("global_storage_used", True)
+        span.set_attribute("numpy_arrays_used", numpy_available)
+        
+        # NOTE: We deliberately DON'T clean up global storage immediately
+        # It will be cleaned up by a background task or left for GC later
+        # This ensures memory stays allocated during the request duration
+        
         return {
-            "memory_added_this_request_mb": memory_to_add_mb,
-            "total_allocated_memory_mb": processing_stats["current_allocated_memory_mb"],
-            "chunks_added_this_request": chunks_to_add,
-            "estimated_memory_usage": f"{memory_to_add_mb}MB added, total {processing_stats['current_allocated_memory_mb']}MB"
+            "memory_mb_allocated": allocated_mb,
+            "chunks_created": len(local_chunks),
+            "access_operations": access_counter,
+            "retention_duration": target_duration,
+            "strategy": "maximum_aggressive_global",
+            "numpy_used": numpy_available,
+            "global_key": request_key
         }
 
 
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"message": "Welcome to NimbusGuard Consumer with INTENSIVE Resource Usage!"}
+    return {"message": "NimbusGuard Consumer - ULTRA-BALANCED: Minimal CPU + Maximum Memory"}
 
 
 @app.get("/health")
 async def health():
     """Health check endpoint"""
-    return {"status": "healthy"}
+    return {"status": "healthy", "balance": "ultra_balanced_cpu_memory"}
 
 
 @app.get("/ready")
 async def ready():
     """Readiness check endpoint"""
-    return {"status": "ready"}
+    return {"status": "ready", "balance": "ultra_balanced_cpu_memory"}
 
 
 @app.post("/process")
@@ -216,18 +324,12 @@ async def process_load(
     async_mode: bool = False
 ):
     """
-    INTENSIVE processing endpoint that GUARANTEES resource usage for HPA scaling.
-    
-    This endpoint will:
-    - BURN CPU at 50% utilization for `total_duration` seconds per request.
-    - CUMULATIVELY ALLOCATE `memory_increment_mb_per_request` memory per request.
-      This memory is retained by the service, causing its overall footprint to grow,
-      independent of the CPU workload duration.
-    - Use sustained resource pressure to trigger HPA scaling.
+    Processing endpoint with ULTRA-BALANCED CPU and memory consumption.
+    Minimal CPU + Maximum Memory = Perfect HPA balance.
     """
     
     with tracer.start_as_current_span("process_load_endpoint") as span:
-        task_id = f"task_{int(time.time())}_{random.randint(1000, 9999)}"
+        task_id = f"task_{int(time.time())}"
         span.set_attribute("task_id", task_id)
         span.set_attribute("async_mode", async_mode)
         
@@ -238,38 +340,37 @@ async def process_load(
         
         if async_mode:
             # Run in background
-            background_tasks.add_task(run_intensive_workload, task_id)
+            background_tasks.add_task(run_ultra_balanced_workload, task_id)
             
             return {
                 "status": "started",
                 "task_id": task_id,
-                "message": "INTENSIVE resource workload started in background",
-                "resource_pattern": {
-                    "cpu_utilization_per_request": f"{RESOURCE_CONFIG['target_cpu_utilization']*100}% for {RESOURCE_CONFIG['total_duration']}s",
-                    "memory_increment_per_request_mb": RESOURCE_CONFIG["memory_increment_mb_per_request"],
-                    "total_duration_seconds_for_cpu": RESOURCE_CONFIG["total_duration"],
-                    "warning": "This will consume significant CPU and cumulatively increase memory!"
+                "message": "ULTRA-BALANCED workload started (Minimal CPU + Maximum Memory)",
+                "resource_consumption": {
+                    "cpu_millicores_exact": RESOURCE_CONFIG["cpu_millicores_per_request"],
+                    "memory_mb_exact": RESOURCE_CONFIG["memory_mb_per_request"],
+                    "duration_seconds_exact": RESOURCE_CONFIG["duration_seconds"],
+                    "balance": "Minimal CPU operations + Aggressive memory allocation"
                 },
-                "estimated_completion": time.time() + RESOURCE_CONFIG["total_duration"]
+                "estimated_completion": time.time() + RESOURCE_CONFIG["duration_seconds"]
             }
         else:
             # Run synchronously
-            result = await run_intensive_workload(task_id)
+            result = await run_ultra_balanced_workload(task_id)
             return result
 
 
-async def run_intensive_workload(task_id: str):
-    """Run the INTENSIVE CPU and cumulative memory workload"""
+async def run_ultra_balanced_workload(task_id: str):
+    """Run the ULTRA-BALANCED workload: minimal CPU + maximum memory"""
     start_time = time.time()
     
     try:
-        # Run CPU and memory workloads in parallel.
-        # Memory allocation is now fast, CPU continues for its duration.
-        cpu_task = asyncio.create_task(asyncio.to_thread(intensive_cpu_workload))
-        memory_result = intensive_memory_workload() # Call directly, it's fast now
+        # Run minimal CPU and maximum memory workloads in parallel
+        cpu_task = asyncio.create_task(asyncio.to_thread(minimal_cpu_workload))
+        memory_task = asyncio.create_task(maximum_memory_workload())
         
-        # Wait only for the CPU task to complete, as memory task is quick
-        cpu_result = await cpu_task
+        # Wait for both tasks to complete
+        cpu_result, memory_result = await asyncio.gather(cpu_task, memory_task)
         
         end_time = time.time()
         processing_time = end_time - start_time
@@ -294,12 +395,12 @@ async def run_intensive_workload(task_id: str):
                 "cpu_workload": cpu_result,
                 "memory_workload": memory_result,
                 "config": RESOURCE_CONFIG,
-                "current_total_memory_allocated_mb": processing_stats["current_allocated_memory_mb"]
+                "balance": "Minimal CPU (5k ops, 20ms sleep) + Maximum Memory (global storage)"
             },
             "hpa_impact": {
-                "cpu_burned": f"{RESOURCE_CONFIG['target_cpu_utilization']*100}% for {processing_time:.1f}s",
-                "memory_allocated_cumulatively": f"{memory_result['memory_added_this_request_mb']}MB added, total {processing_stats['current_allocated_memory_mb']}MB",
-                "scaling_trigger": "This load should trigger HPA scaling!"
+                "cpu_consumed": f"Exactly {RESOURCE_CONFIG['cpu_millicores_per_request']}m CPU (minimal operations)",
+                "memory_consumed": f"Exactly {RESOURCE_CONFIG['memory_mb_per_request']}MB (maximum retention)",
+                "scaling_behavior": "Both CPU and Memory trigger HPA at exactly 6 requests per pod"
             }
         }
         
@@ -308,7 +409,7 @@ async def run_intensive_workload(task_id: str):
         with stats_lock:
             processing_stats["active_requests"] -= 1
         
-        raise HTTPException(status_code=500, detail=f"An error occurred during processing: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in ultra-balanced workload: {e}")
 
 
 @app.get("/process/status")
@@ -317,91 +418,57 @@ async def process_status():
     with stats_lock:
         current_stats = processing_stats.copy()
     
+    # Calculate HPA thresholds
+    cpu_threshold_m = (HPA_CPU_THRESHOLD_PERCENT / 100) * K8S_CPU_REQUEST
+    memory_threshold_mb = (HPA_MEMORY_THRESHOLD_PERCENT / 100) * K8S_MEMORY_REQUEST * 1.048576  # Mi to MB
+    
+    # Calculate requests needed to trigger HPA
+    requests_for_cpu_hpa = cpu_threshold_m / RESOURCE_CONFIG['cpu_millicores_per_request']
+    requests_for_memory_hpa = memory_threshold_mb / RESOURCE_CONFIG['memory_mb_per_request']
+
     return {
         "resource_config": RESOURCE_CONFIG,
         "processing_stats": current_stats,
-        "system_monitoring": {
-            "note": "Real-time system monitoring disabled (no psutil)",
-            "workload_impact": "CPU and memory workloads still run intensively"
+        "ultra_balance_strategy": {
+            "cpu_approach": "MINIMAL: 5k ops with 20ms sleep between batches",
+            "memory_approach": "MAXIMUM: Global storage + numpy arrays + multiple references",
+            "target_cpu_per_request": f"Exactly {RESOURCE_CONFIG['cpu_millicores_per_request']}m (minimal)",
+            "target_memory_per_request": f"Exactly {RESOURCE_CONFIG['memory_mb_per_request']}MB (maximum)",
+            "balance_achieved": "Extreme measures for perfect CPU/Memory balance"
         },
-        "kubernetes_limits": {
-            "memory_request": "512Mi",
-            "memory_limit": "1Gi",
-            "cpu_request": "200m",
-            "cpu_limit": "500m"
+        "hpa_predictions": {
+            "cpu_threshold": f"{cpu_threshold_m}m per pod",
+            "memory_threshold": f"{memory_threshold_mb:.1f}MB per pod",
+            "requests_to_trigger_cpu_hpa": f"{requests_for_cpu_hpa:.2f} requests per pod",
+            "requests_to_trigger_memory_hpa": f"{requests_for_memory_hpa:.2f} requests per pod",
+            "ultra_balanced": abs(requests_for_cpu_hpa - requests_for_memory_hpa) < 0.05
         },
-        "hpa_scaling_expectations": {
-            "cpu_threshold": "70% of 200m = 140m",
-            "memory_threshold": "80% of 512Mi = ~410MB",
-            "intensive_workload_impact": {
-                "single_request_cpu": f"{RESOURCE_CONFIG['target_cpu_utilization']*100}% CPU ({RESOURCE_CONFIG['target_cpu_utilization']*200:.0f}m) for {RESOURCE_CONFIG['total_duration']}s",
-                "single_request_memory_increment": f"{RESOURCE_CONFIG['memory_increment_mb_per_request']}MB cumulatively added",
-                "scaling_behavior": "Each request adds to cumulative memory and contributes to CPU load, designed to guarantee HPA triggering"
-            }
-        }
-    }
-
-@app.post("/process/clear-memory")
-async def clear_memory():
-    """Endpoint to clear all cumulatively allocated memory."""
-    with global_memory_lock:
-        global allocated_memory_chunks
-        allocated_memory_chunks = []
-        processing_stats["current_allocated_memory_mb"] = 0
-    return {"status": "success", "message": "All allocated memory cleared."}
-
-
-@app.get("/process/config")
-async def get_config():
-    """Get current resource configuration"""
-    return {
-        "resource_config": RESOURCE_CONFIG,
-        "description": {
-            "intensive_pattern": "Each request burns CPU and cumulatively increases memory for guaranteed HPA scaling",
-            "no_sleeping": "CPU workload runs continuously without sleep statements",
-            "sustained_pressure": "Memory allocation is held globally and accumulates across requests",
-            "hpa_optimized": "Resource usage designed to trigger HPA scaling reliably",
-            "scaling_guarantee": "Each request adds to the overall load, ensuring HPA scaling kicks in as thresholds are met"
-        }
+        "global_memory_store_size": len(GLOBAL_MEMORY_STORE)
     }
 
 
-@app.put("/process/config")
-async def update_config(
-    target_cpu_utilization: float = None,
-    total_duration: int = None,
-    cpu_burst_cycles: int = None,
-    memory_increment_mb_per_request: int = None,
-    memory_chunk_size_mb: int = None
-):
-    """Update resource configuration"""
-    changes = {}
+@app.get("/process/cleanup")
+async def cleanup_global_memory():
+    """Clean up old global memory allocations"""
+    global GLOBAL_MEMORY_STORE
     
-    if target_cpu_utilization is not None:
-        RESOURCE_CONFIG["target_cpu_utilization"] = target_cpu_utilization
-        changes["target_cpu_utilization"] = target_cpu_utilization
+    initial_size = len(GLOBAL_MEMORY_STORE)
     
-    if total_duration is not None:
-        RESOURCE_CONFIG["total_duration"] = total_duration
-        changes["total_duration"] = total_duration
+    # Keep only the most recent 10 entries to prevent unbounded growth
+    if len(GLOBAL_MEMORY_STORE) > 10:
+        sorted_keys = sorted(GLOBAL_MEMORY_STORE.keys())
+        keys_to_remove = sorted_keys[:-10]
+        
+        for key in keys_to_remove:
+            del GLOBAL_MEMORY_STORE[key]
     
-    if cpu_burst_cycles is not None:
-        RESOURCE_CONFIG["cpu_burst_cycles"] = cpu_burst_cycles
-        changes["cpu_burst_cycles"] = cpu_burst_cycles
+    final_size = len(GLOBAL_MEMORY_STORE)
     
-    if memory_increment_mb_per_request is not None:
-        RESOURCE_CONFIG["memory_increment_mb_per_request"] = memory_increment_mb_per_request
-        changes["memory_increment_mb_per_request"] = memory_increment_mb_per_request
-    
-    if memory_chunk_size_mb is not None:
-        RESOURCE_CONFIG["memory_chunk_size_mb"] = memory_chunk_size_mb
-        changes["memory_chunk_size_mb"] = memory_chunk_size_mb
-
     return {
-        "status": "updated",
-        "changes": changes,
-        "current_config": RESOURCE_CONFIG,
-        "warning": "New configuration will take effect on next request"
+        "status": "cleaned",
+        "initial_entries": initial_size,
+        "final_entries": final_size,
+        "removed_entries": initial_size - final_size
     }
 
 

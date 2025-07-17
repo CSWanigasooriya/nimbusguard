@@ -446,7 +446,7 @@ test-dqn-baseline: ## Run DQN test with identical deterministic load
 	@echo "🧠 Starting DQN test with identical deterministic load..."
 	kubectl delete jobs --all -n nimbusguard --ignore-not-found=true
 	kubectl delete hpa --all -n nimbusguard --ignore-not-found=true
-	kubectl scale deployment consumer --replicas=1 -n nimbusguard
+	kubectl scale deployment consumer --replicas=2 -n nimbusguard
 	kubectl apply -k kubernetes-manifests/overlays/development/
 	sleep 30  # Wait for DQN to initialize
 	kubectl apply -f kubernetes-manifests/components/load-generator/job-comparison-baseline.yaml -n nimbusguard
