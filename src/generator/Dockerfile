@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY . .
 
 # Make scripts executable
-RUN chmod +x load_generator.py quick_test.py
+RUN chmod +x load_generator.py
 
 # Default entrypoint
 ENTRYPOINT ["python", "load_generator.py"] 
