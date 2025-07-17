@@ -53,10 +53,10 @@ FastAPIInstrumentor.instrument_app(app)
 
 # INTENSIVE resource configuration for reliable HPA scaling
 RESOURCE_CONFIG = {
-    "target_cpu_utilization": 0.8,  # 80% CPU utilization to guarantee scaling per request
-    "total_duration": 15,           # Duration for which CPU and newly allocated memory are active per request
+    "target_cpu_utilization": 0.35,  # Adjusted to 35% CPU utilization per request (approx 70m CPU for 200m limit)
+    "total_duration": 15,           # Duration for which CPU workload is active per request
     "cpu_burst_cycles": 1000000,    # 1M operations per burst for CPU workload
-    "memory_increment_mb_per_request": 50, # Each request adds this much memory cumulatively
+    "memory_increment_mb_per_request": 205, # Adjusted memory increment per request to 205MB
     "memory_chunk_size_mb": 10      # Internal chunk size for memory allocation
 }
 
@@ -146,17 +146,13 @@ def intensive_memory_workload():
     """
     INTENSIVE memory workload that cumulatively allocates memory.
     Each call to this function will add `memory_increment_mb_per_request` to the global memory pool.
-    The allocated memory is kept active for the `total_duration` of the request.
+    The allocated memory is held globally, independent of the request's duration.
     """
     with tracer.start_as_current_span("intensive_memory_workload") as span:
-        start_time = time.time()
-        
         memory_to_add_mb = RESOURCE_CONFIG["memory_increment_mb_per_request"]
         chunk_size_mb = RESOURCE_CONFIG["memory_chunk_size_mb"]
         chunks_to_add = memory_to_add_mb // chunk_size_mb
         
-        newly_allocated_chunks = []
-
         with global_memory_lock:
             for i in range(chunks_to_add):
                 # Create chunk of actual data (not just references)
@@ -167,7 +163,6 @@ def intensive_memory_workload():
                     chunk[j:j+1024] = b'x' * 1024
                 
                 allocated_memory_chunks.append(chunk)
-                newly_allocated_chunks.append(chunk) # Keep track of newly added for this request
                 
                 # Update current allocated memory stats
                 processing_stats["current_allocated_memory_mb"] += chunk_size_mb
@@ -177,32 +172,22 @@ def intensive_memory_workload():
         span.set_attribute("memory_added_this_request_mb", memory_to_add_mb)
         span.set_attribute("total_allocated_memory_mb", processing_stats["current_allocated_memory_mb"])
         
-        # Keep ALL allocated memory (global_memory_chunks) actively used for the full duration
-        # This ensures the HPA sees the cumulative memory usage
-        while time.time() - start_time < RESOURCE_CONFIG["total_duration"]:
-            # Actively access a random subset of the global memory chunks to prevent swapping/optimization
-            with global_memory_lock:
-                if allocated_memory_chunks:
-                    # Access a few random chunks to keep them hot
-                    for _ in range(min(5, len(allocated_memory_chunks))): # Access up to 5 chunks
-                        chunk_to_access = random.choice(allocated_memory_chunks)
-                        # Modify some bytes to keep memory active
-                        for j in range(0, len(chunk_to_access), 10000):
-                            chunk_to_access[j] = (chunk_to_access[j] + 1) % 256
-            
-            # Brief pause to prevent 100% CPU usage in memory thread
-            time.sleep(0.01)
+        # Actively access a random subset of the global memory chunks to prevent swapping/optimization
+        # This part now runs briefly as part of the allocation, not for 'total_duration'
+        with global_memory_lock:
+            if allocated_memory_chunks:
+                # Access a few random chunks to keep them hot
+                for _ in range(min(5, len(allocated_memory_chunks))): # Access up to 5 chunks
+                    chunk_to_access = random.choice(allocated_memory_chunks)
+                    # Modify some bytes to keep memory active
+                    for j in range(0, len(chunk_to_access), 10000):
+                        chunk_to_access[j] = (chunk_to_access[j] + 1) % 256
         
-        end_time = time.time()
-        actual_duration = end_time - start_time
-        
-        span.set_attribute("actual_duration", actual_duration)
-        
+        # The memory workload returns immediately after allocation and brief access
         return {
             "memory_added_this_request_mb": memory_to_add_mb,
             "total_allocated_memory_mb": processing_stats["current_allocated_memory_mb"],
             "chunks_added_this_request": chunks_to_add,
-            "actual_duration": actual_duration,
             "estimated_memory_usage": f"{memory_to_add_mb}MB added, total {processing_stats['current_allocated_memory_mb']}MB"
         }
 
@@ -234,9 +219,10 @@ async def process_load(
     INTENSIVE processing endpoint that GUARANTEES resource usage for HPA scaling.
     
     This endpoint will:
-    - BURN CPU at 80% utilization for `total_duration` seconds per request.
+    - BURN CPU at 50% utilization for `total_duration` seconds per request.
     - CUMULATIVELY ALLOCATE `memory_increment_mb_per_request` memory per request.
-      This memory is retained by the service, causing its overall footprint to grow.
+      This memory is retained by the service, causing its overall footprint to grow,
+      independent of the CPU workload duration.
     - Use sustained resource pressure to trigger HPA scaling.
     """
     
@@ -261,7 +247,7 @@ async def process_load(
                 "resource_pattern": {
                     "cpu_utilization_per_request": f"{RESOURCE_CONFIG['target_cpu_utilization']*100}% for {RESOURCE_CONFIG['total_duration']}s",
                     "memory_increment_per_request_mb": RESOURCE_CONFIG["memory_increment_mb_per_request"],
-                    "total_duration_seconds": RESOURCE_CONFIG["total_duration"],
+                    "total_duration_seconds_for_cpu": RESOURCE_CONFIG["total_duration"],
                     "warning": "This will consume significant CPU and cumulatively increase memory!"
                 },
                 "estimated_completion": time.time() + RESOURCE_CONFIG["total_duration"]
@@ -277,12 +263,13 @@ async def run_intensive_workload(task_id: str):
     start_time = time.time()
     
     try:
-        # Run CPU and memory workloads in parallel - both intensive!
+        # Run CPU and memory workloads in parallel.
+        # Memory allocation is now fast, CPU continues for its duration.
         cpu_task = asyncio.create_task(asyncio.to_thread(intensive_cpu_workload))
-        memory_task = asyncio.create_task(asyncio.to_thread(intensive_memory_workload))
+        memory_result = intensive_memory_workload() # Call directly, it's fast now
         
-        # Wait for both tasks to complete
-        cpu_result, memory_result = await asyncio.gather(cpu_task, memory_task)
+        # Wait only for the CPU task to complete, as memory task is quick
+        cpu_result = await cpu_task
         
         end_time = time.time()
         processing_time = end_time - start_time
@@ -372,7 +359,7 @@ async def get_config():
         "description": {
             "intensive_pattern": "Each request burns CPU and cumulatively increases memory for guaranteed HPA scaling",
             "no_sleeping": "CPU workload runs continuously without sleep statements",
-            "sustained_pressure": "Memory allocation is kept active for the full duration and accumulates across requests",
+            "sustained_pressure": "Memory allocation is held globally and accumulates across requests",
             "hpa_optimized": "Resource usage designed to trigger HPA scaling reliably",
             "scaling_guarantee": "Each request adds to the overall load, ensuring HPA scaling kicks in as thresholds are met"
         }
@@ -384,8 +371,8 @@ async def update_config(
     target_cpu_utilization: float = None,
     total_duration: int = None,
     cpu_burst_cycles: int = None,
-    memory_increment_mb_per_request: int = None, # Changed parameter name
-    memory_chunk_size_mb: int = None # New parameter
+    memory_increment_mb_per_request: int = None,
+    memory_chunk_size_mb: int = None
 ):
     """Update resource configuration"""
     changes = {}
@@ -402,11 +389,11 @@ async def update_config(
         RESOURCE_CONFIG["cpu_burst_cycles"] = cpu_burst_cycles
         changes["cpu_burst_cycles"] = cpu_burst_cycles
     
-    if memory_increment_mb_per_request is not None: # Changed parameter name
+    if memory_increment_mb_per_request is not None:
         RESOURCE_CONFIG["memory_increment_mb_per_request"] = memory_increment_mb_per_request
         changes["memory_increment_mb_per_request"] = memory_increment_mb_per_request
     
-    if memory_chunk_size_mb is not None: # New parameter update
+    if memory_chunk_size_mb is not None:
         RESOURCE_CONFIG["memory_chunk_size_mb"] = memory_chunk_size_mb
         changes["memory_chunk_size_mb"] = memory_chunk_size_mb
 
