@@ -6,12 +6,11 @@ import math
 import threading
 from typing import Dict, List
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
-from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -44,25 +43,27 @@ tracer = setup_tracing()
 
 app = FastAPI(
     title="NimbusGuard Consumer",
-    description="A consumer service with fixed resource usage patterns",
+    description="A consumer service with INTENSE resource usage patterns for HPA testing",
     version="1.0.0"
 )
 
 # Initialize instrumentation
 Instrumentator().instrument(app).expose(app)
 FastAPIInstrumentor.instrument_app(app)
-RequestsInstrumentor().instrument()
-URLLib3Instrumentor().instrument()
 
-# Fixed resource configuration optimized for high-concurrency load testing
-# Designed for 10-30 concurrent requests with multiple pods
+# INTENSIVE resource configuration for reliable HPA scaling
 RESOURCE_CONFIG = {
-    "target_memory_mb": 80,   # Target ~80MB (allows 5-6 requests per pod before hitting limits)
-    "target_cpu_cores": 0.04, # Target ~40m (allows 5-6 requests per pod before hitting limits)
-    "ramp_up_duration": 10,   # 10 seconds to reach target
-    "sustain_duration": 20,   # 20 seconds at target
-    "ramp_down_duration": 5,  # 5 seconds to ramp down
+    "target_cpu_utilization": 0.8,  # 80% CPU utilization to guarantee scaling per request
+    "total_duration": 15,           # Duration for which CPU and newly allocated memory are active per request
+    "cpu_burst_cycles": 1000000,    # 1M operations per burst for CPU workload
+    "memory_increment_mb_per_request": 50, # Each request adds this much memory cumulatively
+    "memory_chunk_size_mb": 10      # Internal chunk size for memory allocation
 }
+
+# Global list to hold allocated memory chunks for cumulative memory usage
+# This will cause the service's memory footprint to grow over time
+allocated_memory_chunks: List[bytearray] = []
+global_memory_lock = threading.Lock() # Lock for accessing allocated_memory_chunks
 
 # Processing stats
 processing_stats = {
@@ -70,144 +71,146 @@ processing_stats = {
     "active_requests": 0,
     "completed_requests": 0,
     "average_duration": 0,
-    "peak_memory_mb": 0,
-    "peak_cpu_usage": 0,
+    "peak_cpu_percent": 0,
+    "current_allocated_memory_mb": 0, # Tracks cumulative memory
+    "peak_memory_mb": 0, # Peak observed cumulative memory
 }
 
 # Thread-safe counter for active requests
 stats_lock = threading.Lock()
 
 
-def fixed_cpu_workload():
+def intensive_cpu_workload():
     """
-    Fixed CPU workload that gradually increases to target CPU usage
-    Uses mathematical calculations to consume CPU predictably
+    INTENSIVE CPU workload that actually consumes CPU consistently for the configured duration.
+    No sleeping - pure CPU burning for sustained resource pressure.
+    Each concurrent request will add to the overall CPU utilization.
     """
-    with tracer.start_as_current_span("fixed_cpu_workload") as span:
-        total_duration = (RESOURCE_CONFIG["ramp_up_duration"] + 
-                         RESOURCE_CONFIG["sustain_duration"] + 
-                         RESOURCE_CONFIG["ramp_down_duration"])
-        
-        span.set_attribute("total_duration", total_duration)
-        span.set_attribute("target_cpu_cores", RESOURCE_CONFIG["target_cpu_cores"])
-        
+    with tracer.start_as_current_span("intensive_cpu_workload") as span:
         start_time = time.time()
-        calculations_done = 0
+        total_operations = 0
         
-        while time.time() - start_time < total_duration:
-            current_time = time.time() - start_time
-            
-            # Calculate target CPU intensity based on phase
-            if current_time < RESOURCE_CONFIG["ramp_up_duration"]:
-                # Ramp up phase
-                progress = current_time / RESOURCE_CONFIG["ramp_up_duration"]
-                cpu_intensity = progress * RESOURCE_CONFIG["target_cpu_cores"]
-                phase = "ramp_up"
-            elif current_time < RESOURCE_CONFIG["ramp_up_duration"] + RESOURCE_CONFIG["sustain_duration"]:
-                # Sustain phase
-                cpu_intensity = RESOURCE_CONFIG["target_cpu_cores"]
-                phase = "sustain"
-            else:
-                # Ramp down phase
-                ramp_down_start = RESOURCE_CONFIG["ramp_up_duration"] + RESOURCE_CONFIG["sustain_duration"]
-                progress = (current_time - ramp_down_start) / RESOURCE_CONFIG["ramp_down_duration"]
-                cpu_intensity = RESOURCE_CONFIG["target_cpu_cores"] * (1 - progress)
-                phase = "ramp_down"
-            
-            span.set_attribute("current_phase", phase)
-            span.set_attribute("cpu_intensity", cpu_intensity)
-            
-            # Adjust work based on CPU intensity
-            work_cycles = int(cpu_intensity * 100000)  # Scale work to CPU target
-            
-            # Do mathematical work to consume CPU
-            for _ in range(work_cycles):
-                # Mix of different CPU operations
-                result = math.sin(random.random()) * math.cos(random.random())
-                result = math.sqrt(abs(result * 1000))
+        span.set_attribute("target_cpu_utilization", RESOURCE_CONFIG["target_cpu_utilization"])
+        span.set_attribute("total_duration", RESOURCE_CONFIG["total_duration"])
+        
+        # Continuous CPU burning for the entire duration
+        while time.time() - start_time < RESOURCE_CONFIG["total_duration"]:
+            # Burst of intensive operations
+            for _ in range(RESOURCE_CONFIG["cpu_burst_cycles"]):
+                # Mix of CPU-intensive operations (NO SLEEP!)
+                x = random.random() * 1000
+                result = math.sin(x) * math.cos(x)
+                result = math.sqrt(abs(result))
                 result = math.log(result + 1) if result > 0 else 0
-                calculations_done += 1
-            
-            # Brief pause between cycles (realistic for I/O or coordination)
-            time.sleep(0.1)
+                result = math.pow(result, 2)
+                
+                # Additional CPU work - string operations
+                temp_str = str(result) * 100
+                temp_str = temp_str.upper().lower()
+                
+                # Numeric operations
+                for i in range(10):
+                    temp_num = result * i + math.pi
+                    temp_num = temp_num / (i + 1)
+                
+                total_operations += 1
+                
+                # Brief check if we should continue (every 10k operations)
+                if total_operations % 10000 == 0:
+                    if time.time() - start_time >= RESOURCE_CONFIG["total_duration"]:
+                        break
         
-        span.set_attribute("total_calculations", calculations_done)
-        return calculations_done
+        end_time = time.time()
+        actual_duration = end_time - start_time
+        
+        # Update peak CPU stats (estimated)
+        estimated_cpu_usage = min(100, RESOURCE_CONFIG["target_cpu_utilization"] * 100)
+        with stats_lock:
+            if estimated_cpu_usage > processing_stats["peak_cpu_percent"]:
+                processing_stats["peak_cpu_percent"] = estimated_cpu_usage
+        
+        span.set_attribute("total_operations", total_operations)
+        span.set_attribute("actual_duration", actual_duration)
+        span.set_attribute("estimated_cpu_usage", estimated_cpu_usage)
+        span.set_attribute("operations_per_second", total_operations / actual_duration)
+        
+        return {
+            "total_operations": total_operations,
+            "actual_duration": actual_duration,
+            "estimated_cpu_usage": estimated_cpu_usage,
+            "operations_per_second": total_operations / actual_duration
+        }
 
 
-def fixed_memory_workload():
+def intensive_memory_workload():
     """
-    Fixed memory workload that gradually increases to target memory usage
-    Uses data structures that predictably consume memory
+    INTENSIVE memory workload that cumulatively allocates memory.
+    Each call to this function will add `memory_increment_mb_per_request` to the global memory pool.
+    The allocated memory is kept active for the `total_duration` of the request.
     """
-    with tracer.start_as_current_span("fixed_memory_workload") as span:
-        total_duration = (RESOURCE_CONFIG["ramp_up_duration"] + 
-                         RESOURCE_CONFIG["sustain_duration"] + 
-                         RESOURCE_CONFIG["ramp_down_duration"])
-        
-        span.set_attribute("total_duration", total_duration)
-        span.set_attribute("target_memory_mb", RESOURCE_CONFIG["target_memory_mb"])
-        
-        # Memory storage - will be automatically GC'd when function exits
-        memory_data: List[List[str]] = []
+    with tracer.start_as_current_span("intensive_memory_workload") as span:
         start_time = time.time()
         
-        # Calculate total memory needed upfront (more realistic)
-        target_memory_mb = RESOURCE_CONFIG["target_memory_mb"]
-        total_chunks_needed = target_memory_mb  # 1MB per chunk
+        memory_to_add_mb = RESOURCE_CONFIG["memory_increment_mb_per_request"]
+        chunk_size_mb = RESOURCE_CONFIG["memory_chunk_size_mb"]
+        chunks_to_add = memory_to_add_mb // chunk_size_mb
         
-        # Allocate memory in phases based on timing
-        while time.time() - start_time < total_duration:
-            current_time = time.time() - start_time
-            
-            # Calculate how much memory we should have allocated by now
-            if current_time < RESOURCE_CONFIG["ramp_up_duration"]:
-                # Ramp up phase
-                progress = current_time / RESOURCE_CONFIG["ramp_up_duration"]
-                target_chunks = int(progress * total_chunks_needed)
-                phase = "ramp_up"
-            elif current_time < RESOURCE_CONFIG["ramp_up_duration"] + RESOURCE_CONFIG["sustain_duration"]:
-                # Sustain phase
-                target_chunks = total_chunks_needed
-                phase = "sustain"
-            else:
-                # Ramp down phase - but don't actively free memory (unrealistic)
-                # Real apps don't monitor and free memory dynamically
-                target_chunks = total_chunks_needed
-                phase = "ramp_down"
-            
-            span.set_attribute("current_phase", phase)
-            span.set_attribute("target_chunks", target_chunks)
-            
-            # Allocate memory if we need more (realistic behavior)
-            while len(memory_data) < target_chunks:
-                # Create 1MB chunks (realistic data processing)
-                chunk = ['x' * 1024 for _ in range(1024)]  # 1MB of data
-                memory_data.append(chunk)
-            
-            # Update peak memory tracking
-            current_memory_mb = len(memory_data)
-            with stats_lock:
-                if current_memory_mb > processing_stats["peak_memory_mb"]:
-                    processing_stats["peak_memory_mb"] = current_memory_mb
-            
-            # Process/work with the data (realistic pause)
-            time.sleep(0.1)
+        newly_allocated_chunks = []
+
+        with global_memory_lock:
+            for i in range(chunks_to_add):
+                # Create chunk of actual data (not just references)
+                chunk = bytearray(chunk_size_mb * 1024 * 1024)
+                
+                # Fill with actual data to prevent optimization
+                for j in range(0, len(chunk), 1024):
+                    chunk[j:j+1024] = b'x' * 1024
+                
+                allocated_memory_chunks.append(chunk)
+                newly_allocated_chunks.append(chunk) # Keep track of newly added for this request
+                
+                # Update current allocated memory stats
+                processing_stats["current_allocated_memory_mb"] += chunk_size_mb
+                if processing_stats["current_allocated_memory_mb"] > processing_stats["peak_memory_mb"]:
+                    processing_stats["peak_memory_mb"] = processing_stats["current_allocated_memory_mb"]
+
+        span.set_attribute("memory_added_this_request_mb", memory_to_add_mb)
+        span.set_attribute("total_allocated_memory_mb", processing_stats["current_allocated_memory_mb"])
         
-        # Memory will be automatically garbage collected when function exits
-        data_chunks = len(memory_data)
-        estimated_mb = sum(len(chunk) for chunk in memory_data) / (1024 * 1024)
+        # Keep ALL allocated memory (global_memory_chunks) actively used for the full duration
+        # This ensures the HPA sees the cumulative memory usage
+        while time.time() - start_time < RESOURCE_CONFIG["total_duration"]:
+            # Actively access a random subset of the global memory chunks to prevent swapping/optimization
+            with global_memory_lock:
+                if allocated_memory_chunks:
+                    # Access a few random chunks to keep them hot
+                    for _ in range(min(5, len(allocated_memory_chunks))): # Access up to 5 chunks
+                        chunk_to_access = random.choice(allocated_memory_chunks)
+                        # Modify some bytes to keep memory active
+                        for j in range(0, len(chunk_to_access), 10000):
+                            chunk_to_access[j] = (chunk_to_access[j] + 1) % 256
+            
+            # Brief pause to prevent 100% CPU usage in memory thread
+            time.sleep(0.01)
         
-        span.set_attribute("final_data_chunks", data_chunks)
-        span.set_attribute("estimated_final_mb", estimated_mb)
+        end_time = time.time()
+        actual_duration = end_time - start_time
         
-        return data_chunks
+        span.set_attribute("actual_duration", actual_duration)
+        
+        return {
+            "memory_added_this_request_mb": memory_to_add_mb,
+            "total_allocated_memory_mb": processing_stats["current_allocated_memory_mb"],
+            "chunks_added_this_request": chunks_to_add,
+            "actual_duration": actual_duration,
+            "estimated_memory_usage": f"{memory_to_add_mb}MB added, total {processing_stats['current_allocated_memory_mb']}MB"
+        }
 
 
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"message": "Welcome to NimbusGuard Consumer with Fixed Resources!"}
+    return {"message": "Welcome to NimbusGuard Consumer with INTENSIVE Resource Usage!"}
 
 
 @app.get("/health")
@@ -228,21 +231,13 @@ async def process_load(
     async_mode: bool = False
 ):
     """
-    Process endpoint optimized for high-concurrency load testing (10-30+ requests)
+    INTENSIVE processing endpoint that GUARANTEES resource usage for HPA scaling.
     
     This endpoint will:
-    - Gradually ramp up CPU usage to ~40m per request over 10 seconds
-    - Gradually ramp up memory usage to ~80MB per request over 10 seconds  
-    - Sustain usage for 20 seconds 
-    - Ramp down over 5 seconds
-    - Total duration: ~35 seconds
-    
-    High-Concurrency Load Testing:
-    - 1-3 requests: Below HPA thresholds (no scaling)
-    - 4-5 requests: Triggers HPA scaling (CPU > 140m, Memory > 410MB)
-    - 5-6 requests per pod: Approaches pod limits (200m CPU, 512MB memory)
-    - 10-30+ requests: Distributed across multiple pods via HPA
-    - Each pod can handle ~5-6 concurrent requests before needing to scale
+    - BURN CPU at 80% utilization for `total_duration` seconds per request.
+    - CUMULATIVELY ALLOCATE `memory_increment_mb_per_request` memory per request.
+      This memory is retained by the service, causing its overall footprint to grow.
+    - Use sustained resource pressure to trigger HPA scaling.
     """
     
     with tracer.start_as_current_span("process_load_endpoint") as span:
@@ -255,44 +250,36 @@ async def process_load(
             processing_stats["total_requests"] += 1
             processing_stats["active_requests"] += 1
         
-        total_duration = (RESOURCE_CONFIG["ramp_up_duration"] + 
-                         RESOURCE_CONFIG["sustain_duration"] + 
-                         RESOURCE_CONFIG["ramp_down_duration"])
-        
         if async_mode:
             # Run in background
-            background_tasks.add_task(run_fixed_workload, task_id)
+            background_tasks.add_task(run_intensive_workload, task_id)
             
             return {
                 "status": "started",
                 "task_id": task_id,
-                "message": "Fixed resource workload started in background",
+                "message": "INTENSIVE resource workload started in background",
                 "resource_pattern": {
-                    "target_memory_mb": RESOURCE_CONFIG["target_memory_mb"],
-                    "target_cpu_cores": RESOURCE_CONFIG["target_cpu_cores"],
-                    "total_duration_seconds": total_duration,
-                    "phases": {
-                        "ramp_up": RESOURCE_CONFIG["ramp_up_duration"],
-                        "sustain": RESOURCE_CONFIG["sustain_duration"],
-                        "ramp_down": RESOURCE_CONFIG["ramp_down_duration"]
-                    }
+                    "cpu_utilization_per_request": f"{RESOURCE_CONFIG['target_cpu_utilization']*100}% for {RESOURCE_CONFIG['total_duration']}s",
+                    "memory_increment_per_request_mb": RESOURCE_CONFIG["memory_increment_mb_per_request"],
+                    "total_duration_seconds": RESOURCE_CONFIG["total_duration"],
+                    "warning": "This will consume significant CPU and cumulatively increase memory!"
                 },
-                "estimated_completion": time.time() + total_duration
+                "estimated_completion": time.time() + RESOURCE_CONFIG["total_duration"]
             }
         else:
             # Run synchronously
-            result = await run_fixed_workload(task_id)
+            result = await run_intensive_workload(task_id)
             return result
 
 
-async def run_fixed_workload(task_id: str):
-    """Run the fixed CPU and memory workload"""
+async def run_intensive_workload(task_id: str):
+    """Run the INTENSIVE CPU and cumulative memory workload"""
     start_time = time.time()
     
     try:
-        # Run CPU and memory workloads in parallel
-        cpu_task = asyncio.create_task(asyncio.to_thread(fixed_cpu_workload))
-        memory_task = asyncio.create_task(asyncio.to_thread(fixed_memory_workload))
+        # Run CPU and memory workloads in parallel - both intensive!
+        cpu_task = asyncio.create_task(asyncio.to_thread(intensive_cpu_workload))
+        memory_task = asyncio.create_task(asyncio.to_thread(intensive_memory_workload))
         
         # Wait for both tasks to complete
         cpu_result, memory_result = await asyncio.gather(cpu_task, memory_task)
@@ -317,15 +304,15 @@ async def run_fixed_workload(task_id: str):
             "task_id": task_id,
             "processing_time_seconds": round(processing_time, 2),
             "resource_usage": {
-                "cpu_calculations": cpu_result,
-                "memory_chunks_created": memory_result,
-                "target_memory_mb": RESOURCE_CONFIG["target_memory_mb"],
-                "target_cpu_cores": RESOURCE_CONFIG["target_cpu_cores"]
+                "cpu_workload": cpu_result,
+                "memory_workload": memory_result,
+                "config": RESOURCE_CONFIG,
+                "current_total_memory_allocated_mb": processing_stats["current_allocated_memory_mb"]
             },
-            "phases_completed": {
-                "ramp_up": RESOURCE_CONFIG["ramp_up_duration"],
-                "sustain": RESOURCE_CONFIG["sustain_duration"], 
-                "ramp_down": RESOURCE_CONFIG["ramp_down_duration"]
+            "hpa_impact": {
+                "cpu_burned": f"{RESOURCE_CONFIG['target_cpu_utilization']*100}% for {processing_time:.1f}s",
+                "memory_allocated_cumulatively": f"{memory_result['memory_added_this_request_mb']}MB added, total {processing_stats['current_allocated_memory_mb']}MB",
+                "scaling_trigger": "This load should trigger HPA scaling!"
             }
         }
         
@@ -334,7 +321,7 @@ async def run_fixed_workload(task_id: str):
         with stats_lock:
             processing_stats["active_requests"] -= 1
         
-        raise e
+        raise HTTPException(status_code=500, detail=f"An error occurred during processing: {e}")
 
 
 @app.get("/process/status")
@@ -346,36 +333,35 @@ async def process_status():
     return {
         "resource_config": RESOURCE_CONFIG,
         "processing_stats": current_stats,
+        "system_monitoring": {
+            "note": "Real-time system monitoring disabled (no psutil)",
+            "workload_impact": "CPU and memory workloads still run intensively"
+        },
         "kubernetes_limits": {
             "memory_request": "512Mi",
-            "memory_limit": "1Gi", 
+            "memory_limit": "1Gi",
             "cpu_request": "200m",
             "cpu_limit": "500m"
         },
-        "resource_utilization": {
-            "memory_target_vs_request": f"{RESOURCE_CONFIG['target_memory_mb']}MB / 512MB",
-            "cpu_target_vs_request": f"{RESOURCE_CONFIG['target_cpu_cores']} / 0.2 cores",
-            "memory_utilization_percent": round((RESOURCE_CONFIG["target_memory_mb"] / 512) * 100, 1),
-            "cpu_utilization_percent": round((RESOURCE_CONFIG["target_cpu_cores"] / 0.2) * 100, 1),
-            "hpa_scaling_behavior": {
-                "cpu_threshold": "70% of 200m = 140m (0.14 cores)",
-                "memory_threshold": "80% of 512Mi = ~410MB",
-                "requests_to_trigger_hpa": {
-                    "cpu_scaling": max(1, round(0.14 / RESOURCE_CONFIG['target_cpu_cores'])),
-                    "memory_scaling": max(1, round(410 / RESOURCE_CONFIG['target_memory_mb']))
-                },
-                "requests_per_pod_limit": {
-                    "cpu_limit": max(1, round(0.2 / RESOURCE_CONFIG['target_cpu_cores'])),
-                    "memory_limit": max(1, round(512 / RESOURCE_CONFIG['target_memory_mb']))
-                },
-                "high_concurrency_scenario": {
-                    "10_requests": "2 pods needed (5 requests per pod)",
-                    "20_requests": "4 pods needed (5 requests per pod)",
-                    "30_requests": "6 pods needed (5 requests per pod)"
-                }
+        "hpa_scaling_expectations": {
+            "cpu_threshold": "70% of 200m = 140m",
+            "memory_threshold": "80% of 512Mi = ~410MB",
+            "intensive_workload_impact": {
+                "single_request_cpu": f"{RESOURCE_CONFIG['target_cpu_utilization']*100}% CPU ({RESOURCE_CONFIG['target_cpu_utilization']*200:.0f}m) for {RESOURCE_CONFIG['total_duration']}s",
+                "single_request_memory_increment": f"{RESOURCE_CONFIG['memory_increment_mb_per_request']}MB cumulatively added",
+                "scaling_behavior": "Each request adds to cumulative memory and contributes to CPU load, designed to guarantee HPA triggering"
             }
         }
     }
+
+@app.post("/process/clear-memory")
+async def clear_memory():
+    """Endpoint to clear all cumulatively allocated memory."""
+    with global_memory_lock:
+        global allocated_memory_chunks
+        allocated_memory_chunks = []
+        processing_stats["current_allocated_memory_mb"] = 0
+    return {"status": "success", "message": "All allocated memory cleared."}
 
 
 @app.get("/process/config")
@@ -384,52 +370,51 @@ async def get_config():
     return {
         "resource_config": RESOURCE_CONFIG,
         "description": {
-            "fixed_pattern": "Each request follows a predictable resource usage pattern optimized for high-concurrency load testing",
-            "ramp_up": "Gradually increases CPU and memory usage to small, predictable levels",
-            "sustain": "Maintains consistent resource usage allowing multiple requests per pod", 
-            "ramp_down": "Gradually decreases resource usage to test scale-down behavior",
-            "auto_gc": "Python automatically garbage collects memory when functions exit",
-            "high_concurrency": "Designed for 10-30+ concurrent requests distributed across multiple pods via HPA",
-            "pod_capacity": "Each pod can handle ~5-6 concurrent requests before approaching resource limits"
+            "intensive_pattern": "Each request burns CPU and cumulatively increases memory for guaranteed HPA scaling",
+            "no_sleeping": "CPU workload runs continuously without sleep statements",
+            "sustained_pressure": "Memory allocation is kept active for the full duration and accumulates across requests",
+            "hpa_optimized": "Resource usage designed to trigger HPA scaling reliably",
+            "scaling_guarantee": "Each request adds to the overall load, ensuring HPA scaling kicks in as thresholds are met"
         }
     }
 
 
 @app.put("/process/config")
 async def update_config(
-    target_memory_mb: int = None,
-    target_cpu_cores: float = None,
-    ramp_up_duration: int = None,
-    sustain_duration: int = None,
-    ramp_down_duration: int = None
+    target_cpu_utilization: float = None,
+    total_duration: int = None,
+    cpu_burst_cycles: int = None,
+    memory_increment_mb_per_request: int = None, # Changed parameter name
+    memory_chunk_size_mb: int = None # New parameter
 ):
-    """Update resource configuration (if needed for testing)"""
+    """Update resource configuration"""
     changes = {}
     
-    if target_memory_mb is not None:
-        RESOURCE_CONFIG["target_memory_mb"] = target_memory_mb
-        changes["target_memory_mb"] = RESOURCE_CONFIG["target_memory_mb"]
+    if target_cpu_utilization is not None:
+        RESOURCE_CONFIG["target_cpu_utilization"] = target_cpu_utilization
+        changes["target_cpu_utilization"] = target_cpu_utilization
     
-    if target_cpu_cores is not None:
-        RESOURCE_CONFIG["target_cpu_cores"] = target_cpu_cores
-        changes["target_cpu_cores"] = RESOURCE_CONFIG["target_cpu_cores"]
+    if total_duration is not None:
+        RESOURCE_CONFIG["total_duration"] = total_duration
+        changes["total_duration"] = total_duration
     
-    if ramp_up_duration is not None:
-        RESOURCE_CONFIG["ramp_up_duration"] = ramp_up_duration
-        changes["ramp_up_duration"] = ramp_up_duration
+    if cpu_burst_cycles is not None:
+        RESOURCE_CONFIG["cpu_burst_cycles"] = cpu_burst_cycles
+        changes["cpu_burst_cycles"] = cpu_burst_cycles
     
-    if sustain_duration is not None:
-        RESOURCE_CONFIG["sustain_duration"] = sustain_duration
-        changes["sustain_duration"] = sustain_duration
+    if memory_increment_mb_per_request is not None: # Changed parameter name
+        RESOURCE_CONFIG["memory_increment_mb_per_request"] = memory_increment_mb_per_request
+        changes["memory_increment_mb_per_request"] = memory_increment_mb_per_request
     
-    if ramp_down_duration is not None:
-        RESOURCE_CONFIG["ramp_down_duration"] = ramp_down_duration
-        changes["ramp_down_duration"] = ramp_down_duration
-    
+    if memory_chunk_size_mb is not None: # New parameter update
+        RESOURCE_CONFIG["memory_chunk_size_mb"] = memory_chunk_size_mb
+        changes["memory_chunk_size_mb"] = memory_chunk_size_mb
+
     return {
         "status": "updated",
         "changes": changes,
-        "current_config": RESOURCE_CONFIG
+        "current_config": RESOURCE_CONFIG,
+        "warning": "New configuration will take effect on next request"
     }
 
 
