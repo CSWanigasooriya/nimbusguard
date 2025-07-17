@@ -1,13 +1,12 @@
 import asyncio
-import gc  # Add garbage collection import
 import os
 import random
-import threading
 import time
-
 import math
-from fastapi import FastAPI, Query, BackgroundTasks
-# OpenTelemetry imports
+import threading
+from typing import Dict, List
+
+from fastapi import FastAPI, BackgroundTasks
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -21,531 +20,419 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 # Initialize OpenTelemetry tracing
 def setup_tracing():
-    # Configure the tracer provider with service information
     resource = Resource(attributes={
         SERVICE_NAME: "nimbusguard-consumer",
         "service.version": "1.0.0",
         "service.namespace": "nimbusguard"
     })
 
-    # Set up trace provider
     trace.set_tracer_provider(TracerProvider(resource=resource))
     tracer = trace.get_tracer(__name__)
 
-    # Configure OTLP exporter (sends traces to Alloy)
     otlp_exporter = OTLPSpanExporter(
         endpoint=os.getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://alloy:4318/v1/traces"),
         headers={}
     )
 
-    # Add span processor
     span_processor = BatchSpanProcessor(otlp_exporter)
     trace.get_tracer_provider().add_span_processor(span_processor)
 
     return tracer
 
 
-# Set up tracing before creating the FastAPI app
 tracer = setup_tracing()
 
-# Create FastAPI instance
 app = FastAPI(
     title="NimbusGuard Consumer",
-    description="A consumer service for NimbusGuard",
+    description="A consumer service with fixed resource usage patterns",
     version="1.0.0"
 )
 
-# Initialize Prometheus metrics instrumentation
+# Initialize instrumentation
 Instrumentator().instrument(app).expose(app)
-
-# Auto-instrument FastAPI for tracing (captures all HTTP requests automatically)
 FastAPIInstrumentor.instrument_app(app)
-
-# Auto-instrument requests library for outbound HTTP calls
 RequestsInstrumentor().instrument()
-
-# Auto-instrument urllib3 for HTTP client calls
 URLLib3Instrumentor().instrument()
 
-# Real-world memory management configuration
-MEMORY_CONFIG = {
-    "auto_cleanup_enabled": True,
-    "default_retention_seconds": int(os.getenv("MEMORY_RETENTION_SECONDS", "60")),  # 1 minute default
-    "cleanup_interval_seconds": int(os.getenv("MEMORY_CLEANUP_INTERVAL", "30")),  # Check every 30s
-    "max_memory_objects": int(os.getenv("MAX_MEMORY_OBJECTS", "100")),  # Limit memory objects
-    "immediate_cleanup_mode": os.getenv("IMMEDIATE_CLEANUP", "true").lower() == "true"  # Real-world default
+# Fixed resource configuration optimized for high-concurrency load testing
+# Designed for 10-30 concurrent requests with multiple pods
+RESOURCE_CONFIG = {
+    "target_memory_mb": 80,   # Target ~80MB (allows 5-6 requests per pod before hitting limits)
+    "target_cpu_cores": 0.04, # Target ~40m (allows 5-6 requests per pod before hitting limits)
+    "ramp_up_duration": 10,   # 10 seconds to reach target
+    "sustain_duration": 20,   # 20 seconds at target
+    "ramp_down_duration": 5,  # 5 seconds to ramp down
 }
 
-# Memory store with automatic cleanup (like real applications)
-memory_store = {}
-memory_stats = {
-    "total_processed": 0,
-    "current_objects": 0,
-    "total_cleaned": 0,
-    "memory_freed_mb": 0
+# Processing stats
+processing_stats = {
+    "total_requests": 0,
+    "active_requests": 0,
+    "completed_requests": 0,
+    "average_duration": 0,
+    "peak_memory_mb": 0,
+    "peak_cpu_usage": 0,
 }
 
-# Background cleanup task
-cleanup_task = None
-cleanup_lock = threading.Lock()
+# Thread-safe counter for active requests
+stats_lock = threading.Lock()
 
 
-async def automatic_memory_cleanup():
-    """Background task that automatically cleans up old memory objects like real-world apps"""
-    while True:
-        try:
-            current_time = time.time()
-            retention_seconds = MEMORY_CONFIG["default_retention_seconds"]
+def fixed_cpu_workload():
+    """
+    Fixed CPU workload that gradually increases to target CPU usage
+    Uses mathematical calculations to consume CPU predictably
+    """
+    with tracer.start_as_current_span("fixed_cpu_workload") as span:
+        total_duration = (RESOURCE_CONFIG["ramp_up_duration"] + 
+                         RESOURCE_CONFIG["sustain_duration"] + 
+                         RESOURCE_CONFIG["ramp_down_duration"])
+        
+        span.set_attribute("total_duration", total_duration)
+        span.set_attribute("target_cpu_cores", RESOURCE_CONFIG["target_cpu_cores"])
+        
+        start_time = time.time()
+        calculations_done = 0
+        
+        while time.time() - start_time < total_duration:
+            current_time = time.time() - start_time
+            
+            # Calculate target CPU intensity based on phase
+            if current_time < RESOURCE_CONFIG["ramp_up_duration"]:
+                # Ramp up phase
+                progress = current_time / RESOURCE_CONFIG["ramp_up_duration"]
+                cpu_intensity = progress * RESOURCE_CONFIG["target_cpu_cores"]
+                phase = "ramp_up"
+            elif current_time < RESOURCE_CONFIG["ramp_up_duration"] + RESOURCE_CONFIG["sustain_duration"]:
+                # Sustain phase
+                cpu_intensity = RESOURCE_CONFIG["target_cpu_cores"]
+                phase = "sustain"
+            else:
+                # Ramp down phase
+                ramp_down_start = RESOURCE_CONFIG["ramp_up_duration"] + RESOURCE_CONFIG["sustain_duration"]
+                progress = (current_time - ramp_down_start) / RESOURCE_CONFIG["ramp_down_duration"]
+                cpu_intensity = RESOURCE_CONFIG["target_cpu_cores"] * (1 - progress)
+                phase = "ramp_down"
+            
+            span.set_attribute("current_phase", phase)
+            span.set_attribute("cpu_intensity", cpu_intensity)
+            
+            # Adjust work based on CPU intensity
+            work_cycles = int(cpu_intensity * 100000)  # Scale work to CPU target
+            
+            # Do mathematical work to consume CPU
+            for _ in range(work_cycles):
+                # Mix of different CPU operations
+                result = math.sin(random.random()) * math.cos(random.random())
+                result = math.sqrt(abs(result * 1000))
+                result = math.log(result + 1) if result > 0 else 0
+                calculations_done += 1
+            
+            # Brief pause between cycles (realistic for I/O or coordination)
+            time.sleep(0.1)
+        
+        span.set_attribute("total_calculations", calculations_done)
+        return calculations_done
 
-            with cleanup_lock:
-                old_keys = []
-                freed_mb = 0
 
-                for key, obj in memory_store.items():
-                    age = current_time - obj["timestamp"]
-                    if age > retention_seconds:
-                        old_keys.append(key)
-                        freed_mb += obj.get("size_mb", 0)
-
-                # Remove old objects
-                for key in old_keys:
-                    del memory_store[key]
-
-                if old_keys:
-                    # Update stats
-                    memory_stats["current_objects"] = len(memory_store)
-                    memory_stats["total_cleaned"] += len(old_keys)
-                    memory_stats["memory_freed_mb"] += freed_mb
-
-                    # Trigger garbage collection
-                    gc.collect()
-
-                    print(f"Auto-cleanup: Removed {len(old_keys)} objects, freed {freed_mb}MB")
-
-        except Exception as e:
-            print(f"Auto-cleanup error: {e}")
-
-        # Wait for next cleanup cycle
-        await asyncio.sleep(MEMORY_CONFIG["cleanup_interval_seconds"])
-
-
-async def start_background_cleanup():
-    """Start the background cleanup task"""
-    global cleanup_task
-    if MEMORY_CONFIG["auto_cleanup_enabled"] and cleanup_task is None:
-        cleanup_task = asyncio.create_task(automatic_memory_cleanup())
-        print(f"Started automatic memory cleanup (retention: {MEMORY_CONFIG['default_retention_seconds']}s)")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize background tasks on startup"""
-    await start_background_cleanup()
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean shutdown"""
-    global cleanup_task
-    if cleanup_task:
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
+def fixed_memory_workload():
+    """
+    Fixed memory workload that gradually increases to target memory usage
+    Uses data structures that predictably consume memory
+    """
+    with tracer.start_as_current_span("fixed_memory_workload") as span:
+        total_duration = (RESOURCE_CONFIG["ramp_up_duration"] + 
+                         RESOURCE_CONFIG["sustain_duration"] + 
+                         RESOURCE_CONFIG["ramp_down_duration"])
+        
+        span.set_attribute("total_duration", total_duration)
+        span.set_attribute("target_memory_mb", RESOURCE_CONFIG["target_memory_mb"])
+        
+        # Memory storage - will be automatically GC'd when function exits
+        memory_data: List[List[str]] = []
+        start_time = time.time()
+        
+        # Calculate total memory needed upfront (more realistic)
+        target_memory_mb = RESOURCE_CONFIG["target_memory_mb"]
+        total_chunks_needed = target_memory_mb  # 1MB per chunk
+        
+        # Allocate memory in phases based on timing
+        while time.time() - start_time < total_duration:
+            current_time = time.time() - start_time
+            
+            # Calculate how much memory we should have allocated by now
+            if current_time < RESOURCE_CONFIG["ramp_up_duration"]:
+                # Ramp up phase
+                progress = current_time / RESOURCE_CONFIG["ramp_up_duration"]
+                target_chunks = int(progress * total_chunks_needed)
+                phase = "ramp_up"
+            elif current_time < RESOURCE_CONFIG["ramp_up_duration"] + RESOURCE_CONFIG["sustain_duration"]:
+                # Sustain phase
+                target_chunks = total_chunks_needed
+                phase = "sustain"
+            else:
+                # Ramp down phase - but don't actively free memory (unrealistic)
+                # Real apps don't monitor and free memory dynamically
+                target_chunks = total_chunks_needed
+                phase = "ramp_down"
+            
+            span.set_attribute("current_phase", phase)
+            span.set_attribute("target_chunks", target_chunks)
+            
+            # Allocate memory if we need more (realistic behavior)
+            while len(memory_data) < target_chunks:
+                # Create 1MB chunks (realistic data processing)
+                chunk = ['x' * 1024 for _ in range(1024)]  # 1MB of data
+                memory_data.append(chunk)
+            
+            # Update peak memory tracking
+            current_memory_mb = len(memory_data)
+            with stats_lock:
+                if current_memory_mb > processing_stats["peak_memory_mb"]:
+                    processing_stats["peak_memory_mb"] = current_memory_mb
+            
+            # Process/work with the data (realistic pause)
+            time.sleep(0.1)
+        
+        # Memory will be automatically garbage collected when function exits
+        data_chunks = len(memory_data)
+        estimated_mb = sum(len(chunk) for chunk in memory_data) / (1024 * 1024)
+        
+        span.set_attribute("final_data_chunks", data_chunks)
+        span.set_attribute("estimated_final_mb", estimated_mb)
+        
+        return data_chunks
 
 
 @app.get("/")
 async def root():
-    """Root endpoint that returns a welcome message"""
-    return {"message": "Welcome to NimbusGuard Consumer!"}
+    """Root endpoint"""
+    return {"message": "Welcome to NimbusGuard Consumer with Fixed Resources!"}
 
 
 @app.get("/health")
 async def health():
-    """Liveness probe endpoint"""
+    """Health check endpoint"""
     return {"status": "healthy"}
 
 
 @app.get("/ready")
 async def ready():
-    """Readiness probe endpoint"""
+    """Readiness check endpoint"""
     return {"status": "ready"}
-
-
-# In-memory storage to simulate memory usage
-# memory_store = [] # This line is no longer needed as memory_store is now a dict
-
-def cpu_intensive_task(intensity: int = 5, duration: int = 10):
-    """
-    CPU-intensive task that calculates prime numbers
-    Args:
-        intensity: Complexity level (1-10, higher = more CPU usage)
-        duration: How long to run the task in seconds
-    """
-    with tracer.start_as_current_span("cpu_intensive_task") as span:
-        span.set_attribute("intensity", intensity)
-        span.set_attribute("duration", duration)
-
-        start_time = time.time()
-        prime_count = 0
-
-        # Calculate primes up to a number based on intensity
-        max_number = intensity * 10000
-
-        while time.time() - start_time < duration:
-            # Find primes using trial division (CPU intensive)
-            for num in range(2, max_number):
-                is_prime = True
-                for i in range(2, int(math.sqrt(num)) + 1):
-                    if num % i == 0:
-                        is_prime = False
-                        break
-                if is_prime:
-                    prime_count += 1
-
-                # Check if duration exceeded
-                if time.time() - start_time >= duration:
-                    break
-
-        span.set_attribute("primes_found", prime_count)
-        return prime_count
-
-
-def memory_intensive_task(size_mb: int = 50, duration: int = 10, task_id: str = None, immediate_cleanup: bool = None):
-    """
-    Memory-intensive task that allocates and manipulates data
-    Args:
-        size_mb: Amount of memory to allocate in MB
-        duration: How long to keep the memory allocated
-        task_id: Unique task identifier
-        immediate_cleanup: Whether to cleanup immediately after processing (real-world behavior)
-    """
-    with tracer.start_as_current_span("memory_intensive_task") as span:
-        span.set_attribute("size_mb", size_mb)
-        span.set_attribute("duration", duration)
-        span.set_attribute("immediate_cleanup", immediate_cleanup or MEMORY_CONFIG["immediate_cleanup_mode"])
-
-        # More efficient memory allocation - single data structure instead of duplicate
-        chunk_size = size_mb * 1024 * 1024
-
-        # Create a single large data structure (not both list AND dict)
-        large_data = []
-
-        # Fill with random data - more memory efficient
-        chunk_count = chunk_size // 1000  # Number of 1KB chunks
-        for i in range(chunk_count):
-            # Create data in smaller chunks to avoid memory spikes
-            random_data = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=1000))
-            large_data.append(random_data)
-
-        # Store metadata with memory object (simplified structure)
-        memory_object = {
-            'data': large_data,
-            'size_mb': size_mb,
-            'timestamp': time.time(),
-            'chunk_count': len(large_data),
-            'task_id': task_id or f"task_{int(time.time())}"
-        }
-
-        # Real-world behavior: immediate cleanup vs. temporary storage
-        if immediate_cleanup if immediate_cleanup is not None else MEMORY_CONFIG["immediate_cleanup_mode"]:
-            # Real-world mode: process data and immediately discard (like most applications)
-            time.sleep(duration)  # Simulate processing time
-
-            # Data would normally be processed here, then discarded
-            # Simulate garbage collection by clearing references
-            large_data.clear()
-            memory_object.clear()
-
-            # Update stats
-            memory_stats["total_processed"] += 1
-
-            span.set_attribute("cleanup_mode", "immediate")
-            print(f"Processed and immediately freed {size_mb}MB (real-world mode)")
-
-        else:
-            # Testing mode: store temporarily for autoscaling testing
-            with cleanup_lock:
-                # Check memory limits
-                if len(memory_store) >= MEMORY_CONFIG["max_memory_objects"]:
-                    # Remove oldest object to make space
-                    oldest_key = min(memory_store.keys(), key=lambda k: memory_store[k]["timestamp"])
-                    old_obj = memory_store.pop(oldest_key)
-                    memory_stats["total_cleaned"] += 1
-                    memory_stats["memory_freed_mb"] += old_obj.get("size_mb", 0)
-
-                    # Store the memory object
-                    memory_store[memory_object['task_id']] = memory_object
-                    memory_stats["total_processed"] += 1
-                    memory_stats["current_objects"] = len(memory_store)
-
-        # Keep the memory allocated for the specified duration
-        time.sleep(duration)
-
-        span.set_attribute("cleanup_mode", "temporary_storage")
-
-        # Calculate actual memory usage for tracing
-        actual_size = sum(len(chunk) for chunk in memory_object.get('data', []))
-        span.set_attribute("actual_bytes_allocated", actual_size)
-        span.set_attribute("chunks_created", len(memory_object.get('data', [])))
-
-        return len(memory_object.get('data', []))
 
 
 @app.post("/process")
 async def process_load(
-        background_tasks: BackgroundTasks,
-        cpu_intensity: int = Query(5, ge=1, le=10, description="CPU intensity level (1-10)"),
-        memory_size: int = Query(50, ge=10, le=500, description="Memory to allocate in MB"),
-        duration: int = Query(10, ge=1, le=60, description="Processing duration in seconds"),
-        async_mode: bool = Query(False, description="Run in background (async)"),
-        immediate_cleanup: bool = Query(None, description="Cleanup immediately after processing (real-world mode)")
+    background_tasks: BackgroundTasks,
+    async_mode: bool = False
 ):
     """
-    Endpoint to simulate realistic processing load for testing autoscaling
+    Process endpoint optimized for high-concurrency load testing (10-30+ requests)
     
     This endpoint will:
-    - Consume CPU by calculating prime numbers
-    - Consume memory by allocating large data structures
-    - Allow configuration of intensity and duration
-    - Support both sync and async processing
-    - Use real-world memory management by default
+    - Gradually ramp up CPU usage to ~40m per request over 10 seconds
+    - Gradually ramp up memory usage to ~80MB per request over 10 seconds  
+    - Sustain usage for 20 seconds 
+    - Ramp down over 5 seconds
+    - Total duration: ~35 seconds
+    
+    High-Concurrency Load Testing:
+    - 1-3 requests: Below HPA thresholds (no scaling)
+    - 4-5 requests: Triggers HPA scaling (CPU > 140m, Memory > 410MB)
+    - 5-6 requests per pod: Approaches pod limits (200m CPU, 512MB memory)
+    - 10-30+ requests: Distributed across multiple pods via HPA
+    - Each pod can handle ~5-6 concurrent requests before needing to scale
     """
-
+    
     with tracer.start_as_current_span("process_load_endpoint") as span:
-        span.set_attribute("cpu_intensity", cpu_intensity)
-        span.set_attribute("memory_size", memory_size)
-        span.set_attribute("duration", duration)
-        span.set_attribute("async_mode", async_mode)
-
         task_id = f"task_{int(time.time())}_{random.randint(1000, 9999)}"
         span.set_attribute("task_id", task_id)
-
-        # Use immediate cleanup by default (real-world behavior)
-        cleanup_mode = immediate_cleanup if immediate_cleanup is not None else MEMORY_CONFIG["immediate_cleanup_mode"]
-        span.set_attribute("cleanup_mode", cleanup_mode)
-
+        span.set_attribute("async_mode", async_mode)
+        
+        # Update stats
+        with stats_lock:
+            processing_stats["total_requests"] += 1
+            processing_stats["active_requests"] += 1
+        
+        total_duration = (RESOURCE_CONFIG["ramp_up_duration"] + 
+                         RESOURCE_CONFIG["sustain_duration"] + 
+                         RESOURCE_CONFIG["ramp_down_duration"])
+        
         if async_mode:
             # Run in background
-            background_tasks.add_task(
-                cpu_intensive_task,
-                intensity=cpu_intensity,
-                duration=duration
-            )
-            background_tasks.add_task(
-                memory_intensive_task,
-                size_mb=memory_size,
-                duration=duration,
-                task_id=task_id,
-                immediate_cleanup=cleanup_mode
-            )
-
+            background_tasks.add_task(run_fixed_workload, task_id)
+            
             return {
                 "status": "started",
                 "task_id": task_id,
-                "message": f"Background processing started for {duration}s",
-                "cpu_intensity": cpu_intensity,
-                "memory_size_mb": memory_size,
-                "cleanup_mode": "immediate" if cleanup_mode else "temporary",
-                "estimated_completion": time.time() + duration
+                "message": "Fixed resource workload started in background",
+                "resource_pattern": {
+                    "target_memory_mb": RESOURCE_CONFIG["target_memory_mb"],
+                    "target_cpu_cores": RESOURCE_CONFIG["target_cpu_cores"],
+                    "total_duration_seconds": total_duration,
+                    "phases": {
+                        "ramp_up": RESOURCE_CONFIG["ramp_up_duration"],
+                        "sustain": RESOURCE_CONFIG["sustain_duration"],
+                        "ramp_down": RESOURCE_CONFIG["ramp_down_duration"]
+                    }
+                },
+                "estimated_completion": time.time() + total_duration
             }
         else:
             # Run synchronously
-            start_time = time.time()
+            result = await run_fixed_workload(task_id)
+            return result
 
-            # Run CPU and memory tasks in parallel using asyncio
-            cpu_task = asyncio.create_task(
-                asyncio.to_thread(cpu_intensive_task, cpu_intensity, duration)
+
+async def run_fixed_workload(task_id: str):
+    """Run the fixed CPU and memory workload"""
+    start_time = time.time()
+    
+    try:
+        # Run CPU and memory workloads in parallel
+        cpu_task = asyncio.create_task(asyncio.to_thread(fixed_cpu_workload))
+        memory_task = asyncio.create_task(asyncio.to_thread(fixed_memory_workload))
+        
+        # Wait for both tasks to complete
+        cpu_result, memory_result = await asyncio.gather(cpu_task, memory_task)
+        
+        end_time = time.time()
+        processing_time = end_time - start_time
+        
+        # Update stats
+        with stats_lock:
+            processing_stats["active_requests"] -= 1
+            processing_stats["completed_requests"] += 1
+            
+            # Update average duration
+            total_completed = processing_stats["completed_requests"]
+            current_avg = processing_stats["average_duration"]
+            processing_stats["average_duration"] = (
+                (current_avg * (total_completed - 1) + processing_time) / total_completed
             )
-            memory_task = asyncio.create_task(
-                asyncio.to_thread(memory_intensive_task, memory_size, duration, task_id, cleanup_mode)
-            )
-
-            # Wait for both tasks to complete
-            primes_found, memory_objects = await asyncio.gather(cpu_task, memory_task)
-
-            end_time = time.time()
-            processing_time = end_time - start_time
-
-            return {
-                "status": "completed",
-                "task_id": task_id,
-                "processing_time_seconds": round(processing_time, 2),
-                "cpu_work": {
-                    "intensity": cpu_intensity,
-                    "primes_found": primes_found
-                },
-                "memory_work": {
-                    "size_mb": memory_size,
-                    "objects_created": memory_objects,
-                    "cleanup_mode": "immediate" if cleanup_mode else "temporary"
-                },
-                "memory_store_size": len(memory_store)
+        
+        return {
+            "status": "completed",
+            "task_id": task_id,
+            "processing_time_seconds": round(processing_time, 2),
+            "resource_usage": {
+                "cpu_calculations": cpu_result,
+                "memory_chunks_created": memory_result,
+                "target_memory_mb": RESOURCE_CONFIG["target_memory_mb"],
+                "target_cpu_cores": RESOURCE_CONFIG["target_cpu_cores"]
+            },
+            "phases_completed": {
+                "ramp_up": RESOURCE_CONFIG["ramp_up_duration"],
+                "sustain": RESOURCE_CONFIG["sustain_duration"], 
+                "ramp_down": RESOURCE_CONFIG["ramp_down_duration"]
             }
+        }
+        
+    except Exception as e:
+        # Update stats on error
+        with stats_lock:
+            processing_stats["active_requests"] -= 1
+        
+        raise e
 
 
 @app.get("/process/status")
 async def process_status():
-    """Get current processing status and memory usage"""
-    with cleanup_lock:
-        current_memory_objects = list(memory_store.values())
-
-    # Calculate more accurate memory estimation
-    total_estimated_mb = sum(item.get("size_mb", 50) for item in current_memory_objects)
-
+    """Get current processing status"""
+    with stats_lock:
+        current_stats = processing_stats.copy()
+    
     return {
-        "memory_management": {
-            "auto_cleanup_enabled": MEMORY_CONFIG["auto_cleanup_enabled"],
-            "retention_seconds": MEMORY_CONFIG["default_retention_seconds"],
-            "cleanup_interval": MEMORY_CONFIG["cleanup_interval_seconds"],
-            "max_objects": MEMORY_CONFIG["max_memory_objects"],
-            "immediate_cleanup_mode": MEMORY_CONFIG["immediate_cleanup_mode"]
+        "resource_config": RESOURCE_CONFIG,
+        "processing_stats": current_stats,
+        "kubernetes_limits": {
+            "memory_request": "512Mi",
+            "memory_limit": "1Gi", 
+            "cpu_request": "200m",
+            "cpu_limit": "500m"
         },
-        "current_status": {
-            "memory_store_objects": len(current_memory_objects),
-            "memory_store_size_estimate_mb": total_estimated_mb,
-        },
-        "statistics": memory_stats.copy(),
-        "recent_tasks": [
-            {
-                "task_id": item["task_id"],
-                "timestamp": item["timestamp"],
-                "age_seconds": round(time.time() - item["timestamp"], 2),
-                "data_chunks": len(item["data"]),
-                "size_mb": item.get("size_mb", "unknown"),
-                "chunk_count": item.get("chunk_count", len(item["data"]))
+        "resource_utilization": {
+            "memory_target_vs_request": f"{RESOURCE_CONFIG['target_memory_mb']}MB / 512MB",
+            "cpu_target_vs_request": f"{RESOURCE_CONFIG['target_cpu_cores']} / 0.2 cores",
+            "memory_utilization_percent": round((RESOURCE_CONFIG["target_memory_mb"] / 512) * 100, 1),
+            "cpu_utilization_percent": round((RESOURCE_CONFIG["target_cpu_cores"] / 0.2) * 100, 1),
+            "hpa_scaling_behavior": {
+                "cpu_threshold": "70% of 200m = 140m (0.14 cores)",
+                "memory_threshold": "80% of 512Mi = ~410MB",
+                "requests_to_trigger_hpa": {
+                    "cpu_scaling": max(1, round(0.14 / RESOURCE_CONFIG['target_cpu_cores'])),
+                    "memory_scaling": max(1, round(410 / RESOURCE_CONFIG['target_memory_mb']))
+                },
+                "requests_per_pod_limit": {
+                    "cpu_limit": max(1, round(0.2 / RESOURCE_CONFIG['target_cpu_cores'])),
+                    "memory_limit": max(1, round(512 / RESOURCE_CONFIG['target_memory_mb']))
+                },
+                "high_concurrency_scenario": {
+                    "10_requests": "2 pods needed (5 requests per pod)",
+                    "20_requests": "4 pods needed (5 requests per pod)",
+                    "30_requests": "6 pods needed (5 requests per pod)"
+                }
             }
-            for item in current_memory_objects[-5:]  # Last 5 tasks
-        ]
-    }
-
-
-@app.delete("/process/cleanup")
-async def cleanup_memory():
-    """Clean up memory store to free up memory with explicit garbage collection"""
-    with cleanup_lock:
-        old_size = len(memory_store)
-
-        # Calculate total memory before cleanup
-        total_mb_before = sum(item.get("size_mb", 50) for item in memory_store.values())
-
-        # Clear the memory store
-        memory_store.clear()
-
-        # Update stats
-        memory_stats["current_objects"] = 0
-        memory_stats["total_cleaned"] += old_size
-        memory_stats["memory_freed_mb"] += total_mb_before
-
-    # Explicitly trigger garbage collection to free memory faster
-    collected = gc.collect()
-
-    return {
-        "status": "cleaned",
-        "objects_removed": old_size,
-        "estimated_mb_freed": total_mb_before,
-        "gc_objects_collected": collected,
-        "message": f"Memory store cleared, {total_mb_before}MB freed, GC collected {collected} objects"
-    }
-
-
-@app.delete("/process/cleanup-old")
-async def cleanup_old_memory(max_age_seconds: int = Query(300, description="Max age in seconds for memory objects")):
-    """Clean up memory objects older than specified age"""
-    current_time = time.time()
-
-    with cleanup_lock:
-        old_objects = {}
-        remaining_objects = {}
-
-        for key, item in memory_store.items():
-            if current_time - item["timestamp"] > max_age_seconds:
-                old_objects[key] = item
-            else:
-                remaining_objects[key] = item
-
-        # Update memory store
-        memory_store.clear()
-        memory_store.update(remaining_objects)
-
-        # Calculate freed memory
-        freed_mb = sum(item.get("size_mb", 50) for item in old_objects.values())
-        objects_removed = len(old_objects)
-
-        # Update stats
-        memory_stats["current_objects"] = len(memory_store)
-        memory_stats["total_cleaned"] += objects_removed
-        memory_stats["memory_freed_mb"] += freed_mb
-
-    # Trigger garbage collection if we removed objects
-    collected = 0
-    if objects_removed > 0:
-        collected = gc.collect()
-
-    return {
-        "status": "cleaned",
-        "objects_removed": objects_removed,
-        "objects_remaining": len(memory_store),
-        "estimated_mb_freed": freed_mb,
-        "gc_objects_collected": collected,
-        "max_age_seconds": max_age_seconds,
-        "message": f"Removed {objects_removed} old objects, freed {freed_mb}MB"
-    }
-
-
-@app.get("/process/config")
-async def get_memory_config():
-    """Get current memory management configuration"""
-    return {
-        "memory_config": MEMORY_CONFIG.copy(),
-        "statistics": memory_stats.copy(),
-        "description": {
-            "immediate_cleanup_mode": "Real-world mode: processes data and immediately frees memory",
-            "temporary_storage_mode": "Testing mode: keeps memory allocated for autoscaling testing",
-            "auto_cleanup": "Background task automatically cleans up old memory objects"
         }
     }
 
 
-@app.post("/process/config")
-async def update_memory_config(
-        immediate_cleanup: bool = Query(None, description="Enable immediate cleanup mode"),
-        retention_seconds: int = Query(None, description="Memory retention time in seconds"),
-        auto_cleanup: bool = Query(None, description="Enable automatic cleanup")
+@app.get("/process/config")
+async def get_config():
+    """Get current resource configuration"""
+    return {
+        "resource_config": RESOURCE_CONFIG,
+        "description": {
+            "fixed_pattern": "Each request follows a predictable resource usage pattern optimized for high-concurrency load testing",
+            "ramp_up": "Gradually increases CPU and memory usage to small, predictable levels",
+            "sustain": "Maintains consistent resource usage allowing multiple requests per pod", 
+            "ramp_down": "Gradually decreases resource usage to test scale-down behavior",
+            "auto_gc": "Python automatically garbage collects memory when functions exit",
+            "high_concurrency": "Designed for 10-30+ concurrent requests distributed across multiple pods via HPA",
+            "pod_capacity": "Each pod can handle ~5-6 concurrent requests before approaching resource limits"
+        }
+    }
+
+
+@app.put("/process/config")
+async def update_config(
+    target_memory_mb: int = None,
+    target_cpu_cores: float = None,
+    ramp_up_duration: int = None,
+    sustain_duration: int = None,
+    ramp_down_duration: int = None
 ):
-    """Update memory management configuration"""
-    global cleanup_task
-
+    """Update resource configuration (if needed for testing)"""
     changes = {}
-
-    if immediate_cleanup is not None:
-        MEMORY_CONFIG["immediate_cleanup_mode"] = immediate_cleanup
-        changes["immediate_cleanup_mode"] = immediate_cleanup
-
-    if retention_seconds is not None:
-        MEMORY_CONFIG["default_retention_seconds"] = retention_seconds
-        changes["retention_seconds"] = retention_seconds
-
-    if auto_cleanup is not None:
-        MEMORY_CONFIG["auto_cleanup_enabled"] = auto_cleanup
-        changes["auto_cleanup_enabled"] = auto_cleanup
-
-        # Restart cleanup task if needed
-        if auto_cleanup and cleanup_task is None:
-            await start_background_cleanup()
-        elif not auto_cleanup and cleanup_task:
-            cleanup_task.cancel()
-            cleanup_task = None
-
+    
+    if target_memory_mb is not None:
+        RESOURCE_CONFIG["target_memory_mb"] = target_memory_mb
+        changes["target_memory_mb"] = RESOURCE_CONFIG["target_memory_mb"]
+    
+    if target_cpu_cores is not None:
+        RESOURCE_CONFIG["target_cpu_cores"] = target_cpu_cores
+        changes["target_cpu_cores"] = RESOURCE_CONFIG["target_cpu_cores"]
+    
+    if ramp_up_duration is not None:
+        RESOURCE_CONFIG["ramp_up_duration"] = ramp_up_duration
+        changes["ramp_up_duration"] = ramp_up_duration
+    
+    if sustain_duration is not None:
+        RESOURCE_CONFIG["sustain_duration"] = sustain_duration
+        changes["sustain_duration"] = sustain_duration
+    
+    if ramp_down_duration is not None:
+        RESOURCE_CONFIG["ramp_down_duration"] = ramp_down_duration
+        changes["ramp_down_duration"] = ramp_down_duration
+    
     return {
         "status": "updated",
         "changes": changes,
-        "current_config": MEMORY_CONFIG.copy()
+        "current_config": RESOURCE_CONFIG
     }
 
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)

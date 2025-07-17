@@ -1,4 +1,0 @@
-{
-  "process_cpu_seconds_total_rate": "process_cpu_seconds_total_rate",
-  "process_resident_memory_bytes": "process_resident_memory_bytes"
-}
