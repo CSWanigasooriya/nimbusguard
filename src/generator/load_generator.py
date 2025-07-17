@@ -88,7 +88,7 @@ class LoadGenerator:
 
         # Updated parameters for fixed resource consumer
         params = {
-            'async_mode': load_test.async_mode
+            'async_mode': str(load_test.async_mode).lower()  # Convert to "true"/"false" (string)
         }
 
         # Send HTTP request and wait for response (realistic behavior)
