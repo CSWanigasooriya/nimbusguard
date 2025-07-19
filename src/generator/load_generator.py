@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
-NimbusGuard Load Generator
+NimbusGuard Load Generator - FIXED FOR POD DISTRIBUTION
 
 A tool to generate various types of load against the consumer service
-to test HPA autoscaling behavior with realistic resource usage per request.
+to test HPA autoscaling behavior with proper pod distribution.
+
+FIXED: Ensures requests are distributed across multiple pods by:
+1. Disabling connection pooling and keep-alive
+2. Forcing new connections for each request
+3. Adding connection rotation strategies
+4. DNS cache busting to ensure fresh service discovery
 """
 
 import argparse
@@ -11,8 +17,9 @@ import asyncio
 import logging
 import random
 import time
+import socket
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import aiohttp
 
@@ -47,36 +54,140 @@ class LoadTest:
     delay_between_requests: float = 0.1
 
 
-class LoadGenerator:
+class PodDistributedLoadGenerator:
     def __init__(self, base_url: str = "http://localhost:8000"):
         self.base_url = base_url.rstrip('/')
-        self.session = None
+        self.session_pool: List[aiohttp.ClientSession] = []
+        self.session_pool_size = 5  # Multiple sessions for better distribution
+        self.current_session_index = 0
         self.results = []
+        
+        # Parse URL to get host and port for direct IP resolution
+        self.parsed_url = self._parse_url(base_url)
+        
+    def _parse_url(self, url: str) -> Dict[str, str]:
+        """Parse URL to extract components"""
+        if "://" in url:
+            scheme, rest = url.split("://", 1)
+        else:
+            scheme = "http"
+            rest = url
+            
+        if ":" in rest and not rest.startswith("["):  # IPv6 handling
+            host, port = rest.rsplit(":", 1)
+            try:
+                port = int(port)
+            except ValueError:
+                host = rest
+                port = 80 if scheme == "http" else 443
+        else:
+            host = rest
+            port = 80 if scheme == "http" else 443
+            
+        return {
+            "scheme": scheme,
+            "host": host,
+            "port": str(port),
+            "base_url": f"{scheme}://{host}:{port}"
+        }
 
     async def __aenter__(self):
-        connector = aiohttp.TCPConnector(
-            limit=100,
-            limit_per_host=30,
-            ttl_dns_cache=300,
-            use_dns_cache=True,
-            force_close=False,
-            enable_cleanup_closed=True,
-            keepalive_timeout=60
-        )
-        self.session = aiohttp.ClientSession(
-            connector=connector,
-            timeout=aiohttp.ClientTimeout(total=30, connect=10)
-        )
+        """Create multiple sessions with different connection strategies"""
+        await self._create_session_pool()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
+        """Clean up all sessions"""
+        await self._cleanup_session_pool()
+
+    async def _create_session_pool(self):
+        """Create a pool of sessions with different configurations for better pod distribution"""
+        logger.info(f"🔧 Creating session pool with {self.session_pool_size} sessions for pod distribution")
+        
+        for i in range(self.session_pool_size):
+            # Each session has different connection behavior
+            # Try to use AsyncResolver if aiodns is available, otherwise use default
+            try:
+                resolver = aiohttp.AsyncResolver()
+            except RuntimeError:
+                # aiodns not available, use default resolver
+                resolver = None
+            
+            connector = aiohttp.TCPConnector(
+                limit=1,  # Only 1 connection per session - forces distribution
+                limit_per_host=1,  # Max 1 connection per host per session
+                ttl_dns_cache=10,  # Short DNS cache for fresh service discovery
+                use_dns_cache=False,  # Disable DNS caching for fresh lookups
+                force_close=True,  # Force connection closure after each request
+                enable_cleanup_closed=True,
+                # keepalive_timeout=0,  # <<< FIX: This line caused the ValueError and is removed.
+                resolver=resolver,  # Use async resolver if available, otherwise default
+            )
+            
+            session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=30, connect=5),
+                headers={
+                    'Connection': 'close',  # HTTP header to force connection closure
+                    'Cache-Control': 'no-cache',  # Prevent any caching
+                    'User-Agent': f'LoadGen-Session-{i}-{random.randint(1000,9999)}'  # Unique UA per session
+                }
+            )
+            
+            self.session_pool.append(session)
+            
+            # Small delay between session creation to avoid thundering herd
+            await asyncio.sleep(0.1)
+
+    async def _cleanup_session_pool(self):
+        """Clean up all sessions in the pool"""
+        logger.info("🧹 Cleaning up session pool")
+        for session in self.session_pool:
+            try:
+                await session.close()
+            except Exception as e:
+                logger.warning(f"Error closing session: {e}")
+        self.session_pool.clear()
+
+    async def _get_distributed_session(self) -> aiohttp.ClientSession:
+        """Get a session from the pool in round-robin fashion"""
+        if not self.session_pool:
+            raise RuntimeError("Session pool not initialized")
+            
+        session = self.session_pool[self.current_session_index]
+        self.current_session_index = (self.current_session_index + 1) % len(self.session_pool)
+        return session
+
+    async def _resolve_service_ips(self) -> List[str]:
+        """Resolve service to get all backend pod IPs"""
+        try:
+            host = self.parsed_url["host"]
+            
+            # Try to resolve the service to see available IPs
+            try:
+                addrs = await asyncio.get_event_loop().getaddrinfo(
+                    host, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM
+                )
+                ips = list(set(addr[4][0] for addr in addrs))
+                logger.info(f"🌐 Resolved service '{host}' to IPs: {ips}")
+                return ips
+            except Exception as e:
+                logger.info(f"🌐 Could not resolve service '{host}': {e}")
+                return [host]  # Fallback to hostname
+                
+        except Exception as e:
+            logger.warning(f"IP resolution failed: {e}")
+            return [self.parsed_url["host"]]
 
     async def health_check(self) -> bool:
-        """Check if the consumer service is healthy"""
+        """Check if the consumer service is healthy using distributed approach"""
         try:
-            async with self.session.get(f"{self.base_url}/health") as response:
+            session = await self._get_distributed_session()
+            
+            # Add random delay to avoid all health checks hitting at once
+            await asyncio.sleep(random.uniform(0.1, 0.5))
+            
+            async with session.get(f"{self.base_url}/health") as response:
                 if response.status == 200:
                     data = await response.json()
                     logger.info(f"✅ Service is healthy: {data}")
@@ -89,7 +200,7 @@ class LoadGenerator:
             return False
 
     async def send_process_request(self, load_test: LoadTest, request_id: int) -> Dict[str, Any]:
-        """Send a single process request with retry logic for resilience"""
+        """Send a single process request with pod distribution strategy"""
         start_time = time.time()
         max_retries = 3
         retry_delay = 1.0
@@ -100,14 +211,36 @@ class LoadGenerator:
 
         for attempt in range(max_retries + 1):
             try:
+                # Get a distributed session (round-robin)
+                session = await self._get_distributed_session()
+                
+                # Add random jitter to request timing to break patterns
+                jitter = random.uniform(0, 0.1)
+                await asyncio.sleep(jitter)
+                
                 timeout_seconds = CONSUMER_RESOURCES["duration_per_request"] + 10
                 
-                async with self.session.post(
+                # Add unique headers to prevent any proxy caching
+                headers = {
+                    'X-Request-ID': f'{request_id}-{int(time.time()*1000000)}',
+                    'X-Load-Test': load_test.name,
+                    'X-Attempt': str(attempt + 1),
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Connection': 'close'
+                }
+                
+                async with session.post(
                         f"{self.base_url}/process",
                         params=params,
+                        headers=headers,
                         timeout=aiohttp.ClientTimeout(total=timeout_seconds, connect=5)
                 ) as response:
                     end_time = time.time()
+                    
+                    # Log which server/pod responded (if available in headers)
+                    server_info = response.headers.get('Server', 'unknown')
+                    pod_info = response.headers.get('X-Pod-Name', response.headers.get('X-Hostname', 'unknown'))
                     
                     try:
                         response_data = await response.json()
@@ -123,14 +256,19 @@ class LoadGenerator:
                         'response_time': end_time - start_time,
                         'response_data': response_data,
                         'success': response.status == 200,
-                        'attempts': attempt + 1
+                        'attempts': attempt + 1,
+                        'server_info': server_info,
+                        'pod_info': pod_info,
+                        'session_id': id(session)  # Track which session was used
                     }
 
                     if result['success']:
+                        log_msg = f"✅ Request {request_id}: {response.status} in {result['response_time']:.2f}s"
+                        if pod_info != 'unknown':
+                            log_msg += f" [pod: {pod_info}]"
                         if attempt > 0:
-                            logger.info(f"✅ Request {request_id}: {response.status} in {result['response_time']:.2f}s (succeeded on attempt {attempt + 1})")
-                        else:
-                            logger.info(f"✅ Request {request_id}: {response.status} in {result['response_time']:.2f}s")
+                            log_msg += f" (attempt {attempt + 1})"
+                        logger.info(log_msg)
                     else:
                         logger.error(f"❌ Request {request_id}: {response.status}")
 
@@ -150,7 +288,9 @@ class LoadGenerator:
                         'response_time': time.time() - start_time,
                         'response_data': {'error': f'connection_failed_after_retries: {str(e)[:100]}'},
                         'success': False,
-                        'attempts': max_retries + 1
+                        'attempts': max_retries + 1,
+                        'server_info': 'error',
+                        'pod_info': 'error'
                     }
             
             except asyncio.TimeoutError:
@@ -167,7 +307,9 @@ class LoadGenerator:
                         'response_time': time.time() - start_time,
                         'response_data': {'error': 'timeout_after_retries'},
                         'success': False,
-                        'attempts': max_retries + 1
+                        'attempts': max_retries + 1,
+                        'server_info': 'timeout',
+                        'pod_info': 'timeout'
                     }
             
             except Exception as e:
@@ -184,14 +326,20 @@ class LoadGenerator:
                         'response_time': time.time() - start_time,
                         'response_data': {'error': f'unexpected_error_after_retries: {str(e)[:100]}'},
                         'success': False,
-                        'attempts': max_retries + 1
+                        'attempts': max_retries + 1,
+                        'server_info': 'error',
+                        'pod_info': 'error'
                     }
 
     async def run_load_test(self, load_test: LoadTest) -> Dict[str, Any]:
-        """Run a complete load test"""
+        """Run a complete load test with pod distribution verification"""
         logger.info(f"🚀 Starting load test: {load_test.name}")
         logger.info(f"📝 Description: {load_test.description}")
         logger.info(f"⚙️  Config: {load_test.concurrent_requests} concurrent, {load_test.total_requests} total requests")
+        
+        # Resolve service IPs for distribution verification
+        service_ips = await self._resolve_service_ips()
+        logger.info(f"🎯 Target service IPs: {service_ips}")
         
         # Calculate expected resource usage
         expected_cpu = load_test.concurrent_requests * CONSUMER_RESOURCES["cpu_per_request"]
@@ -209,27 +357,54 @@ class LoadGenerator:
         semaphore = asyncio.Semaphore(load_test.concurrent_requests)
         tasks = []
 
-        async def bounded_request(request_id: int):
+        # Rate-limited request pattern with pod distribution
+        async def distributed_request(request_id: int, start_delay: float):
+            # Wait for our scheduled start time
+            await asyncio.sleep(start_delay)
             async with semaphore:
-                await asyncio.sleep(request_id * load_test.delay_between_requests)
                 return await self.send_process_request(load_test, request_id)
 
-        # Create all request tasks
-        for i in range(load_test.total_requests):
-            task = asyncio.create_task(bounded_request(i + 1))
-            tasks.append(task)
+        # Choose pattern based on delay configuration
+        if load_test.delay_between_requests > 0:
+            logger.info(f"🕒 Using rate-limited pattern: {1/load_test.delay_between_requests:.2f} requests/second with pod distribution")
+            # Create tasks with staggered start times for controlled rate
+            for i in range(load_test.total_requests):
+                start_delay = i * load_test.delay_between_requests
+                # Add small random jitter to break connection patterns
+                start_delay += random.uniform(0, 0.1)
+                task = asyncio.create_task(distributed_request(i + 1, start_delay))
+                tasks.append(task)
+        else:
+            logger.info(f"⚡ Using burst pattern with pod distribution: all requests start immediately")
+            # Create all request tasks with small random delays for distribution
+            for i in range(load_test.total_requests):
+                start_delay = random.uniform(0, 0.5)  # Random delay up to 500ms
+                task = asyncio.create_task(distributed_request(i + 1, start_delay))
+                tasks.append(task)
 
         # Wait for all requests to complete
-        logger.info(f"⏳ Sending {load_test.total_requests} requests...")
+        logger.info(f"⏳ Sending {load_test.total_requests} requests with pod distribution strategy...")
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         end_time = time.time()
         total_time = end_time - start_time
 
-        # Process results
+        # Process results with pod distribution analysis
         successful_requests = [r for r in results if isinstance(r, dict) and r.get('success', False)]
         failed_requests = [r for r in results if isinstance(r, dict) and not r.get('success', False)]
         exceptions = [r for r in results if not isinstance(r, dict)]
+        
+        # Analyze pod distribution
+        pod_distribution = {}
+        session_distribution = {}
+        
+        for req in successful_requests + failed_requests:
+            if isinstance(req, dict):
+                pod_info = req.get('pod_info', 'unknown')
+                session_id = req.get('session_id', 'unknown')
+                
+                pod_distribution[pod_info] = pod_distribution.get(pod_info, 0) + 1
+                session_distribution[session_id] = session_distribution.get(session_id, 0) + 1
         
         # Count retry statistics
         requests_with_retries = [r for r in successful_requests + failed_requests if r.get('attempts', 1) > 1]
@@ -250,6 +425,9 @@ class LoadGenerator:
             'success_rate': len(successful_requests) / load_test.total_requests * 100,
             'avg_response_time': avg_response_time,
             'requests_per_second': load_test.total_requests / total_time,
+            'pod_distribution': pod_distribution,
+            'session_distribution': session_distribution,
+            'unique_pods_hit': len([k for k in pod_distribution.keys() if k not in ['unknown', 'error', 'timeout']]),
             'expected_resource_usage': {
                 'peak_cpu_cores': expected_cpu,
                 'peak_memory_mb': expected_memory,
@@ -261,6 +439,8 @@ class LoadGenerator:
 
         logger.info(f"✅ Load test completed in {total_time:.2f}s")
         logger.info(f"📊 Success rate: {test_summary['success_rate']:.1f}% ({len(successful_requests)}/{load_test.total_requests})")
+        logger.info(f"🏗️  Pod distribution: {dict(list(pod_distribution.items())[:5])}{'...' if len(pod_distribution) > 5 else ''}")
+        logger.info(f"🎯 Unique pods hit: {test_summary['unique_pods_hit']}")
         if requests_with_retries:
             logger.info(f"🔄 Retries: {len(requests_with_retries)} requests needed retries (total attempts: {total_attempts})")
         logger.info(f"⚡ RPS: {test_summary['requests_per_second']:.2f}")
@@ -268,8 +448,6 @@ class LoadGenerator:
 
         self.results.append(test_summary)
         return test_summary
-
-
 
 
 # Predefined load test scenarios aligned with HPA configuration
@@ -331,7 +509,7 @@ LOAD_TESTS = {
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Load Generator for Consumer Service HPA Testing")
+    parser = argparse.ArgumentParser(description="Pod-Distributed Load Generator for HPA Testing")
     parser.add_argument("--url", default="http://localhost:8000", help="Base URL of the consumer service")
     parser.add_argument("--test", default=None,
                         help="Predefined test scenario (minimal, light, medium, heavy, sustained, burst)")
@@ -341,9 +519,8 @@ async def main():
     parser.add_argument("--total", type=int, default=30, help="Total number of requests")
     parser.add_argument("--async-mode", action="store_true", default=True, help="Use async mode")
     parser.add_argument("--sync-mode", action="store_true", help="Use sync mode (overrides async)")
-    parser.add_argument("--delay", type=float, default=1.0, help="Delay between requests in seconds")
+    parser.add_argument("--delay", type=float, default=1.0, help="Delay between request STARTS in seconds (rate limiting)")
     parser.add_argument("--seed", type=int, default=12345, help="Random seed for deterministic testing")
-
 
     args = parser.parse_args()
 
@@ -388,8 +565,8 @@ async def main():
     logger.info(f"🏗️  Expected pods: {expected_pods}")
     logger.info(f"🎯 HPA will trigger: {'Yes' if hpa_will_trigger else 'No'}")
 
-    # Run the load test
-    async with LoadGenerator(args.url) as generator:
+    # Run the load test with pod distribution
+    async with PodDistributedLoadGenerator(args.url) as generator:
         # Health check
         if not await generator.health_check():
             logger.error("❌ Service health check failed")
@@ -399,6 +576,14 @@ async def main():
         test_result = await generator.run_load_test(load_test)
 
         logger.info(f"✅ Load test '{load_test.name}' completed successfully")
+        
+        # Final pod distribution summary
+        if test_result['unique_pods_hit'] > 1:
+            logger.info(f"🎯 SUCCESS: Distributed load across {test_result['unique_pods_hit']} different pods")
+        elif test_result['unique_pods_hit'] == 1:
+            logger.warning(f"⚠️  WARNING: All requests went to the same pod - HPA testing may be invalid")
+        else:
+            logger.error(f"❌ ERROR: Could not determine pod distribution")
 
 
 if __name__ == "__main__":

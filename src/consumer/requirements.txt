@@ -1,9 +1,19 @@
+# Core FastAPI and server
 fastapi==0.115.6
 uvicorn==0.32.1
 pydantic>=2.10.0
-prometheus-fastapi-instrumentator
-opentelemetry-api
-opentelemetry-sdk
-opentelemetry-exporter-otlp
-opentelemetry-instrumentation-fastapi
-opentelemetry-instrumentation-requests
+
+# Monitoring and metrics
+prometheus-fastapi-instrumentator==7.0.0
+psutil==6.1.0
+
+# OpenTelemetry tracing
+opentelemetry-api==1.28.2
+opentelemetry-sdk==1.28.2
+opentelemetry-exporter-otlp==1.28.2
+opentelemetry-instrumentation-fastapi==0.49b2
+opentelemetry-instrumentation-requests==0.49b2
+
+# Optional: for better async performance
+httptools==0.6.4
+uvloop==0.21.0; sys_platform != "win32"
