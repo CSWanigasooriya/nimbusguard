@@ -105,6 +105,7 @@ def export_metrics(
     prometheus_url,
     days,
     minutes,
+    seconds,
     step,
     output_format,
     output_dir,
@@ -129,6 +130,8 @@ def export_metrics(
             logging.info(f"Days: {days}, Step: {step}")
         if minutes is not None:
             logging.info(f"Minutes: {minutes}, Step: {step}")
+        if seconds is not None:
+            logging.info(f"Seconds: {seconds}, Step: {step}")
         logging.info(f"Output Format: {output_format}, Output Dir: {output_path}")
         if metrics_file:
             logging.info(f"Metrics File: {metrics_file}")
@@ -165,7 +168,10 @@ def export_metrics(
         return
 
     end_time = datetime.now()
-    if minutes is not None:
+    if seconds is not None:
+        start_time = end_time - timedelta(seconds=seconds)
+        logging.info(f"Exporting metrics from {start_time} to {end_time} ({seconds} seconds)")
+    elif minutes is not None:
         start_time = end_time - timedelta(minutes=minutes)
         logging.info(f"Exporting metrics from {start_time} to {end_time} ({minutes} minutes)")
     else:
@@ -222,8 +228,10 @@ def main():
                       help='Number of days to export')
     parser.add_argument('--minutes', type=int, default=None,
                       help='Number of minutes to export (alternative to --days)')
+    parser.add_argument('--seconds', type=int, default=None,
+                      help='Number of seconds to export (alternative to --days/--minutes)')
     parser.add_argument('--step', default='1m',
-                      help='Query resolution step width')
+                      help='Query resolution step width (e.g., 15s, 30s, 1m, 5m, 1h). Supports Prometheus duration format.')
     parser.add_argument('--output-format', choices=['unified', 'individual'],
                       default='individual',
                       help='Output format: unified parquet or individual CSVs')
@@ -249,11 +257,11 @@ def main():
     args = parser.parse_args()
     
     # Validate time range arguments
-    if args.days is not None and args.minutes is not None:
-        logging.error("Cannot specify both --days and --minutes")
+    if sum(1 for x in [args.days, args.minutes, args.seconds] if x is not None) > 1:
+        logging.error("Cannot specify more than one of --days, --minutes, or --seconds")
         sys.exit(1)
     
-    if args.days is None and args.minutes is None:
+    if args.days is None and args.minutes is None and args.seconds is None:
         args.days = 7  # Default to 7 days
     
     try:
@@ -274,6 +282,7 @@ def main():
             prometheus_url=args.url,
             days=args.days,
             minutes=args.minutes,
+            seconds=args.seconds,
             step=args.step,
             output_format=args.output_format,
             output_dir=args.output_dir,
