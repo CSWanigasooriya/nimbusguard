@@ -3,7 +3,7 @@
 Simple Load Generator
 
 A straightforward tool to generate HTTP load against a service.
-Focus: Generate load, measure basic metrics, keep it simple.
+Focus: Generate load, measure basic metrics, ensure proper load distribution.
 """
 
 import argparse
@@ -38,7 +38,18 @@ class SimpleLoadGenerator:
         self.session = None
 
     async def __aenter__(self):
+        # Configure session to ensure proper load distribution across pods
+        connector = aiohttp.TCPConnector(
+            limit=0,  # No connection pool limit
+            limit_per_host=1,  # Only 1 connection per host at a time
+            ttl_dns_cache=0,  # Disable DNS caching
+            use_dns_cache=False,  # Disable DNS caching
+            keepalive_timeout=0,  # Disable keep-alive
+            enable_cleanup_closed=True
+        )
+        
         self.session = aiohttp.ClientSession(
+            connector=connector,
             timeout=aiohttp.ClientTimeout(total=30)
         )
         return self
@@ -62,15 +73,19 @@ class SimpleLoadGenerator:
             return False
 
     async def send_request(self, request_id: int, async_mode: bool) -> Dict[str, Any]:
-        """Send a single request"""
+        """Send a single request with proper load distribution"""
         start_time = time.time()
         
         try:
             params = {'async_mode': str(async_mode).lower()}
             
+            # Force connection closure after each request to ensure load distribution
+            headers = {'Connection': 'close'}
+            
             async with self.session.post(
                 f"{self.base_url}/process",
                 params=params,
+                headers=headers,
                 timeout=aiohttp.ClientTimeout(total=25)
             ) as response:
                 end_time = time.time()
