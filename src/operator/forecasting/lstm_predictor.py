@@ -108,17 +108,13 @@ class LSTMPredictor(BasePredictor):
                 # Reshape if needed
                 scaled_prediction = scaled_prediction.reshape(1, 1, 2)
             
-            # Calculate confidence based on data quality and prediction stability
-            confidence = self._calculate_confidence(df_features, scaled_prediction, sequence_data)
-            
             # Inverse transform to get actual values
             prediction = self.scaler.inverse_transform(scaled_prediction.reshape(1, 2))
 
             # Map back to Prometheus metric names for the operator
             forecast = {
                 'process_cpu_seconds_total_rate': float(prediction[0, 0]),
-                'process_resident_memory_bytes': float(prediction[0, 1]),
-                'confidence': float(confidence)
+                'process_resident_memory_bytes': float(prediction[0, 1])
             }
             
             # Ensure non-negative values (physical constraints)

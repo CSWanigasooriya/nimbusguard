@@ -146,11 +146,6 @@ class MetricsCollector:
         )
 
         # Forecasting metrics
-        self.forecast_confidence = Gauge(
-            'nimbusguard_forecast_confidence',
-            'Forecast confidence score'
-        )
-
         self.forecast_horizon_seconds = Gauge(
             'nimbusguard_forecast_horizon_seconds',
             'Forecast horizon in seconds'
@@ -436,7 +431,6 @@ class MetricsCollector:
                 'dqn_desired_replicas': self.dqn_desired_replicas._value._value,
                 'dqn_epsilon_value': self.dqn_epsilon_value._value._value,
                 'dqn_replay_buffer_size': self.dqn_replay_buffer_size._value._value,
-                'forecast_confidence': self.forecast_confidence._value._value,
                 'system_health_score': self.system_health_score._value._value,
                 'dqn_training_loss': self.dqn_training_loss._value._value,
                 'dqn_decisions_total': self.dqn_decisions_total._value._value

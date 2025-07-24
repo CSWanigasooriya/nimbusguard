@@ -55,25 +55,6 @@ class ProactiveRewardCalculator:
         return validated_metrics
 
     @staticmethod
-    def _get_context_aware_weights(load_class: str, forecast_confidence: float) -> tuple:
-        """Adjust reward weights based on system context."""
-        # CRITICAL: Zero metrics (stuck pods) - prioritize immediate action over forecasting
-        if load_class == "ZERO":
-            return 0.9, 0.1  # Strong emphasis on current state reward to encourage scaling up
-
-        # High load: prioritize immediate response over forecasting
-        elif load_class == "HIGH":
-            return 0.8, 0.2  # current_weight, forecast_weight
-
-        # Low load with good forecast: prioritize proactive planning
-        elif load_class == "LOW" and forecast_confidence > 0.5:
-            return 0.4, 0.6
-
-        # Medium load or uncertain forecast: balanced approach
-        else:
-            return 0.6, 0.4
-
-    @staticmethod
     def _validate_replicas(replicas: int, context: str = "") -> int:
         """Validate replica count and handle edge cases explicitly."""
         if replicas < 0:
@@ -85,250 +66,7 @@ class ProactiveRewardCalculator:
         else:
             return replicas
 
-    def _track_action(self, action: str) -> None:
-        """Track recent actions for stability analysis."""
-        self.recent_actions.append(action)
-        if len(self.recent_actions) > self.max_action_history:
-            self.recent_actions.pop(0)
-        logger.info(
-            f"Action tracked: {action}, history: {self.recent_actions} ({len(self.recent_actions)}/{self.max_action_history})")
-
-    def _track_load_class(self, load_class: str) -> None:
-        """Track recent load classifications to detect load changes."""
-        self.recent_load_classes.append(load_class)
-        if len(self.recent_load_classes) > self.max_load_history:
-            self.recent_load_classes.pop(0)
-        logger.debug(f"Load tracked: {load_class}, history: {self.recent_load_classes}")
-
-    def _detect_load_change(self) -> bool:
-        """Detect if there was a significant load change recently."""
-        if len(self.recent_load_classes) < 2:
-            return False
-
-        # Check if load changed from LOW/MEDIUM to HIGH or HIGH/MEDIUM to LOW
-        current = self.recent_load_classes[-1]
-        previous = self.recent_load_classes[-2]
-
-        significant_change = (
-                (previous in ["LOW", "MEDIUM"] and current == "HIGH") or
-                (previous in ["HIGH", "MEDIUM"] and current == "LOW") or
-                (previous == "LOW" and current == "MEDIUM") or
-                (previous == "MEDIUM" and current == "LOW")
-        )
-
-        if significant_change:
-            logger.info(f"🔄 Load change detected: {previous} → {current}")
-
-        return significant_change
-
-    def _calculate_stability_penalty(self, action: str, current_metrics: Dict[str, float] = None,
-                                     current_replicas: int = 1, load_class: str = None) -> float:
-        """Context-aware stability system that distinguishes between justified quick scaling and harmful oscillations."""
-        logger.debug(
-            f"Stability analysis: action={action}, history_size={len(self.recent_actions)}, recent_actions={self.recent_actions}")
-
-        if len(self.recent_actions) < 2:
-            logger.debug(f"Insufficient history for stability analysis: {len(self.recent_actions)}/2")
-            return 0.1  # Small positive reward for early actions
-
-        stability_score = 0.0
-
-        # Get current load context if available (use passed load_class to avoid duplicate calculation)
-        current_load_class = load_class
-        load_change_detected = False
-        if current_load_class:
-            self._track_load_class(current_load_class)
-            load_change_detected = self._detect_load_change()
-            logger.debug(f"Current load context: {current_load_class}, load_change: {load_change_detected}")
-        elif current_metrics and current_replicas:
-            # Fallback to calculating if not provided
-            current_load_class = self._classify_load(current_metrics, current_replicas)
-            self._track_load_class(current_load_class)
-            load_change_detected = self._detect_load_change()
-            logger.debug(f"Fallback load context: {current_load_class}, load_change: {load_change_detected}")
-
-        # 1. CONTEXT-AWARE OSCILLATION ANALYSIS
-        if len(self.recent_actions) >= 2:
-            last_action = self.recent_actions[-1]
-            second_last = self.recent_actions[-2] if len(self.recent_actions) >= 2 else None
-
-            # Check for immediate flip-flop
-            is_flip_flop = ((last_action == "scale_up" and action == "scale_down") or
-                            (last_action == "scale_down" and action == "scale_up"))
-
-            if is_flip_flop:
-                # HIGHLY JUSTIFIED: Quick scaling due to detected load change
-                if load_change_detected:
-                    logger.info(f"🚀 EXCELLENT quick scaling response to load change: {last_action} → {action}")
-                    stability_score += 0.5  # High reward for responding to load changes
-
-                # JUSTIFIED QUICK SCALING: If load is high and we're scaling up, or load is low and scaling down
-                elif current_load_class:
-                    if current_load_class == "HIGH" and action == "scale_up":
-                        logger.info(f"✅ Justified quick scale-up for HIGH load: {last_action} → {action}")
-                        stability_score += 0.3  # Reward quick response to high load
-                    elif current_load_class == "LOW" and action == "scale_down":
-                        logger.info(f"✅ Justified quick scale-down for LOW load: {last_action} → {action}")
-                        stability_score += 0.3  # Reward quick response to low load
-                    else:
-                        # Unjustified flip-flop
-                        logger.warning(
-                            f"⚠️ Unjustified flip-flop ({current_load_class} load): {last_action} → {action}")
-                        stability_score -= 0.3  # Moderate penalty (reduced from 0.5)
-                else:
-                    # No context available, apply moderate penalty
-                    logger.warning(f"⚠️ Flip-flop without context: {last_action} → {action}")
-                    stability_score -= 0.2  # Reduced penalty without context
-
-            # Check for 3-step oscillation
-            is_3_step_oscillation = (second_last and
-                                     ((
-                                                  second_last == "scale_up" and last_action == "scale_down" and action == "scale_up") or
-                                      (
-                                                  second_last == "scale_down" and last_action == "scale_up" and action == "scale_down")))
-
-            if is_3_step_oscillation:
-                # 3-step oscillations are generally bad regardless of load
-                logger.warning(f"⚠️ 3-step oscillation: {second_last} → {last_action} → {action}")
-                stability_score -= 0.5  # Reduced from 0.8
-
-        # Track the action for future stability analysis
-        self._track_action(action)
-
-        # Clamp the stability score to reasonable bounds
-        stability_score = max(-1.0, min(1.0, stability_score))
-
-        logger.info(f"🎯 Stability analysis result: {stability_score:.3f} (action: {action})")
-        return stability_score
-
-    def _calculate_resource_efficiency(self, metrics: Dict[str, float], replicas: int,
-                                       deployment_info: Optional[Dict[str, Any]] = None) -> float:
-        """Calculate resource efficiency with proper validation and fallback handling."""
-        try:
-            # Validate replicas first
-            validated_replicas = self._validate_replicas(replicas, "in resource efficiency calculation")
-
-            # Get resource utilization metrics
-            cpu_rate = metrics.get("process_cpu_seconds_total_rate", 0.0)
-            memory_bytes = metrics.get("process_resident_memory_bytes", 0.0)
-
-            # Calculate per-replica utilization
-            cpu_per_replica = cpu_rate / validated_replicas
-            memory_per_replica = memory_bytes / validated_replicas
-
-            # Proper validation of deployment limits with explicit warnings
-            cpu_limit_per_replica = None
-            memory_limit_per_replica = None
-
-            if deployment_info and deployment_info.get('resource_limits'):
-                resource_limits = deployment_info['resource_limits']
-
-                # Validate CPU limit
-                cpu_limit_total = resource_limits.get('cpu', 0.0)
-                if cpu_limit_total > 0:
-                    cpu_limit_per_replica = cpu_limit_total / validated_replicas
-                    logger.debug(f"Using deployment CPU limit: {cpu_limit_per_replica:.3f} per replica")
-                else:
-                    logger.warning("⚠️ Invalid or missing CPU limit in deployment_info, using default targets")
-
-                # Validate memory limit
-                memory_limit_total = resource_limits.get('memory', 0)
-                if memory_limit_total > 0:
-                    memory_limit_per_replica = memory_limit_total / validated_replicas
-                    logger.debug(f"Using deployment memory limit: {memory_limit_per_replica/1024/1024:.1f}MB per replica")
-                else:
-                    logger.warning("⚠️ Invalid or missing memory limit in deployment_info, using default targets")
-            else:
-                logger.info("No deployment resource limits available, using configurable default targets")
-
-            # Calculate targets (use deployment limits if available, otherwise configurable defaults)
-            if cpu_limit_per_replica and cpu_limit_per_replica > 0:
-                target_cpu = cpu_limit_per_replica * self.efficiency_targets["cpu_utilization"]
-            else:
-                target_cpu = self.efficiency_targets["default_cpu_cores"] * self.efficiency_targets["cpu_utilization"]  # 0.5 * 0.7 = 0.35
-
-            if memory_limit_per_replica and memory_limit_per_replica > 0:
-                target_memory = memory_limit_per_replica * self.efficiency_targets["memory_utilization"]
-            else:
-                target_memory = self.efficiency_targets["default_memory_mb"] * 1024 * 1024  # Convert MB to bytes
-
-            logger.debug(f"Efficiency targets: CPU={target_cpu:.3f}, Memory={target_memory/1024/1024:.1f}MB")
-
-            # Calculate efficiency scores
-            if target_cpu > 0:
-                cpu_efficiency = 1.0 - abs(cpu_per_replica - target_cpu) / target_cpu
-            else:
-                cpu_efficiency = 0.5  # Neutral if no target
-                logger.warning("⚠️ Zero CPU target, using neutral efficiency score")
-
-            if target_memory > 0:
-                memory_efficiency = 1.0 - abs(memory_per_replica - target_memory) / target_memory
-            else:
-                memory_efficiency = 0.5  # Neutral if no target
-                logger.warning("⚠️ Zero memory target, using neutral efficiency score")
-
-            # Ensure scores are between 0 and 1
-            cpu_efficiency = max(0, min(1, cpu_efficiency))
-            memory_efficiency = max(0, min(1, memory_efficiency))
-
-            efficiency_score = (cpu_efficiency * 0.6) + (memory_efficiency * 0.4)
-
-            logger.debug(f"Resource efficiency: CPU={cpu_efficiency:.3f} ({cpu_per_replica:.3f}/{target_cpu:.3f}), "
-                         f"Memory={memory_efficiency:.3f} ({memory_per_replica / 1024 / 1024:.1f}MB/{target_memory / 1024 / 1024:.1f}MB), "
-                         f"Overall={efficiency_score:.3f}")
-
-            return efficiency_score
-
-        except Exception as e:
-            logger.warning(f"Failed to calculate resource efficiency: {e}")
-            return 0.5  # Neutral score
-
-    def _calculate_cpu_memory_reward(self, cpu_rate, memory_bytes, replicas, target_cpu_cores=0.5, target_memory_mb=1024):
-        """
-        Calculate reward based on CPU and memory utilization efficiency.
-        Rewards optimal utilization and penalizes under/over-utilization.
-        
-        Args:
-            cpu_rate: Total CPU rate across all replicas
-            memory_bytes: Total memory usage across all replicas  
-            replicas: Number of replicas
-            target_cpu_cores: Target CPU per replica (default: 0.5 cores = 500m)
-            target_memory_mb: Target memory per replica (default: 1024MB = 1Gi)
-        """
-        validated_replicas = self._validate_replicas(replicas, "in CPU/memory reward calculation")
-        
-        # Calculate per-replica utilization
-        cpu_per_replica = cpu_rate / validated_replicas
-        memory_per_replica = memory_bytes / validated_replicas
-        memory_mb_per_replica = memory_per_replica / (1024 * 1024)
-        
-        # Calculate utilization efficiency
-        cpu_efficiency = min(cpu_per_replica / target_cpu_cores, 1.0) if target_cpu_cores > 0 else 0.0
-        memory_efficiency = min(memory_mb_per_replica / target_memory_mb, 1.0) if target_memory_mb > 0 else 0.0
-        
-        # Calculate penalties for exceeding targets
-        cpu_penalty = max(0, (cpu_per_replica - target_cpu_cores) / target_cpu_cores) * 2.0
-        memory_penalty = max(0, (memory_mb_per_replica - target_memory_mb) / target_memory_mb) * 1.5
-        
-        # Calculate penalties for severe under-utilization
-        cpu_waste_penalty = max(0, (target_cpu_cores * 0.3 - cpu_per_replica) / target_cpu_cores) * 0.5
-        memory_waste_penalty = max(0, (target_memory_mb * 0.3 - memory_mb_per_replica) / target_memory_mb) * 0.5
-        
-        # Combined reward
-        efficiency_reward = (cpu_efficiency * 0.6 + memory_efficiency * 0.4)
-        total_penalty = cpu_penalty + memory_penalty + cpu_waste_penalty + memory_waste_penalty
-        
-        reward = efficiency_reward - total_penalty
-        
-        # Clamp reward to reasonable bounds
-        reward = max(-2.0, min(2.0, reward))
-        
-        logger.debug(f"CPU/Memory reward: cpu_eff={cpu_efficiency:.3f}, mem_eff={memory_efficiency:.3f}, "
-                    f"penalties={total_penalty:.3f}, final_reward={reward:.3f}")
-        
-        return reward
-
-    def calculate_reward(self,
+    def calculate(self,
                          action: str,
                          current_metrics: Dict[str, float],
                          current_replicas: int,
@@ -422,16 +160,16 @@ class ProactiveRewardCalculator:
         validated_current_replicas = self._validate_replicas(current_replicas, "in current state reward calculation")
         validated_desired_replicas = self._validate_replicas(desired_replicas, "for desired replicas in current state reward")
         
-        # More aggressive reward matrix for better scaling responsiveness
+        # Normalized reward matrix for stable training
         reward_matrix = {
-            "EMERGENCY": {"scale_up": 10.0, "keep_same": -10.0, "scale_down": -20.0},  # EMERGENCY: MUST scale up immediately!
-            "ZERO": {"scale_up": -1.0, "keep_same": -0.5, "scale_down": 2.0},       # Strong scale_down incentive for zero load
-            "LOW": {"scale_up": -0.8, "keep_same": -0.2, "scale_down": 1.5},       # Strong scale_down incentive for low load
-            "MEDIUM": {"scale_up": 0.8, "keep_same": -0.5, "scale_down": 0.2},     # Slight scale_down preference for medium (to handle memory leaks)
-            "HIGH": {"scale_up": 2.0, "keep_same": -1.0, "scale_down": -2.0}       # Strong scale_up for high load
+            "EMERGENCY": {"scale_up": 5.0, "keep_same": -3.0, "scale_down": -5.0},   # Emergency: strong scale up
+            "ZERO": {"scale_up": -1.0, "keep_same": -0.5, "scale_down": 2.0},        # Zero load: prefer scale down
+            "LOW": {"scale_up": -0.5, "keep_same": 0.0, "scale_down": 1.0},          # Low load: mild scale down
+            "MEDIUM": {"scale_up": 0.5, "keep_same": 0.0, "scale_down": -0.5},       # Medium load: slight scale up
+            "HIGH": {"scale_up": 2.0, "keep_same": -1.0, "scale_down": -2.0}         # High load: strong scale up
         }
         
-        # Use a simple load classification for reward matrix selection
+        # Use load classification for reward matrix selection
         load_class = self._classify_load(current_metrics, validated_current_replicas, deployment_info)
         base_reward = reward_matrix.get(load_class, {}).get(action, 0.0)
         
@@ -502,15 +240,18 @@ class ProactiveRewardCalculator:
             cpu_per_replica = cpu_rate / validated_current_replicas
             
             if cpu_per_replica < 0.3:  # Low CPU per replica
-                excess_replicas = validated_current_replicas - 3  # Target ~3 replicas max for low load
+                excess_replicas = min(validated_current_replicas - 3, 10)  # Cap at 10 excess replicas
                 if action in ["keep_same", "scale_up"]:
-                    excessive_replica_penalty = -2.0 * excess_replicas  # -2.0 per excess replica
+                    excessive_replica_penalty = -0.5 * excess_replicas  # Reduced from -2.0 to -0.5
                     logger.warning(f"🚨 EXCESSIVE REPLICA PENALTY: {validated_current_replicas} replicas with low CPU → penalty {excessive_replica_penalty:.1f}")
                 elif action == "scale_down":
-                    excessive_replica_penalty = 1.0 * excess_replicas  # Bonus for scaling down
+                    excessive_replica_penalty = 0.5 * excess_replicas  # Reduced from 1.0 to 0.5
                     logger.info(f"🎯 SCALE-DOWN REWARD: +{excessive_replica_penalty:.1f} for reducing {validated_current_replicas} excessive replicas")
         
         total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus + scale_down_bonus + emergency_bonus + excessive_replica_penalty
+        
+        # Clip total reward to prevent training instability
+        total_reward = max(-10.0, min(10.0, total_reward))
         
         logger.debug(f"Current state reward: load={load_class}, action={action}, "
                      f"base={base_reward}, efficiency={efficiency_penalty}, "
@@ -529,8 +270,8 @@ class ProactiveRewardCalculator:
         """Calculate reward based on forecast predictions (no confidence weighting)."""
         forecast_summary = forecast_result.get("predicted_metrics", {})
         
-        # Simple proactive reward based on predicted vs current values
-        proactive_reward = self._calculate_proactive_reward_simple(
+        # Proactive reward based on predicted vs current values
+        proactive_reward = self._calculate_proactive_reward(
             action, current_metrics, forecast_summary, current_replicas, desired_replicas
         )
 
@@ -539,12 +280,12 @@ class ProactiveRewardCalculator:
         return proactive_reward
 
     @staticmethod
-    def _calculate_proactive_reward_simple(action: str,
+    def _calculate_proactive_reward(action: str,
                                           current_metrics: Dict[str, float],
                                           forecast_metrics: Dict[str, float],
                                           current_replicas: int,
                                           desired_replicas: int) -> float:
-        """Calculate simple proactive reward by comparing forecast vs current metrics."""
+        """Calculate proactive reward by analyzing forecast trends against current metrics."""
         try:
             current_cpu = current_metrics.get("process_cpu_seconds_total_rate", 0.0)
             current_memory = current_metrics.get("process_resident_memory_bytes", 0.0)
@@ -788,7 +529,6 @@ class ProactiveRewardCalculator:
 
         if forecast_result:
             forecast_rec = forecast_result.get("recommendation", "unknown")
-            forecast_conf = forecast_result.get("confidence", 0.0)
-            explanation += f", Forecast: {forecast_rec} (conf: {forecast_conf:.2f})"
+            explanation += f", Forecast: {forecast_rec}"
 
         return explanation

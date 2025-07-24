@@ -63,9 +63,9 @@ class ProactiveDQNAgent:
         self.scaler = RobustScaler()
         self.scaler_fitted = False
         
-        # State and action dimensions - SIMPLIFIED
-        # Just 2 current metrics (CPU, Memory) + 3 meta features = 5 total
-        self.state_dim = len(config.selected_features) + 3  # current metrics + meta (no forecast in state)
+        # State and action dimensions
+        # 2 current metrics (CPU, Memory) + 1 context (current replicas) = 3 total dimensions
+        self.state_dim = len(config.selected_features) + 1  # current metrics + current replicas
         self.action_dim = 3  # scale_down, keep_same, scale_up
         
         # Initialize networks
@@ -143,29 +143,21 @@ class ProactiveDQNAgent:
                           forecast_metrics: Optional[Dict[str, float]] = None,
                           current_replicas: int = 1) -> np.ndarray:
         """
-        Create simplified 5-dimensional state vector from current metrics and metadata only.
+        Create 3-dimensional state vector from current metrics and essential context.
         
         State vector structure:
         - Positions 0-1: Current metrics (CPU rate, Memory bytes) - scaled
         - Position 2: Current replicas - not scaled
-        - Position 3: Normalized replica ratio (current/max) - not scaled  
-        - Position 4: Current epsilon (exploration rate) - not scaled
-        
-        Note: Forecast is NOT included in state vector - it's used for reward calculation instead.
         """
         state = []
         
-        # 1. Current metrics only (2 features) - scaled
+        # 1. Current metrics (2 features) - scaled
         current_raw_features = [current_metrics.get(feature, 0.0) for feature in self.config.selected_features]
         current_scaled_features = self._scale_features(current_raw_features)
         state.extend(current_scaled_features)
 
-        # 2. Meta features (3 features) - not scaled
-        state.extend([
-            current_replicas,
-            current_replicas / self.config.max_replicas,  # Normalized replica ratio
-            self.epsilon,  # Current exploration rate
-        ])
+        # 2. Essential context (1 feature) - current replicas
+        state.append(current_replicas)
         
         return np.array(state, dtype=np.float32)
     

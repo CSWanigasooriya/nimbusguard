@@ -181,11 +181,10 @@ async def generate_forecast_node(state: OperatorState, services: Dict[str, Any],
         execution_time = (time.time() - start_time) * 1000
         state = add_node_output(state, 'generate_forecast', {
             'method': 'lstm',
-            'confidence': 0.9,
             'horizon_seconds': config.forecasting.forecast_horizon_seconds
         }, execution_time)
 
-        logger.info(f"✅ LSTM forecast generated: confidence=0.9, horizon={config.forecasting.forecast_horizon_seconds}s")
+        logger.info(f"✅ LSTM forecast generated: horizon={config.forecasting.forecast_horizon_seconds}s")
         return state
 
     except Exception as e:
@@ -208,7 +207,7 @@ async def dqn_decision_node(state: OperatorState, services: Dict[str, Any], conf
         if not dqn_agent:
             raise Exception("DQN agent not available")
 
-        # Create state vector (now 5 dimensions)
+        # Create state vector (now 3 dimensions)
         dqn_state_vector = dqn_agent.create_state_vector(
             state['current_metrics'],
             state['forecast_result']['predicted_metrics'] if state['forecast_result'] else None,
@@ -626,7 +625,7 @@ async def calculate_reward_node(state: OperatorState, services: Dict[str, Any], 
                 logger.warning(f"Failed to get deployment resource info: {e}")
 
         # Use the sophisticated IoT-inspired reward system with deployment resource limits
-        reward = dqn_agent.reward_calculator.calculate_reward(
+        reward = dqn_agent.reward_calculator.calculate(
             action=state['scaling_decision'],
             current_metrics=state['current_metrics'],
             current_replicas=state['current_replicas'],

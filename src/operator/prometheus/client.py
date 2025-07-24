@@ -1,4 +1,4 @@
-"""Simple Prometheus client for fetching selected metrics."""
+"""Prometheus client for fetching selected metrics."""
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class PrometheusClient:
-    """Simple client for fetching Prometheus metrics."""
+    """Client for fetching Prometheus metrics."""
 
     def __init__(self):
         self.base_url = config.prometheus.url

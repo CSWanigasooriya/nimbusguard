@@ -82,7 +82,7 @@ def storage_probe(**kwargs):
     """Check MinIO storage connectivity."""
     try:
         if 'minio_client' in services:
-            # Simple connectivity test
+            # Test connectivity
             services['minio_client'].bucket_exists("models")
             return {"minio": "connected"}
         return {"minio": "not_configured"}

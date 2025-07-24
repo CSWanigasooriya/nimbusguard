@@ -59,6 +59,9 @@ class DQNNetwork(nn.Module):
         # Combine value and advantage to get Q-values
         # Q(s,a) = V(s) + A(s,a) - mean(A(s,a))
         q_values = value + advantage - advantage.mean(dim=1, keepdim=True)
+        
+        # Clip Q-values to prevent explosive values that destabilize training
+        q_values = torch.clamp(q_values, min=-50.0, max=50.0)
 
         return q_values
 

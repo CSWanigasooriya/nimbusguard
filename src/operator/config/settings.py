@@ -1,5 +1,5 @@
 """
-Simple configuration system using environment variables.
+Configuration system using environment variables for the NimbusGuard operator.
 """
 
 import os
@@ -52,7 +52,7 @@ class ScalingConfig:
 
         # DQN configuration
         self.dqn_hidden_dims = [int(x) for x in os.getenv("DQN_HIDDEN_DIMS", "64,32").split(",")]
-        self.dqn_learning_rate = float(os.getenv("DQN_LEARNING_RATE", "0.001"))
+        self.dqn_learning_rate = float(os.getenv("DQN_LEARNING_RATE", "0.0001"))  # Reduced for stability
         self.dqn_gamma = float(os.getenv("DQN_GAMMA", "0.95"))
         self.dqn_epsilon_start = float(os.getenv("DQN_EPSILON_START", "0.2"))
         self.dqn_epsilon_end = float(os.getenv("DQN_EPSILON_END", "0.01"))
