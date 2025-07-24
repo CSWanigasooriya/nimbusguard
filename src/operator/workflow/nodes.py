@@ -67,6 +67,20 @@ async def collect_metrics_node(state: OperatorState, services: Dict[str, Any], c
         # Collect current metrics using PrometheusClient
         raw_metrics = prometheus.get_current_metrics()
 
+        # Log the fetched metrics for debugging and monitoring
+        logger.info(f"📊 Current metrics fetched from Prometheus:")
+        for metric_name, value in raw_metrics.items():
+            if isinstance(value, (int, float)):
+                if 'memory' in metric_name.lower():
+                    # Convert memory to MB for readability
+                    logger.info(f"  🧠 {metric_name}: {value/1024/1024:.2f} MB ({value:,.0f} bytes)")
+                elif 'cpu' in metric_name.lower():
+                    logger.info(f"  ⚙️  {metric_name}: {value:.4f} cores")
+                else:
+                    logger.info(f"  📈 {metric_name}: {value}")
+            else:
+                logger.info(f"  📊 {metric_name}: {value}")
+
         # Ensure all metrics are serializable (convert numpy types to Python types)
         def make_serializable(obj):
             """Convert numpy types to Python native types."""
@@ -97,6 +111,7 @@ async def collect_metrics_node(state: OperatorState, services: Dict[str, Any], c
         # Update state
         state = update_state_with_metrics(state, metrics)
         state['current_replicas'] = current_replicas
+        state['deployment_info'] = deployment_info  # Store deployment info for other nodes
 
         # CRITICAL FIX: Always update current replicas metric during collection
         if 'metrics' in services:
@@ -221,15 +236,20 @@ async def dqn_decision_node(state: OperatorState, services: Dict[str, Any], conf
             use_forecast_guidance=True
         )
 
+        # Get deployment-specific constraints for action bounds
+        deployment_info = state.get('deployment_info')
+        min_replicas = deployment_info.get('min_replicas', 1) if deployment_info else 1
+        max_replicas = deployment_info.get('max_replicas', 50) if deployment_info else 50
+
         # Convert action to replica count
         if action == 0:  # scale_down
-            desired_replicas = max(config.scaling.min_replicas, state['current_replicas'] - 1)
+            desired_replicas = max(min_replicas, state['current_replicas'] - 1)
             action_name = "scale_down"
         elif action == 1:  # keep_same
             desired_replicas = state['current_replicas']
             action_name = "keep_same"
         else:  # scale_up (action == 2)
-            desired_replicas = min(config.scaling.max_replicas, state['current_replicas'] + 1)
+            desired_replicas = min(max_replicas, state['current_replicas'] + 1)
             action_name = "scale_up"
 
         # Create Q-values dict for metrics

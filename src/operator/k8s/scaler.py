@@ -19,9 +19,9 @@ class DirectScaler:
         self.config = scaling_config
         self.logger = logger
 
-        # Default scaling constraints (fallback values)
-        self.default_min_replicas = scaling_config.min_replicas
-        self.default_max_replicas = scaling_config.max_replicas
+        # Default scaling constraints (hardcoded fallbacks when deployment annotations are missing)
+        self.default_min_replicas = 1
+        self.default_max_replicas = 50
 
         # Target deployment
         self.target_deployment = scaling_config.target_deployment
@@ -200,7 +200,7 @@ class DirectScaler:
             self.logger.warning(f"🚨 Emergency scaling to {replicas} replicas: {reason}")
 
             # Apply only hard limits
-            constrained_replicas = max(1, min(self.max_replicas * 2, replicas))  # Allow 2x max in emergency
+            constrained_replicas = max(1, min(self.default_max_replicas * 2, replicas))  # Allow 2x max in emergency
 
             success = await self.k8s_client.scale_deployment(
                 self.target_deployment,

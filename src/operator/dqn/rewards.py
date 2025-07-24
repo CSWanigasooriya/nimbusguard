@@ -80,26 +80,9 @@ class ProactiveRewardCalculator:
             validated_current_replicas = self._validate_replicas(current_replicas, "in reward calculation")
             validated_desired_replicas = self._validate_replicas(desired_replicas, "for desired replicas")
 
-            # Get load classification for emergency detection
-            load_class = self._classify_load(validated_metrics, validated_current_replicas, deployment_info)
-
-            # Base reward from current state
+            # Base reward from current state (includes CPU/memory efficiency)
             current_reward = self._calculate_current_state_reward(
                 action, validated_metrics, validated_current_replicas, validated_desired_replicas, deployment_info
-            )
-
-            # CPU and Memory efficiency reward
-            cpu_rate = validated_metrics.get("process_cpu_seconds_total_rate", 0.0)
-            memory_bytes = validated_metrics.get("process_resident_memory_bytes", 0.0)
-            cpu_memory_reward = self._calculate_cpu_memory_reward(
-                cpu_rate, memory_bytes, validated_current_replicas,
-                self.efficiency_targets["default_cpu_cores"], 
-                self.efficiency_targets["default_memory_mb"]
-            )
-
-            # Stability analysis
-            stability_reward = self._calculate_stability_penalty(
-                action, validated_metrics, validated_current_replicas, load_class
             )
 
             # Forecast-based reward adjustment (always use forecast if available)
@@ -114,27 +97,26 @@ class ProactiveRewardCalculator:
 
             # Use configurable weights for current and forecast rewards with safe fallbacks
             try:
-                current_weight = getattr(config.reward, 'current_weight', 0.5)
-                forecast_weight = getattr(config.reward, 'forecast_weight', 0.5)
+                current_weight = getattr(config.reward, 'current_weight', 0.7)  # Increased since it includes more factors
+                forecast_weight = getattr(config.reward, 'forecast_weight', 0.3)
             except AttributeError:
                 logger.warning("Config.reward not accessible, using default weights")
-                current_weight = 0.5
-                forecast_weight = 0.5
+                current_weight = 0.7
+                forecast_weight = 0.3
             
             logger.debug(f"Reward weights: current={current_weight}, forecast={forecast_weight}")
 
-            # Combined reward 
+            # Combined reward (simplified to just current and forecast)
             total_reward = (
                 current_reward * current_weight + 
-                forecast_reward * forecast_weight + 
-                cpu_memory_reward * 0.4 + 
-                stability_reward * 0.2
+                forecast_reward * forecast_weight
             )
 
             logger.info(f"Reward calculation: current={current_reward:.2f}, forecast={forecast_reward:.2f}, "
-                       f"cpu_memory={cpu_memory_reward:.2f}, stability={stability_reward:.2f}, total={total_reward:.2f}")
+                       f"total={total_reward:.2f}")
             
             # Special logging for emergency situations
+            load_class = self._classify_load(validated_metrics, validated_current_replicas, deployment_info)
             if load_class == "EMERGENCY":
                 logger.error(f"🚨 EMERGENCY REWARD BREAKDOWN: action={action}, load_class={load_class}, total_reward={total_reward:.2f}")
                 if total_reward < 5.0:
@@ -183,11 +165,32 @@ class ProactiveRewardCalculator:
         emergency_bonus = 0.0
         excessive_replica_penalty = 0.0
         
-        # Penalties for invalid replica counts
-        if desired_replicas < 1:
-            base_reward -= 5.0
-        if current_replicas >= 1 and desired_replicas >= 1:
-            base_reward += 0.2
+        # Get deployment-specific replica constraints
+        min_replicas = deployment_info.get('min_replicas', 1) if deployment_info else 1
+        max_replicas = deployment_info.get('max_replicas', 50) if deployment_info else 50
+        
+        # Log deployment constraints for debugging
+        if deployment_info:
+            deployment_name = deployment_info.get('name', 'unknown')
+            deployment_namespace = deployment_info.get('namespace', 'unknown')
+            current_deployment_replicas = deployment_info.get('replicas', 'unknown')
+            logger.info(f"📋 Deployment constraints: {deployment_namespace}/{deployment_name} - "
+                       f"min={min_replicas}, max={max_replicas}, current_spec={current_deployment_replicas}, "
+                       f"current_actual={validated_current_replicas}, desired={validated_desired_replicas}")
+        else:
+            logger.warning("⚠️ No deployment_info available, using default constraints: min=1, max=50")
+
+        # Deployment-aware penalties for invalid replica counts
+        if desired_replicas < min_replicas:
+            penalty = (min_replicas - desired_replicas) * -2.0  # -2.0 per replica below minimum
+            base_reward += penalty
+            logger.warning(f"🚨 BELOW MIN REPLICAS: desired={desired_replicas} < min={min_replicas}, penalty={penalty:.1f}")
+        elif desired_replicas > max_replicas:
+            penalty = (desired_replicas - max_replicas) * -1.0  # -1.0 per replica above maximum
+            base_reward += penalty
+            logger.warning(f"🚨 ABOVE MAX REPLICAS: desired={desired_replicas} > max={max_replicas}, penalty={penalty:.1f}")
+        else:
+            base_reward += 0.2  # Small bonus for staying within deployment constraints
             
         # Resource efficiency considerations
         efficiency_penalty = self._calculate_efficiency_penalty(
@@ -201,10 +204,10 @@ class ProactiveRewardCalculator:
         resource_efficiency = self._calculate_resource_efficiency(current_metrics, current_replicas, deployment_info)
         resource_bonus = resource_efficiency * 0.3
         
-        # SCALE-DOWN BONUS: Extra reward for scaling down during low load
+        # Deployment-aware scale-down bonus
         scale_down_bonus = 0.0
-        if action == "scale_down" and load_class in ["ZERO", "LOW"]:
-            # Get CPU and memory utilization for bonus calculation
+        if action == "scale_down" and load_class in ["ZERO", "LOW"] and validated_current_replicas > min_replicas:
+            # Only give scale-down bonus if we're above minimum replicas
             cpu_rate = current_metrics.get("process_cpu_seconds_total_rate", 0.0)
             memory_bytes = current_metrics.get("process_resident_memory_bytes", 0.0)
             cpu_per_replica = cpu_rate / current_replicas
@@ -215,10 +218,12 @@ class ProactiveRewardCalculator:
             memory_underutil = max(0, (400 * 1024 * 1024) - memory_per_replica) / (400 * 1024 * 1024)  # 400MB baseline
             
             underutil_score = (cpu_underutil + memory_underutil) / 2
-            scale_down_bonus = underutil_score * 0.8  # Up to +0.8 bonus for scaling down when very underutilized
+            # Scale bonus based on how far above minimum we are
+            distance_from_min = validated_current_replicas - min_replicas
+            scale_down_bonus = underutil_score * 0.8 * min(1.0, distance_from_min / 2.0)  # Reduce bonus as we approach minimum
             
             if scale_down_bonus > 0.1:
-                logger.info(f"Scale-down bonus: +{scale_down_bonus:.2f} for scaling down during {load_class} load")
+                logger.info(f"Scale-down bonus: +{scale_down_bonus:.2f} for scaling down during {load_class} load (current={validated_current_replicas}, min={min_replicas})")
         
         # EMERGENCY OVERRIDE: If this is an emergency, heavily override all other considerations
         emergency_bonus = 0.0
@@ -233,22 +238,36 @@ class ProactiveRewardCalculator:
                 emergency_bonus = -25.0  # Severe penalty for scaling down during emergency
                 logger.warning(f"🚨 EMERGENCY SEVERE PENALTY: {emergency_bonus} for scaling down during pod health emergency!")
         
-        # MASSIVE REPLICA WASTE PENALTY: Heavily penalize excessive replicas
+        # Deployment-aware replica waste penalty
         excessive_replica_penalty = 0.0
-        if validated_current_replicas > 5:  # More than 5 replicas
+        # Calculate optimal replica count: somewhere between min and a reasonable upper bound
+        optimal_replicas = min_replicas + 2  # Allow 2 replicas above minimum as reasonable
+        
+        logger.debug(f"🎯 Optimal replica calculation: min={min_replicas} + 2 = {optimal_replicas} (current={validated_current_replicas})")
+        
+        if validated_current_replicas > optimal_replicas:  # More than optimal
             cpu_rate = current_metrics.get("process_cpu_seconds_total_rate", 0.0)
             cpu_per_replica = cpu_rate / validated_current_replicas
             
-            if cpu_per_replica < 0.3:  # Low CPU per replica
-                excess_replicas = min(validated_current_replicas - 3, 10)  # Cap at 10 excess replicas
+            if cpu_per_replica < 0.3:  # Low CPU per replica indicates waste
+                excess_replicas = min(validated_current_replicas - optimal_replicas, max_replicas - optimal_replicas)
                 if action in ["keep_same", "scale_up"]:
-                    excessive_replica_penalty = -0.5 * excess_replicas  # Reduced from -2.0 to -0.5
-                    logger.warning(f"🚨 EXCESSIVE REPLICA PENALTY: {validated_current_replicas} replicas with low CPU → penalty {excessive_replica_penalty:.1f}")
+                    excessive_replica_penalty = -0.5 * excess_replicas
+                    logger.warning(f"🚨 EXCESSIVE REPLICA PENALTY: {validated_current_replicas} replicas > optimal {optimal_replicas} with low CPU → penalty {excessive_replica_penalty:.1f}")
                 elif action == "scale_down":
-                    excessive_replica_penalty = 0.5 * excess_replicas  # Reduced from 1.0 to 0.5
-                    logger.info(f"🎯 SCALE-DOWN REWARD: +{excessive_replica_penalty:.1f} for reducing {validated_current_replicas} excessive replicas")
+                    excessive_replica_penalty = 0.5 * excess_replicas
+                    logger.info(f"🎯 SCALE-DOWN REWARD: +{excessive_replica_penalty:.1f} for reducing {validated_current_replicas} excessive replicas (optimal: {optimal_replicas})")
         
-        total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus + scale_down_bonus + emergency_bonus + excessive_replica_penalty
+        # CPU and Memory efficiency reward (now part of current state assessment)
+        cpu_rate = current_metrics.get("process_cpu_seconds_total_rate", 0.0)
+        memory_bytes = current_metrics.get("process_resident_memory_bytes", 0.0)
+        cpu_memory_reward = self._calculate_cpu_memory_reward(
+            cpu_rate, memory_bytes, validated_current_replicas,
+            self.efficiency_targets["default_cpu_cores"], 
+            self.efficiency_targets["default_memory_mb"]
+        )
+        
+        total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus + scale_down_bonus + emergency_bonus + excessive_replica_penalty + cpu_memory_reward
         
         # Clip total reward to prevent training instability
         total_reward = max(-10.0, min(10.0, total_reward))
@@ -257,8 +276,14 @@ class ProactiveRewardCalculator:
                      f"base={base_reward}, efficiency={efficiency_penalty}, "
                      f"waste={waste_penalty}, resource_bonus={resource_bonus:.2f}, "
                      f"scale_down_bonus={scale_down_bonus:.2f}, emergency_bonus={emergency_bonus:.2f}, "
-                     f"excessive_replica_penalty={excessive_replica_penalty:.2f}, total={total_reward}")
+                     f"excessive_replica_penalty={excessive_replica_penalty:.2f}, cpu_memory={cpu_memory_reward:.2f}, total={total_reward}")
         
+        # Summary log of deployment-aware decisions
+        if deployment_info:
+            logger.info(f"🎯 Deployment-aware reward summary: total={total_reward:.2f}, "
+                       f"within_constraints={'✅' if min_replicas <= validated_desired_replicas <= max_replicas else '❌'}, "
+                       f"optimal_range={'✅' if validated_current_replicas <= optimal_replicas else f'❌(+{validated_current_replicas - optimal_replicas})'}")
+
         return total_reward
 
     def _calculate_forecast_reward(self,
@@ -450,33 +475,88 @@ class ProactiveRewardCalculator:
         cpu_rate = metrics.get("process_cpu_seconds_total_rate", 0.0)
         cpu_per_replica = cpu_rate / validated_current_replicas
 
-        # Proper validation of deployment CPU limits
-        cpu_limit_per_replica = None
-        if deployment_info and deployment_info.get('resource_limits'):
-            resource_limits = deployment_info['resource_limits']
-            cpu_limit_total = resource_limits.get('cpu', 0.0)
-
-            if cpu_limit_total > 0:
-                cpu_limit_per_replica = cpu_limit_total / validated_current_replicas
-                cpu_utilization = cpu_per_replica / cpu_limit_per_replica
-                high_cpu_threshold = 0.6  # 60% of limit (more aggressive)
-                logger.debug(
-                    f"Using deployment CPU limit: {cpu_utilization:.3f} utilization ({cpu_per_replica:.3f}/{cpu_limit_per_replica:.3f})")
-            else:
-                logger.warning("⚠️ Invalid CPU limit in deployment_info, using absolute threshold")
-                cpu_utilization = cpu_per_replica
-                high_cpu_threshold = 0.3  # 60% of 500m default limit (more aggressive)
-        else:
-            logger.debug("No deployment limits available, using absolute CPU threshold")
-            cpu_utilization = cpu_per_replica
-            high_cpu_threshold = 0.3  # 60% of 500m default limit (more aggressive)
-
-        if cpu_utilization > high_cpu_threshold and desired_replicas <= validated_current_replicas:
-            logger.info(
-                f"Efficiency penalty: High CPU utilization {cpu_utilization:.3f} > {high_cpu_threshold}, not scaling up")
-            return -1.0  # Penalty for not scaling during very high CPU
+        # If high CPU usage and we're not scaling up appropriately
+        if cpu_per_replica > 0.4 and desired_replicas <= validated_current_replicas:
+            return -0.3  # Penalty for not scaling up during high load
 
         return 0.0
+
+    def _calculate_resource_efficiency(self, metrics: Dict[str, float], replicas: int,
+                                       deployment_info: Optional[Dict[str, Any]] = None) -> float:
+        """Calculate resource efficiency with proper validation and fallback handling."""
+        try:
+            # Validate replicas first
+            validated_replicas = self._validate_replicas(replicas, "in resource efficiency calculation")
+
+            # Get resource utilization metrics
+            cpu_rate = metrics.get("process_cpu_seconds_total_rate", 0.0)
+            memory_bytes = metrics.get("process_resident_memory_bytes", 0.0)
+
+            # Calculate per-replica utilization
+            cpu_per_replica = cpu_rate / validated_replicas
+            memory_per_replica = memory_bytes / validated_replicas
+
+            # Calculate targets (use default targets for simplicity)
+            target_cpu = self.efficiency_targets["default_cpu_cores"] * self.efficiency_targets["cpu_utilization"]
+            target_memory = self.efficiency_targets["default_memory_mb"] * 1024 * 1024  # Convert MB to bytes
+
+            # Calculate efficiency scores
+            if target_cpu > 0:
+                cpu_efficiency = 1.0 - abs(cpu_per_replica - target_cpu) / target_cpu
+            else:
+                cpu_efficiency = 0.5  # Neutral if no target
+
+            if target_memory > 0:
+                memory_efficiency = 1.0 - abs(memory_per_replica - target_memory) / target_memory
+            else:
+                memory_efficiency = 0.5  # Neutral if no target
+
+            # Ensure scores are between 0 and 1
+            cpu_efficiency = max(0, min(1, cpu_efficiency))
+            memory_efficiency = max(0, min(1, memory_efficiency))
+
+            efficiency_score = (cpu_efficiency * 0.6) + (memory_efficiency * 0.4)
+
+            return efficiency_score
+
+        except Exception as e:
+            logger.warning(f"Failed to calculate resource efficiency: {e}")
+            return 0.5  # Neutral score
+
+    def _calculate_cpu_memory_reward(self, cpu_rate, memory_bytes, replicas, target_cpu_cores=0.5, target_memory_mb=1024):
+        """
+        Calculate reward based on CPU and memory utilization efficiency.
+        Rewards optimal utilization and penalizes under/over-utilization.
+        """
+        validated_replicas = self._validate_replicas(replicas, "in CPU/memory reward calculation")
+        
+        # Calculate per-replica utilization
+        cpu_per_replica = cpu_rate / validated_replicas
+        memory_per_replica = memory_bytes / validated_replicas
+        memory_mb_per_replica = memory_per_replica / (1024 * 1024)
+        
+        # Calculate utilization efficiency
+        cpu_efficiency = min(cpu_per_replica / target_cpu_cores, 1.0) if target_cpu_cores > 0 else 0.0
+        memory_efficiency = min(memory_mb_per_replica / target_memory_mb, 1.0) if target_memory_mb > 0 else 0.0
+        
+        # Calculate penalties for exceeding targets
+        cpu_penalty = max(0, (cpu_per_replica - target_cpu_cores) / target_cpu_cores) * 2.0
+        memory_penalty = max(0, (memory_mb_per_replica - target_memory_mb) / target_memory_mb) * 1.5
+        
+        # Calculate penalties for severe under-utilization
+        cpu_waste_penalty = max(0, (target_cpu_cores * 0.3 - cpu_per_replica) / target_cpu_cores) * 0.5
+        memory_waste_penalty = max(0, (target_memory_mb * 0.3 - memory_mb_per_replica) / target_memory_mb) * 0.5
+        
+        # Combined reward
+        efficiency_reward = (cpu_efficiency * 0.6 + memory_efficiency * 0.4)
+        total_penalty = cpu_penalty + memory_penalty + cpu_waste_penalty + memory_waste_penalty
+        
+        reward = efficiency_reward - total_penalty
+        
+        # Clamp reward to reasonable bounds
+        reward = max(-2.0, min(2.0, reward))
+        
+        return reward
 
     def _calculate_waste_penalty(self, metrics: Dict[str, float],
                                  current_replicas: int,

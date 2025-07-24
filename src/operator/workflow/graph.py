@@ -131,9 +131,7 @@ class ScalingWorkflow:
             'config': {
                 'forecasting_enabled': self.config.forecasting.enabled,
                 'target_deployment': self.config.scaling.target_deployment,
-                'target_namespace': self.config.scaling.target_namespace,
-                'min_replicas': self.config.scaling.min_replicas,
-                'max_replicas': self.config.scaling.max_replicas
+                'target_namespace': self.config.scaling.target_namespace
             }
         }
 

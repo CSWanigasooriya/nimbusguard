@@ -76,6 +76,8 @@ class KubernetesClient:
 
     def _extract_replica_limit(self, annotations: Dict[str, str], limit_type: str, default: int) -> int:
         """Extract min/max replica limits from deployment annotations."""
+        self.logger.debug(f"Extracting {limit_type}_replicas from annotations: {list(annotations.keys())}")
+        
         # Check various annotation formats commonly used for replica limits
         possible_keys = [
             f"nimbusguard.io/{limit_type}-replicas",
@@ -89,13 +91,13 @@ class KubernetesClient:
             if key in annotations:
                 try:
                     value = int(annotations[key])
-                    self.logger.debug(f"Found {limit_type}_replicas={value} from annotation {key}")
+                    self.logger.info(f"✅ Found {limit_type}_replicas={value} from annotation '{key}'")
                     return value
                 except ValueError:
                     self.logger.warning(f"Invalid {limit_type}_replicas value in annotation {key}: {annotations[key]}")
                     continue
 
-        self.logger.debug(f"No {limit_type}_replicas annotation found, using default: {default}")
+        self.logger.warning(f"❌ No {limit_type}_replicas annotation found in {list(annotations.keys())}, using default: {default}")
         return default
 
     async def scale_deployment(self, name: str, namespace: str, replicas: int) -> bool:

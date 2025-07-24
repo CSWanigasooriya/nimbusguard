@@ -121,6 +121,13 @@ class MetricsCollector:
             'Q-value for keep same action'
         )
 
+        # DQN Q-Values with labels (for compatibility)
+        self.dqn_q_values = Gauge(
+            'dqn_q_values',
+            'DQN Q-values for each action',
+            ['action']
+        )
+
         # Reward Analysis
         self.dqn_reward_total = Gauge(
             'dqn_reward_total',

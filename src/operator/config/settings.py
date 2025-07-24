@@ -47,8 +47,6 @@ class ScalingConfig:
     def __init__(self):
         self.target_deployment = os.getenv("TARGET_DEPLOYMENT", "consumer")
         self.target_namespace = os.getenv("TARGET_NAMESPACE", "nimbusguard")
-        self.min_replicas = int(os.getenv("MIN_REPLICAS", "1"))
-        self.max_replicas = int(os.getenv("MAX_REPLICAS", "50"))
 
         # DQN configuration
         self.dqn_hidden_dims = [int(x) for x in os.getenv("DQN_HIDDEN_DIMS", "64,32").split(",")]
