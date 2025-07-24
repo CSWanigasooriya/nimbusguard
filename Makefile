@@ -150,6 +150,21 @@ setup: ## Setup development environment (install latest tools)
 	fi
 	
 	@echo ""
+	@echo "Deploying MinIO for model persistence..."
+	@if ! kubectl get deployment minio -n nimbusguard >/dev/null 2>&1; then \
+		echo "Building base image for MinIO deployment..."; \
+		docker build -t nimbusguard-base:latest -f docker/base.Dockerfile docker/ >/dev/null 2>&1; \
+		echo "Deploying MinIO..."; \
+		kubectl apply -f kubernetes-manifests/components/minio/ -n nimbusguard; \
+		echo "Waiting for MinIO to be ready (30 seconds)..."; \
+		kubectl wait --for=condition=available --timeout=300s deployment/minio -n nimbusguard 2>/dev/null || echo "MinIO deployment timeout (continuing anyway)"; \
+		sleep 10; \
+		echo "MinIO deployed and ready!"; \
+	else \
+		echo "MinIO already deployed"; \
+	fi
+	
+	@echo ""
 	@echo "Environment setup complete!"
 	@echo "Available tools:"
 	@echo "   • kubectl: $$(kubectl version --client --short 2>/dev/null || kubectl version --client | head -1)"
@@ -158,6 +173,15 @@ setup: ## Setup development environment (install latest tools)
 	@echo "   • jq: $$(jq --version 2>/dev/null || echo 'not installed')"
 	@echo "   • yq: $$(yq --version 2>/dev/null || echo 'not installed')"
 	@echo "   • k9s: $$(k9s version -s 2>/dev/null || echo 'not installed')"
+	@echo ""
+	@echo "MinIO Status:"
+	@if kubectl get pods -n nimbusguard -l app=minio --no-headers 2>/dev/null | grep -q Running; then \
+		echo "   • MinIO: Running ✅"; \
+		echo "   • Access: kubectl port-forward -n nimbusguard svc/minio 9001:9001"; \
+		echo "   • Console: http://localhost:9001 (minioadmin/minioadmin)"; \
+	else \
+		echo "   • MinIO: Not running (deploy with 'make dev')"; \
+	fi
 	@echo ""
 	@echo "Ready to deploy!"
 

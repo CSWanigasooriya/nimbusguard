@@ -165,10 +165,10 @@ class ProactiveDQNAgent:
         """Update epsilon based on experience count for more consistent exploration decay."""
         experience_count = len(self.replay_buffer)
         
-        # Decay epsilon based on experiences collected (0 to 500 experiences)
-        decay_experiences = 500  # Reduced from 1000 for faster learning
+        # Decay epsilon based on experiences collected (0 to 2000 experiences)
+        decay_experiences = 2000  # Increased for more exploration in production
         if experience_count < decay_experiences:
-            # Linear decay from start to end over 500 experiences
+            # Linear decay from start to end over 2000 experiences
             progress = experience_count / decay_experiences
             self.epsilon = self.config.dqn_epsilon_start * (1 - progress) + self.config.dqn_epsilon_end * progress
         else:
@@ -177,7 +177,7 @@ class ProactiveDQNAgent:
         
         # Log epsilon changes occasionally
         if experience_count % 25 == 0 or experience_count < 10:  # More frequent logging
-            logger.info(f"🎯 Epsilon updated by experience: {self.epsilon:.4f} (experiences: {experience_count}/500)")
+            logger.info(f"🎯 Epsilon updated by experience: {self.epsilon:.4f} (experiences: {experience_count}/2000)")
     
     def select_action(self, state: np.ndarray, use_forecast_guidance: bool = True) -> Tuple[int, float, bool]:
         """
@@ -187,11 +187,10 @@ class ProactiveDQNAgent:
         # Update epsilon based on experience count (not just training steps)
         self._update_epsilon_by_experience()
         
-        # Adjust epsilon based on forecast confidence if enabled
-        if use_forecast_guidance:
-            adjusted_epsilon = self.epsilon * (1.0 - 0.3) # Removed forecast_confidence
-        else:
-            adjusted_epsilon = self.epsilon
+        # Use epsilon as-is without adjustment
+        # Note: Previously reduced epsilon for forecast guidance, but this was causing
+        # lower exploration than expected. Now using the configured epsilon directly.
+        adjusted_epsilon = self.epsilon
         
         # Get Q-values for confidence calculation
         with torch.no_grad():
