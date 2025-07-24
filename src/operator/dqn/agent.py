@@ -64,8 +64,8 @@ class ProactiveDQNAgent:
         self.scaler_fitted = False
         
         # State and action dimensions
-        # 2 current metrics (CPU, Memory) + 1 context (current replicas) = 3 total dimensions
-        self.state_dim = len(config.selected_features) + 1  # current metrics + current replicas
+        # 2 current metrics + 2 forecast metrics + 1 context (current replicas) = 5 total dimensions
+        self.state_dim = len(config.selected_features) * 2 + 1  # current + forecast metrics + current replicas
         self.action_dim = 3  # scale_down, keep_same, scale_up
         
         # Initialize networks
@@ -143,11 +143,14 @@ class ProactiveDQNAgent:
                           forecast_metrics: Optional[Dict[str, float]] = None,
                           current_replicas: int = 1) -> np.ndarray:
         """
-        Create 3-dimensional state vector from current metrics and essential context.
+        Create 5-dimensional state vector from current metrics, forecast metrics, and context.
         
         State vector structure:
         - Positions 0-1: Current metrics (CPU rate, Memory bytes) - scaled
-        - Position 2: Current replicas - not scaled
+        - Positions 2-3: Forecast metrics (CPU rate, Memory bytes) - scaled  
+        - Position 4: Current replicas - not scaled
+        
+        This gives the agent both current state AND future state information for proactive decisions.
         """
         state = []
         
@@ -156,9 +159,21 @@ class ProactiveDQNAgent:
         current_scaled_features = self._scale_features(current_raw_features)
         state.extend(current_scaled_features)
 
-        # 2. Essential context (1 feature) - current replicas
+        # 2. Forecast metrics (2 features) - scaled using same scaler
+        if forecast_metrics:
+            forecast_raw_features = [forecast_metrics.get(feature, 0.0) for feature in self.config.selected_features]
+            forecast_scaled_features = self._scale_features(forecast_raw_features)
+            state.extend(forecast_scaled_features)
+            logger.debug(f"🔮 Using forecast metrics: {forecast_raw_features} -> {forecast_scaled_features}")
+        else:
+            # If no forecast available, use current metrics as fallback
+            state.extend(current_scaled_features)
+            logger.debug("⚠️ No forecast available, using current metrics as fallback")
+
+        # 3. Essential context (1 feature) - current replicas
         state.append(current_replicas)
         
+        logger.debug(f"🧠 State vector created: current={current_scaled_features}, forecast={state[2:4]}, replicas={current_replicas}")
         return np.array(state, dtype=np.float32)
     
     def _update_epsilon_by_experience(self):

@@ -27,7 +27,14 @@ class ProactiveRewardCalculator:
         self.TARGET_MEM_UTIL: float = 0.80  # 80%
         self.CPU_REWARD_WIDTH: float = 0.4
         self.MEM_REWARD_WIDTH: float = 0.4
-        self.COST_PER_REPLICA_PENALTY: float = 0.05
+        
+        # --- Cost-Benefit Balance (CRITICAL TUNING PARAMETER) ---
+        # This penalty should be small enough that good utilization can outweigh cost,
+        # but large enough that unnecessary replicas are discouraged.
+        # Based on observed utilization rewards of 0.4-0.8, cost should be ~0.03-0.05 per replica
+        # so that 3-5 replicas create meaningful trade-offs with utilization benefits
+        self.COST_PER_REPLICA_PENALTY: float = 0.035  # Increased based on observed utilization rewards
+        
         self.CPU_WEIGHT: float = 0.5
         self.MEM_WEIGHT: float = 0.5
 
@@ -43,6 +50,17 @@ class ProactiveRewardCalculator:
             "Initialized ProactiveRewardCalculator with weights: current=%s, forecast=%s",
             self.CURRENT_STATE_WEIGHT, self.FORECAST_STATE_WEIGHT
         )
+        
+        # Log the cost-benefit balance for tuning reference
+        max_util_reward = 1.0  # Maximum possible utilization reward
+        example_costs = [self.COST_PER_REPLICA_PENALTY * replicas for replicas in [1, 3, 5, 10, 20]]
+        logger.info(f"💰 Cost-benefit balance analysis:")
+        logger.info(f"   Max utilization reward: {max_util_reward:.3f}")
+        logger.info(f"   Cost per replica: {self.COST_PER_REPLICA_PENALTY:.3f}")
+        logger.info(f"   Example costs: 1r={example_costs[0]:.3f}, 3r={example_costs[1]:.3f}, "
+                   f"5r={example_costs[2]:.3f}, 10r={example_costs[3]:.3f}, 20r={example_costs[4]:.3f}")
+        logger.info(f"   ➡️ Perfect utilization can justify up to {max_util_reward/self.COST_PER_REPLICA_PENALTY:.0f} replicas")
+        logger.info(f"   🎯 Target cost ratio range: 0.1-2.0 (current warnings trigger outside this range)")
 
     @staticmethod
     def _validate_replicas(replicas: int) -> int:
@@ -111,10 +129,19 @@ class ProactiveRewardCalculator:
         
         final_goodness = utilization_reward - cost_penalty
         
-        # Log the reward breakdown
+        # Log the reward breakdown with balance analysis
+        balance_ratio = cost_penalty / max(utilization_reward, 0.001)  # Avoid division by zero
         logger.debug(f"🎯 State goodness breakdown: CPU_reward={cpu_reward:.3f}, MEM_reward={mem_reward:.3f}, "
                     f"utilization_reward={utilization_reward:.3f}, cost_penalty={cost_penalty:.3f}, "
-                    f"final_goodness={final_goodness:.3f}")
+                    f"final_goodness={final_goodness:.3f}, cost_ratio={balance_ratio:.2f}")
+        
+        # Log balance warnings
+        if balance_ratio > 2.0:
+            logger.warning(f"⚠️ Cost penalty ({cost_penalty:.3f}) >> utilization reward ({utilization_reward:.3f}). "
+                          f"Agent may over-prefer scale_down. Consider reducing COST_PER_REPLICA_PENALTY.")
+        elif balance_ratio < 0.1:
+            logger.warning(f"⚠️ Cost penalty ({cost_penalty:.3f}) << utilization reward ({utilization_reward:.3f}). "
+                          f"Agent may over-prefer scale_up. Consider increasing COST_PER_REPLICA_PENALTY.")
         
         return final_goodness
 
