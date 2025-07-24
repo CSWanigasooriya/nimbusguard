@@ -85,8 +85,8 @@ class ProactiveDQNAgent:
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.target_network.eval()
         
-        # Training components
-        self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=config.dqn_learning_rate)
+        # Training components - use lower learning rate for stability
+        self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=config.dqn_learning_rate * 0.1)
         self.replay_buffer = ReplayBuffer(capacity=config.dqn_memory_capacity)
         
         # Exploration parameters
@@ -107,8 +107,8 @@ class ProactiveDQNAgent:
         self.min_training_interval = 30  # 30 seconds minimum between training sessions (was 120)
         self.last_training_time = 0
         
-        # Target network update frequency
-        self.target_update_frequency = 1000  # Update target network every 1000 steps
+        # Target network update frequency - less frequent updates for stability
+        self.target_update_frequency = 2000  # Update target network every 2000 steps
         
         # Reward calculator
         self.reward_calculator = ProactiveRewardCalculator()
@@ -281,7 +281,7 @@ class ProactiveDQNAgent:
             batch = self.replay_buffer.sample(self.config.dqn_batch_size)
             states, actions, rewards, next_states, dones = zip(*batch)
             
-            # Convert to tensors
+            # Convert to tensors (no reward normalization to preserve action differences)
             states = torch.FloatTensor(np.array(states)).to(self.device)
             actions = torch.LongTensor(actions).to(self.device)
             rewards = torch.FloatTensor(rewards).to(self.device)
@@ -296,8 +296,8 @@ class ProactiveDQNAgent:
                 next_q_values = self.target_network(next_states).max(1)[0]
                 target_q_values = rewards + (self.config.dqn_gamma * next_q_values * ~dones)
             
-            # Compute loss
-            loss = F.mse_loss(current_q_values.squeeze(), target_q_values)
+            # Compute loss using Huber loss for better stability
+            loss = F.smooth_l1_loss(current_q_values.squeeze(), target_q_values)
             
             # Optimize
             self.optimizer.zero_grad()
@@ -316,10 +316,21 @@ class ProactiveDQNAgent:
                 self.target_network.load_state_dict(self.q_network.state_dict())
                 logger.info(f"Target network updated at step {self.training_steps}")
             
+            # Log Q-value statistics for monitoring
+            with torch.no_grad():
+                q_stats = {
+                    'q_mean': current_q_values.mean().item(),
+                    'q_std': current_q_values.std().item(),
+                    'q_min': current_q_values.min().item(),
+                    'q_max': current_q_values.max().item(),
+                    'target_mean': target_q_values.mean().item(),
+                }
+            
             # Note: Epsilon is now primarily updated by experience count in select_action()
             # This ensures consistent decay regardless of training frequency
             logger.info(
                 f"🔍 Training completed: loss={loss.item():.6f}, step={self.training_steps}, epsilon={self.epsilon:.4f}")
+            logger.debug(f"Q-value stats: {q_stats}")
             
             # Store last loss for metrics
             self.last_loss = loss.item()

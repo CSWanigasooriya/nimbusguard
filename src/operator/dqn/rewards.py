@@ -144,11 +144,11 @@ class ProactiveRewardCalculator:
         
         # Normalized reward matrix for stable training
         reward_matrix = {
-            "EMERGENCY": {"scale_up": 5.0, "keep_same": -3.0, "scale_down": -5.0},   # Emergency: strong scale up
-            "ZERO": {"scale_up": -1.0, "keep_same": -0.5, "scale_down": 2.0},        # Zero load: prefer scale down
-            "LOW": {"scale_up": -0.5, "keep_same": 0.0, "scale_down": 1.0},          # Low load: mild scale down
-            "MEDIUM": {"scale_up": 0.5, "keep_same": 0.0, "scale_down": -0.5},       # Medium load: slight scale up
-            "HIGH": {"scale_up": 2.0, "keep_same": -1.0, "scale_down": -2.0}         # High load: strong scale up
+            "EMERGENCY": {"scale_up": 3.0, "keep_same": -1.5, "scale_down": -2.0},   # Emergency: strong scale up but less extreme
+            "ZERO": {"scale_up": -0.5, "keep_same": -0.3, "scale_down": 1.0},        # Zero load: prefer scale down
+            "LOW": {"scale_up": -0.3, "keep_same": 0.0, "scale_down": 0.5},          # Low load: mild scale down
+            "MEDIUM": {"scale_up": 0.3, "keep_same": 0.0, "scale_down": -0.3},       # Medium load: slight scale up
+            "HIGH": {"scale_up": 1.0, "keep_same": -0.5, "scale_down": -1.0}         # High load: strong scale up
         }
         
         # Use load classification for reward matrix selection
@@ -180,17 +180,17 @@ class ProactiveRewardCalculator:
         else:
             logger.warning("⚠️ No deployment_info available, using default constraints: min=1, max=50")
 
-        # Deployment-aware penalties for invalid replica counts
+        # Deployment-aware penalties for invalid replica counts (reduced magnitude)
         if desired_replicas < min_replicas:
-            penalty = (min_replicas - desired_replicas) * -2.0  # -2.0 per replica below minimum
+            penalty = (min_replicas - desired_replicas) * -0.5  # -0.5 per replica below minimum (reduced from -2.0)
             base_reward += penalty
             logger.warning(f"🚨 BELOW MIN REPLICAS: desired={desired_replicas} < min={min_replicas}, penalty={penalty:.1f}")
         elif desired_replicas > max_replicas:
-            penalty = (desired_replicas - max_replicas) * -1.0  # -1.0 per replica above maximum
+            penalty = (desired_replicas - max_replicas) * -0.3  # -0.3 per replica above maximum (reduced from -1.0)
             base_reward += penalty
             logger.warning(f"🚨 ABOVE MAX REPLICAS: desired={desired_replicas} > max={max_replicas}, penalty={penalty:.1f}")
         else:
-            base_reward += 0.2  # Small bonus for staying within deployment constraints
+            base_reward += 0.1  # Small bonus for staying within deployment constraints
             
         # Resource efficiency considerations
         efficiency_penalty = self._calculate_efficiency_penalty(
@@ -225,17 +225,17 @@ class ProactiveRewardCalculator:
             if scale_down_bonus > 0.1:
                 logger.info(f"Scale-down bonus: +{scale_down_bonus:.2f} for scaling down during {load_class} load (current={validated_current_replicas}, min={min_replicas})")
         
-        # EMERGENCY OVERRIDE: If this is an emergency, heavily override all other considerations
+        # EMERGENCY OVERRIDE: If this is an emergency, provide strong but not extreme incentives
         emergency_bonus = 0.0
         if load_class == "EMERGENCY":
             if action == "scale_up":
-                emergency_bonus = 20.0  # Massive bonus for scaling up during emergency
+                emergency_bonus = 2.0  # Strong bonus for scaling up during emergency (reduced from 20.0)
                 logger.warning(f"🚨 EMERGENCY SCALE-UP BONUS: +{emergency_bonus} for scaling up during pod health emergency!")
             elif action == "keep_same":
-                emergency_bonus = -15.0  # Heavy penalty for not acting during emergency
+                emergency_bonus = -1.0  # Penalty for not acting during emergency (reduced from -15.0)
                 logger.warning(f"🚨 EMERGENCY PENALTY: {emergency_bonus} for not scaling up during pod health emergency!")
             elif action == "scale_down":
-                emergency_bonus = -25.0  # Severe penalty for scaling down during emergency
+                emergency_bonus = -1.5  # Strong penalty for scaling down during emergency (reduced from -25.0)
                 logger.warning(f"🚨 EMERGENCY SEVERE PENALTY: {emergency_bonus} for scaling down during pod health emergency!")
         
         # Deployment-aware replica waste penalty
@@ -252,10 +252,10 @@ class ProactiveRewardCalculator:
             if cpu_per_replica < 0.3:  # Low CPU per replica indicates waste
                 excess_replicas = min(validated_current_replicas - optimal_replicas, max_replicas - optimal_replicas)
                 if action in ["keep_same", "scale_up"]:
-                    excessive_replica_penalty = -0.5 * excess_replicas
+                    excessive_replica_penalty = -0.2 * excess_replicas  # Reduced from -0.5
                     logger.warning(f"🚨 EXCESSIVE REPLICA PENALTY: {validated_current_replicas} replicas > optimal {optimal_replicas} with low CPU → penalty {excessive_replica_penalty:.1f}")
                 elif action == "scale_down":
-                    excessive_replica_penalty = 0.5 * excess_replicas
+                    excessive_replica_penalty = 0.2 * excess_replicas  # Reduced from 0.5
                     logger.info(f"🎯 SCALE-DOWN REWARD: +{excessive_replica_penalty:.1f} for reducing {validated_current_replicas} excessive replicas (optimal: {optimal_replicas})")
         
         # CPU and Memory efficiency reward (now part of current state assessment)
@@ -269,8 +269,8 @@ class ProactiveRewardCalculator:
         
         total_reward = base_reward + efficiency_penalty + waste_penalty + resource_bonus + scale_down_bonus + emergency_bonus + excessive_replica_penalty + cpu_memory_reward
         
-        # Clip total reward to prevent training instability
-        total_reward = max(-10.0, min(10.0, total_reward))
+        # Clip total reward aggressively to prevent training instability
+        total_reward = max(-5.0, min(5.0, total_reward))
         
         logger.debug(f"Current state reward: load={load_class}, action={action}, "
                      f"base={base_reward}, efficiency={efficiency_penalty}, "
@@ -422,28 +422,14 @@ class ProactiveRewardCalculator:
             cpu_util = min(cpu_per_replica / cpu_limit_per_replica, 1.0) if cpu_limit_per_replica > 0 else 0.0
             memory_util = min(memory_per_replica / memory_limit_per_replica, 1.0) if memory_limit_per_replica > 0 else 0.0
 
-            # CPU-first load classification for better scaling sensitivity
-            # If CPU is high, immediately classify as high regardless of memory
-            if cpu_util > 0.7:  # 70% CPU utilization
-                logger.info(f"Classified as HIGH load: cpu_util={cpu_util:.2f} > 0.7 (CPU-first rule)")
-                return "HIGH"
-            elif cpu_util > 0.45:  # 45% CPU utilization
-                logger.info(f"Classified as MEDIUM load: cpu_util={cpu_util:.2f} > 0.45 (CPU-first rule)")
-                return "MEDIUM"
-            
             # MEMORY LEAK DETECTION: High memory + Low CPU = Memory leak, not real load
             if memory_util > 0.8 and cpu_util < 0.3:  # Memory >80% but CPU <30%
                 logger.warning(f"🚨 MEMORY LEAK DETECTED: memory_util={memory_util:.2f}, cpu_util={cpu_util:.2f} - treating as LOW load for scaling")
                 return "LOW"  # Memory leak should trigger scale-down, not keep high replicas
             
-            # For lower CPU, use composite score but prioritize CPU over memory
-            # When CPU is low, memory utilization shouldn't prevent scale-down
-            if cpu_util < 0.25:  # Very low CPU
-                composite_score = cpu_util * 0.9 + memory_util * 0.1  # Heavily prioritize CPU
-                logger.info(f"Low CPU detected: cpu_util={cpu_util:.2f}, using CPU-weighted composite_score={composite_score:.2f}")
-            else:
-                composite_score = (cpu_util * 0.8) + (memory_util * 0.2)  # Standard weighting
-                logger.info(f"Load analysis: cpu_util={cpu_util:.2f}, memory_util={memory_util:.2f}, composite_score={composite_score:.2f}")
+            # Balanced load classification - treat CPU and memory equally
+            composite_score = (cpu_util * 0.5) + (memory_util * 0.5)  # Equal weighting for CPU and memory
+            logger.info(f"Balanced load analysis: cpu_util={cpu_util:.2f}, memory_util={memory_util:.2f}, composite_score={composite_score:.2f}")
 
             if composite_score > 0.6:  # Lowered from 0.7
                 logger.info(f"Classified as HIGH load: composite_score={composite_score:.2f}")
@@ -515,7 +501,7 @@ class ProactiveRewardCalculator:
             cpu_efficiency = max(0, min(1, cpu_efficiency))
             memory_efficiency = max(0, min(1, memory_efficiency))
 
-            efficiency_score = (cpu_efficiency * 0.6) + (memory_efficiency * 0.4)
+            efficiency_score = (cpu_efficiency * 0.5) + (memory_efficiency * 0.5)
 
             return efficiency_score
 
@@ -548,7 +534,7 @@ class ProactiveRewardCalculator:
         memory_waste_penalty = max(0, (target_memory_mb * 0.3 - memory_mb_per_replica) / target_memory_mb) * 0.5
         
         # Combined reward
-        efficiency_reward = (cpu_efficiency * 0.6 + memory_efficiency * 0.4)
+        efficiency_reward = (cpu_efficiency * 0.5 + memory_efficiency * 0.5)
         total_penalty = cpu_penalty + memory_penalty + cpu_waste_penalty + memory_waste_penalty
         
         reward = efficiency_reward - total_penalty
