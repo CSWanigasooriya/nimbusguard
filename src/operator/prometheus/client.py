@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Any
 import numpy as np
 import requests
 from config.settings import load_config
+import pandas as pd
 
 config = load_config()
 from prometheus.queries import PrometheusQueries
@@ -78,8 +79,8 @@ class PrometheusClient:
         logger.info(f"Fetched {len(metrics)} current metrics")
         return metrics
 
-    def get_historical_metrics(self, duration_minutes: int) -> Dict[str, List[float]]:
-        """Get historical time series data for all selected features."""
+    async def get_historical_metrics(self, duration_minutes: int) -> Dict[str, pd.DataFrame]:
+        """Get historical time series data for all selected features as DataFrames with timestamps."""
         historical_data = {}
 
         # Calculate time range
@@ -95,33 +96,45 @@ class PrometheusClient:
                     "query": query,
                     "start": start_time.isoformat() + "Z",
                     "end": end_time.isoformat() + "Z",
-                    "step": "1m"  # 1-minute resolution
+                    "step": "15s"  # 15-second resolution (matches LSTM training data)
                 }
 
                 data = self._make_request("query_range", params)
                 if not data or not data.get("result"):
                     logger.warning(f"No historical data for feature: {feature_name}")
-                    historical_data[feature_name] = []
+                    # Create empty DataFrame with proper structure
+                    historical_data[feature_name] = pd.DataFrame(columns=['timestamp', 'value'])
                     continue
 
-                # Extract time series values
+                # Extract time series values with timestamps
                 result = data["result"][0]  # Take first result
+                timestamps = []
                 values = []
+                
                 for timestamp, value in result.get("values", []):
                     try:
+                        timestamps.append(pd.to_datetime(timestamp, unit='s'))
                         values.append(float(value))
                     except (ValueError, TypeError):
+                        timestamps.append(pd.to_datetime(timestamp, unit='s'))
                         values.append(0.0)
 
-                historical_data[feature_name] = values
+                # Create DataFrame with timestamp and value columns
+                df = pd.DataFrame({
+                    'timestamp': timestamps,
+                    'value': values
+                })
+                # Keep timestamp as a column (don't set as index) so LSTMPredictor can access it
+                historical_data[feature_name] = df
+                
                 logger.debug(f"Feature {feature_name}: {len(values)} historical points")
 
             except (IndexError, KeyError) as e:
                 logger.warning(f"Failed to parse historical {feature_name}: {e}")
-                historical_data[feature_name] = []
+                historical_data[feature_name] = pd.DataFrame(columns=['timestamp', 'value'])
             except Exception as e:
                 logger.error(f"Error fetching historical {feature_name}: {e}")
-                historical_data[feature_name] = []
+                historical_data[feature_name] = pd.DataFrame(columns=['timestamp', 'value'])
 
         logger.info(f"Fetched historical data for {len(historical_data)} features")
         return historical_data

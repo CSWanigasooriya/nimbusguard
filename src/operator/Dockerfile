@@ -16,7 +16,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY . .
 
 # Copy the feature scaler into /tmp for runtime use
-COPY feature_scaler.pkl /tmp/feature_scaler.pkl
+COPY forecaster.keras forecaster_scaler.pkl /tmp/
+
 
 # Expose the ports the app runs on
 EXPOSE 8080 8081

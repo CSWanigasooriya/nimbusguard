@@ -36,8 +36,8 @@ class PrometheusQueries:
 
     @staticmethod
     def get_current_replicas_query(deployment: str, namespace: str) -> str:
-        """Get query for current replica count."""
-        return f'kube_deployment_status_replicas{{deployment="{deployment}",namespace="{namespace}",job="prometheus.scrape.annotated_pods"}}'
+        """Get query for current replica count from all ReplicaSets owned by the deployment."""
+        return f'sum(kube_replicaset_status_replicas{{namespace="{namespace}"}} * on(replicaset) group_left(owner_name) kube_replicaset_owner{{owner_name="{deployment}", owner_kind="Deployment", namespace="{namespace}"}}) or vector(0)'
 
     @staticmethod
     def get_aggregated_query(feature_name: str) -> str:

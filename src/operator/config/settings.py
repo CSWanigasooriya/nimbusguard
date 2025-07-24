@@ -23,26 +23,22 @@ class MinIOConfig:
 
 
 class ForecastingConfig:
-    """LSTM forecasting configuration."""
+    """Minimal forecasting configuration for using a pre-trained LSTM model."""
 
     def __init__(self):
         self.enabled = os.getenv("FORECASTING_ENABLED", "true").lower() == "true"
-        self.lookback_minutes = int(os.getenv("FORECASTING_LOOKBACK_MINUTES", "60"))  # Increased for better training
-        self.forecast_horizon_minutes = int(
-            os.getenv("FORECASTING_HORIZON_MINUTES", "5"))  # Shorter horizon for better accuracy
-        self.hidden_units = int(os.getenv("LSTM_HIDDEN_UNITS", "32"))  # Smaller model for limited data
-        self.lstm_hidden_size = int(os.getenv("LSTM_HIDDEN_UNITS", "32"))  # Alias for compatibility
-        self.lstm_num_layers = int(os.getenv("LSTM_NUM_LAYERS", "1"))  # Single layer for small datasets
-        self.sequence_length = int(os.getenv("LSTM_SEQUENCE_LENGTH", "15"))  # Longer sequences for better patterns
-        self.retrain_interval_minutes = int(os.getenv("LSTM_RETRAIN_INTERVAL_MINUTES", "30"))  # More frequent training
 
-        # New parameters for improved training
-        self.min_training_samples = int(os.getenv("LSTM_MIN_TRAINING_SAMPLES", "20"))  # Minimum data for training
-        self.validation_split = float(os.getenv("LSTM_VALIDATION_SPLIT", "0.2"))  # 20% for validation
-        self.early_stopping_patience = int(os.getenv("LSTM_EARLY_STOPPING_PATIENCE", "10"))  # Early stopping
-        self.learning_rate = float(os.getenv("LSTM_LEARNING_RATE", "0.001"))  # Learning rate
-        self.batch_size = int(os.getenv("LSTM_BATCH_SIZE", "8"))  # Smaller batch size for limited data
-        self.max_epochs = int(os.getenv("LSTM_MAX_EPOCHS", "100"))  # More epochs for better training
+        # How much history to fetch from Prometheus for the model input
+        self.lookback_minutes = int(os.getenv("FORECASTING_LOOKBACK_MINUTES", "6"))
+
+        # Horizon: 1 step ahead = 15 seconds (since LSTM was trained on 15s intervals)
+        self.forecast_horizon_seconds = int(os.getenv("FORECASTING_HORIZON_SECONDS", "15"))
+
+        # Number of data points (timesteps) fed into the model: 24 timesteps × 15s each = 360s lookback
+        self.sequence_length = int(os.getenv("LSTM_SEQUENCE_LENGTH", "24"))
+
+        # Features will be set by Config.__init__ from scaling.selected_features
+        self.selected_features: list[str] = []
 
 
 class ScalingConfig:
@@ -58,15 +54,13 @@ class ScalingConfig:
         self.dqn_hidden_dims = [int(x) for x in os.getenv("DQN_HIDDEN_DIMS", "64,32").split(",")]
         self.dqn_learning_rate = float(os.getenv("DQN_LEARNING_RATE", "0.001"))
         self.dqn_gamma = float(os.getenv("DQN_GAMMA", "0.95"))
-        self.dqn_epsilon_start = float(os.getenv("DQN_EPSILON_START", "0.3"))
+        self.dqn_epsilon_start = float(os.getenv("DQN_EPSILON_START", "0.2"))
         self.dqn_epsilon_end = float(os.getenv("DQN_EPSILON_END", "0.01"))
-        self.dqn_epsilon_decay = float(
-            os.getenv("DQN_EPSILON_DECAY", "0.9995"))  # Much slower decay: ~2000 steps to reach ~0.15
         self.dqn_batch_size = int(os.getenv("DQN_BATCH_SIZE", "16"))
         self.dqn_memory_capacity = int(os.getenv("DQN_MEMORY_CAPACITY", "10000"))
 
         # Training loop configuration
-        self.stabilization_period_seconds = int(os.getenv("STABILIZATION_PERIOD_SECONDS", "30"))
+        self.stabilization_period_seconds = int(os.getenv("STABILIZATION_PERIOD_SECONDS", "15"))
 
         # Consumer-focused features based on HPA baseline analysis
         # These features directly correlate with scaling decisions
@@ -129,6 +123,9 @@ class Config:
         self.metrics = MetricsConfig()
         self.reward = RewardConfig()
         self.ai = AIConfig()
+
+        # Share feature list between scaling and forecasting configs
+        self.forecasting.selected_features = self.scaling.selected_features
 
 
 def load_config() -> Config:

@@ -25,7 +25,7 @@ from minio import Minio
 
 from config.settings import load_config
 from dqn.agent import ProactiveDQNAgent
-from forecasting.predictor import LoadForecaster
+from forecasting.lstm_predictor import LSTMPredictor  # Import the new predictor
 from k8s.client import KubernetesClient
 from k8s.scaler import DirectScaler
 from metrics.collector import MetricsCollector
@@ -213,12 +213,12 @@ async def setup_minio_storage():
 async def setup_forecaster():
     """Initialize LSTM forecaster."""
     try:
-        services['forecaster'] = LoadForecaster()
-        # Initialize forecaster (synchronous method)
-        if services['forecaster'].initialize():
-            logger.info("✅ LSTM forecaster initialized")
+        # Use the new LSTMPredictor
+        services['forecaster'] = LSTMPredictor(config.forecasting)
+        if services['forecaster'].is_loaded:
+            logger.info("✅ LSTM forecaster initialized with pre-trained model")
         else:
-            logger.error("❌ LSTM forecaster initialization failed")
+            logger.error("❌ LSTM forecaster initialization failed: model or scaler not found")
             services['forecaster'] = None
     except Exception as e:
         logger.error(f"❌ LSTM forecaster initialization failed: {e}")
@@ -381,28 +381,25 @@ async def execute_scaling_decision():
 
 
 async def continuous_training_loop():
-    """Background training loop for DQN agent with async training."""
-    logger.info("🔄 Starting continuous DQN async training loop...")
+    """Background model saving and maintenance loop for DQN agent."""
+    logger.info("🔄 Starting continuous DQN maintenance loop...")
 
     while True:
         try:
-            if 'dqn_agent' in services and len(services['dqn_agent'].replay_buffer) > 0:
-                # Use async training method
-                loss = await services['dqn_agent'].train_async()
-                if loss is not None:
-                    logger.info(
-                        f"🧠 DQN async training completed: loss={loss:.6f}, steps={services['dqn_agent'].training_steps}")
-
+            if 'dqn_agent' in services:
+                # Only handle model saving and maintenance (not training)
+                # Training happens in the workflow after scaling decisions
+                
                 # Periodic model saving
                 if services['dqn_agent'].should_save_model():
                     await services['dqn_agent'].save_model()
                     logger.info("💾 DQN model saved to MinIO")
 
-            # Configurable stabilization period between training cycles
-            await asyncio.sleep(config.scaling.stabilization_period_seconds)
+            # Run maintenance every 5 minutes (much less frequent)
+            await asyncio.sleep(300)  # 5 minutes
 
         except Exception as e:
-            logger.error(f"Training loop error: {e}")
+            logger.error(f"Maintenance loop error: {e}")
             await asyncio.sleep(60)  # Back off longer on error
 
 

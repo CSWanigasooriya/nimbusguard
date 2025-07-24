@@ -94,15 +94,15 @@ class MetricsCollector:
             'Total keep same actions chosen by DQN'
         )
 
-        # LSTM Feature Analysis
-        self.dqn_lstm_next_30sec_pressure = Gauge(
-            'dqn_lstm_next_30sec_pressure',
-            'LSTM forecast for next 30 seconds pressure'
+        # LSTM forecast metrics
+        self.lstm_forecast_cpu_rate = Gauge(
+            'lstm_forecast_cpu_rate',
+            'LSTM predicted CPU rate for next step'
         )
 
-        self.dqn_lstm_next_60sec_pressure = Gauge(
-            'dqn_lstm_next_60sec_pressure',
-            'LSTM forecast for next 60 seconds pressure'
+        self.lstm_forecast_memory_bytes = Gauge(
+            'lstm_forecast_memory_bytes', 
+            'LSTM predicted memory bytes for next step'
         )
 
         # DQN Q-Value Distribution
@@ -138,23 +138,6 @@ class MetricsCollector:
             'Total DQN decisions made'
         )
 
-        # Legacy metrics for compatibility (REMOVED DUPLICATES)
-        self.desired_replicas = Gauge(
-            'nimbusguard_desired_replicas',
-            'Desired number of replicas (legacy)'
-        )
-
-        self.dqn_q_values = Gauge(
-            'nimbusguard_dqn_q_values',
-            'Current Q-values for each action (legacy)',
-            ['action']
-        )
-
-        self.dqn_decision_confidence = Gauge(
-            'nimbusguard_dqn_decision_confidence',
-            'Confidence of the last DQN decision (legacy)'
-        )
-
         # System metrics
         self.scaling_duration = Histogram(
             'nimbusguard_scaling_duration_seconds',
@@ -163,19 +146,14 @@ class MetricsCollector:
         )
 
         # Forecasting metrics
-        self.forecast_accuracy = Gauge(
-            'nimbusguard_forecast_accuracy',
-            'LSTM forecast accuracy score'
-        )
-
         self.forecast_confidence = Gauge(
             'nimbusguard_forecast_confidence',
-            'Confidence in the current forecast'
+            'Forecast confidence score'
         )
 
-        self.forecast_horizon_minutes = Gauge(
-            'nimbusguard_forecast_horizon_minutes',
-            'Forecast horizon in minutes'
+        self.forecast_horizon_seconds = Gauge(
+            'nimbusguard_forecast_horizon_seconds',
+            'Forecast horizon in seconds'
         )
 
         # System health metrics
@@ -293,7 +271,6 @@ class MetricsCollector:
 
             # Update decision confidence
             if decision_confidence is not None:
-                self.dqn_decision_confidence.set(decision_confidence)
                 self.dqn_decision_confidence_avg.set(decision_confidence)
                 self.dqn_decisions_total.inc()
 
@@ -308,20 +285,6 @@ class MetricsCollector:
 
         except Exception as e:
             self.logger.error(f"Failed to update DQN metrics: {e}")
-
-    async def update_lstm_features(self, lstm_features: Dict[str, Any]):
-        """Update LSTM feature analysis metrics."""
-        try:
-            if 'next_30sec_pressure' in lstm_features:
-                self.dqn_lstm_next_30sec_pressure.set(lstm_features['next_30sec_pressure'])
-
-            if 'next_60sec_pressure' in lstm_features:
-                self.dqn_lstm_next_60sec_pressure.set(lstm_features['next_60sec_pressure'])
-
-            self.logger.debug("Updated LSTM feature metrics")
-
-        except Exception as e:
-            self.logger.error(f"Failed to update LSTM feature metrics: {e}")
 
     async def update_reward_metrics(self, reward_value: float, total_reward: Optional[float] = None):
         """Update reward analysis metrics."""
@@ -350,18 +313,24 @@ class MetricsCollector:
             self.logger.error(f"Failed to update experience metrics: {e}")
 
     async def update_forecast_metrics(self, forecast_result: Dict[str, Any]):
-        """Update forecasting-related metrics."""
+        """Update LSTM forecast metrics with real predictions."""
         try:
-            if 'confidence' in forecast_result:
-                self.forecast_confidence.set(forecast_result['confidence'])
+            if 'predicted_metrics' in forecast_result:
+                predicted = forecast_result['predicted_metrics']
+                
+                # Update CPU forecast
+                if 'process_cpu_seconds_total_rate' in predicted:
+                    self.lstm_forecast_cpu_rate.set(predicted['process_cpu_seconds_total_rate'])
+                
+                # Update memory forecast  
+                if 'process_resident_memory_bytes' in predicted:
+                    self.lstm_forecast_memory_bytes.set(predicted['process_resident_memory_bytes'])
 
-            if 'horizon_minutes' in forecast_result:
-                self.forecast_horizon_minutes.set(forecast_result['horizon_minutes'])
+            # Update horizon metric
+            if 'horizon_seconds' in forecast_result:
+                self.forecast_horizon_seconds.set(forecast_result['horizon_seconds'])
 
-            if 'accuracy' in forecast_result:
-                self.forecast_accuracy.set(forecast_result['accuracy'])
-
-            self.logger.debug("Updated forecast metrics")
+            self.logger.debug("Updated LSTM forecast metrics")
 
         except Exception as e:
             self.logger.error(f"Failed to update forecast metrics: {e}")
@@ -429,8 +398,8 @@ class MetricsCollector:
                     self.dqn_desired_replicas.set(final_decision['replicas'])
 
                 if 'confidence' in final_decision:
-                    self.dqn_decision_confidence.set(final_decision['confidence'])
                     self.dqn_decision_confidence_avg.set(final_decision['confidence'])
+                    self.dqn_decisions_total.inc()
 
                 if 'action' in final_decision:
                     action = final_decision['action']

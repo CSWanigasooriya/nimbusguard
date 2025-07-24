@@ -16,7 +16,6 @@ class OperatorState(TypedDict):
 
     # Forecast data
     forecast_result: Optional[Dict[str, Any]]
-    forecast_confidence: float
 
     # DQN decision
     dqn_state: Optional[List[float]]  # Converted from numpy array for serialization
@@ -60,18 +59,17 @@ def create_initial_state(execution_id: str, current_replicas: int) -> OperatorSt
 
         # Forecast data
         forecast_result=None,
-        forecast_confidence=0.0,
 
         # DQN decision
         dqn_state=None,
         dqn_action=None,
-        dqn_q_values=None,
+        dqn_q_values={},
         dqn_confidence=0.0,
 
         # Scaling decision
         desired_replicas=current_replicas,
         scaling_decision="keep_same",
-        decision_reason="initial",
+        decision_reason="Initial state",
 
         # Validation
         validation_passed=False,
@@ -101,7 +99,6 @@ def update_state_with_metrics(state: OperatorState, metrics: Dict[str, float]) -
 def update_state_with_forecast(state: OperatorState, forecast_result: Dict[str, Any]) -> OperatorState:
     """Update state with forecast results."""
     state["forecast_result"] = forecast_result
-    state["forecast_confidence"] = forecast_result.get("confidence", 0.0)
     return state
 
 

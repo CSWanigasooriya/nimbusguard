@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
+from sklearn.preprocessing import RobustScaler
+
 from config.settings import load_config, ScalingConfig
 from dqn.model import DQNNetwork
 from dqn.rewards import ProactiveRewardCalculator
@@ -57,14 +59,13 @@ class ProactiveDQNAgent:
         self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
         self.minio_client = minio_client
         
-        # Feature scaler for preprocessing
-        self.scaler = None
-        self.scaler_path = "/tmp/feature_scaler.pkl"  # Must match DataPreprocessor
-        self._load_feature_scaler()
+        # Initialize a new, unfitted scaler at runtime
+        self.scaler = RobustScaler()
+        self.scaler_fitted = False
         
-        # State and action dimensions
-        # 9 current + 9 forecast + 4 meta = 22 total features
-        self.state_dim = len(config.selected_features) * 2 + 4  # current + forecast + meta
+        # State and action dimensions - SIMPLIFIED
+        # Just 2 current metrics (CPU, Memory) + 3 meta features = 5 total
+        self.state_dim = len(config.selected_features) + 3  # current metrics + meta (no forecast in state)
         self.action_dim = 3  # scale_down, keep_same, scale_up
         
         # Initialize networks
@@ -90,7 +91,6 @@ class ProactiveDQNAgent:
         
         # Exploration parameters
         self.epsilon = config.dqn_epsilon_start
-        self.epsilon_decay = config.dqn_epsilon_decay
         self.epsilon_min = config.dqn_epsilon_end
         
         # Training state
@@ -104,7 +104,7 @@ class ProactiveDQNAgent:
         self.is_training = False
         
         # Training frequency control
-        self.min_training_interval = 120  # 2 minutes minimum between training sessions
+        self.min_training_interval = 30  # 30 seconds minimum between training sessions (was 120)
         self.last_training_time = 0
         
         # Target network update frequency
@@ -116,34 +116,24 @@ class ProactiveDQNAgent:
         logger.info(f"ProactiveDQNAgent initialized with async training: "
                    f"state_dim={self.state_dim}, action_dim={self.action_dim}, device={self.device}")
     
-    def _load_feature_scaler(self):
-        if os.path.exists(self.scaler_path):
-            try:
-                self.scaler = joblib.load(self.scaler_path)
-                logger.info(f"Loaded feature scaler from {self.scaler_path}")
-                except Exception as e:
-                logger.warning(f"Failed to load feature scaler: {e}")
-                self.scaler = None
-            else:
-            logger.warning(f"Feature scaler file not found at {self.scaler_path}")
-            self.scaler = None
-    
     def _scale_features(self, raw_features: List[float]) -> List[float]:
         """
-        Scale raw features using the loaded scaler.
+        Scale raw features using the runtime scaler.
+        The scaler is fitted on the first data point it sees.
         """
-        if not self.scaler:
-            logger.warning("No feature scaler loaded, returning raw features")
-            logger.debug(f"Raw features (no scaler): {raw_features}")
-            return raw_features
-        
         try:
-            # Create DataFrame with feature names to match how scaler was fitted
             raw_features_df = pd.DataFrame([raw_features], columns=self.config.selected_features)
+
+            if not self.scaler_fitted:
+                logger.info("First run: Fitting the feature scaler.")
+                self.scaler.fit(raw_features_df)
+                self.scaler_fitted = True
+
             scaled_features = self.scaler.transform(raw_features_df)
             logger.debug(f"Raw features: {raw_features}")
             logger.debug(f"Scaled features: {scaled_features[0].tolist()}")
             return scaled_features[0].tolist()
+            
         except Exception as e:
             logger.warning(f"Feature scaling failed: {e}, returning raw features")
             logger.debug(f"Raw features (scaling failed): {raw_features}")
@@ -153,30 +143,28 @@ class ProactiveDQNAgent:
                           forecast_metrics: Optional[Dict[str, float]] = None,
                           current_replicas: int = 1) -> np.ndarray:
         """
-        Create 22-dimensional state vector from current metrics, forecast, and metadata.
+        Create simplified 5-dimensional state vector from current metrics and metadata only.
+        
+        State vector structure:
+        - Positions 0-1: Current metrics (CPU rate, Memory bytes) - scaled
+        - Position 2: Current replicas - not scaled
+        - Position 3: Normalized replica ratio (current/max) - not scaled  
+        - Position 4: Current epsilon (exploration rate) - not scaled
+        
+        Note: Forecast is NOT included in state vector - it's used for reward calculation instead.
         """
         state = []
         
-        # 1. Current metrics (9 features) - scaled
+        # 1. Current metrics only (2 features) - scaled
         current_raw_features = [current_metrics.get(feature, 0.0) for feature in self.config.selected_features]
         current_scaled_features = self._scale_features(current_raw_features)
         state.extend(current_scaled_features)
-        
-        # 2. Forecast metrics (9 features) - scaled
-        if forecast_metrics:
-            forecast_raw_features = [forecast_metrics.get(feature, 0.0) for feature in self.config.selected_features]
-            forecast_scaled_features = self._scale_features(forecast_raw_features)
-            state.extend(forecast_scaled_features)
-        else:
-            # Use current metrics as fallback forecast (already scaled)
-            state.extend(current_scaled_features)
-        
-        # 3. Meta features (4 features) - not scaled
+
+        # 2. Meta features (3 features) - not scaled
         state.extend([
             current_replicas,
             current_replicas / self.config.max_replicas,  # Normalized replica ratio
             self.epsilon,  # Current exploration rate
-            len(self.replay_buffer) / self.config.dqn_memory_capacity  # Buffer fullness
         ])
         
         return np.array(state, dtype=np.float32)
@@ -185,10 +173,10 @@ class ProactiveDQNAgent:
         """Update epsilon based on experience count for more consistent exploration decay."""
         experience_count = len(self.replay_buffer)
         
-        # Decay epsilon based on experiences collected (0 to 1000 experiences)
-        decay_experiences = 1000
+        # Decay epsilon based on experiences collected (0 to 500 experiences)
+        decay_experiences = 500  # Reduced from 1000 for faster learning
         if experience_count < decay_experiences:
-            # Linear decay from start to end over 1000 experiences
+            # Linear decay from start to end over 500 experiences
             progress = experience_count / decay_experiences
             self.epsilon = self.config.dqn_epsilon_start * (1 - progress) + self.config.dqn_epsilon_end * progress
         else:
@@ -196,11 +184,10 @@ class ProactiveDQNAgent:
             self.epsilon = self.config.dqn_epsilon_end
         
         # Log epsilon changes occasionally
-        if experience_count % 50 == 0 or experience_count < 10:
-            logger.info(f"🎯 Epsilon updated by experience: {self.epsilon:.4f} (experiences: {experience_count}/1000)")
+        if experience_count % 25 == 0 or experience_count < 10:  # More frequent logging
+            logger.info(f"🎯 Epsilon updated by experience: {self.epsilon:.4f} (experiences: {experience_count}/500)")
     
-    def select_action(self, state: np.ndarray, use_forecast_guidance: bool = True, 
-                     forecast_confidence: float = 0.5) -> Tuple[int, float, bool]:
+    def select_action(self, state: np.ndarray, use_forecast_guidance: bool = True) -> Tuple[int, float, bool]:
         """
         Select action using epsilon-greedy with forecast-guided exploration.
         Returns: (action_index, decision_confidence, is_exploration)
@@ -210,7 +197,7 @@ class ProactiveDQNAgent:
         
         # Adjust epsilon based on forecast confidence if enabled
         if use_forecast_guidance:
-            adjusted_epsilon = self.epsilon * (1.0 - forecast_confidence * 0.3)
+            adjusted_epsilon = self.epsilon * (1.0 - 0.3) # Removed forecast_confidence
         else:
             adjusted_epsilon = self.epsilon
         

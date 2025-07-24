@@ -127,57 +127,33 @@ async def generate_forecast_node(state: OperatorState, services: Dict[str, Any],
         logger.info(f"🔮 Generating forecast for execution {state['execution_id']}")
 
         if not config.forecasting.enabled:
-            logger.info("⏭️ Forecasting disabled, using current metrics as forecast")
-            forecast_result = {
-                'predicted_metrics': state['current_metrics'].copy(),
-                'confidence': 0.5,
-                'method': 'current_metrics_fallback',
-                'horizon_minutes': config.forecasting.forecast_horizon_minutes
-            }
-        else:
-            # Get forecaster service
-            forecaster = services.get('forecaster')
-            if not forecaster:
-                raise Exception("Forecaster service not available")
+            raise Exception("Forecasting is disabled but required for proactive scaling")
 
-            # Generate forecast - LoadForecaster.generate_forecast() takes no arguments
-            raw_forecast_result = forecaster.generate_forecast()
+        forecaster = services.get('forecaster')
+        prometheus = services.get('prometheus')
 
-            # Ensure the forecast result has the expected structure for DQN
-            forecast_result = {
-                'predicted_metrics': state['current_metrics'].copy(),  # Default fallback
-                'confidence': raw_forecast_result.get('confidence', 0.0),
-                'method': raw_forecast_result.get('method', 'lstm'),
-                'horizon_minutes': config.forecasting.forecast_horizon_minutes
-            }
+        if not forecaster or not prometheus:
+            raise Exception("Forecaster or Prometheus client not available")
 
-            # Extract predicted metrics from forecast if available
-            if 'current_metrics' in raw_forecast_result:
-                forecast_result['predicted_metrics'] = raw_forecast_result['current_metrics']
-            elif 'predicted_peak' in raw_forecast_result:
-                forecast_result['predicted_metrics'] = raw_forecast_result['predicted_peak']
-            elif 'forecast_summary' in raw_forecast_result:
-                # Use current metrics with adjustments based on forecast summary
-                forecast_summary = raw_forecast_result['forecast_summary']
-                predicted_metrics = state['current_metrics'].copy()
+        if not forecaster.is_loaded:
+            raise Exception("LSTM model not loaded - check forecaster.keras and forecaster_scaler.pkl")
 
-                # Apply forecast adjustments if available
-                for feature, current_value in predicted_metrics.items():
-                    if 'cpu' in feature and 'cpu_peak' in forecast_summary:
-                        predicted_metrics[feature] = forecast_summary['cpu_peak']
-                    elif 'memory' in feature and 'memory_peak' in forecast_summary:
-                        predicted_metrics[feature] = forecast_summary['memory_peak']
-                    elif 'request' in feature and 'request_peak' in forecast_summary:
-                        predicted_metrics[feature] = forecast_summary['request_peak']
+        # Fetch historical data for the LSTM model
+        historical_data = await prometheus.get_historical_metrics(
+            duration_minutes=config.forecasting.lookback_minutes
+        )
 
-                forecast_result['predicted_metrics'] = predicted_metrics
+        # Generate forecast using the pre-trained LSTMPredictor
+        predicted_metrics = await forecaster.predict(historical_data)
 
-            # Store additional forecast information
-            forecast_result.update({
-                'analysis': raw_forecast_result.get('analysis', {}),
-                'forecast': raw_forecast_result.get('forecast', []),
-                'raw_forecast': raw_forecast_result
-            })
+        if not predicted_metrics:
+            raise Exception("LSTM prediction returned None - insufficient historical data")
+
+        forecast_result = {
+            'predicted_metrics': predicted_metrics,
+            'method': 'lstm',
+            'horizon_seconds': config.forecasting.forecast_horizon_seconds
+        }
 
         # Ensure all values are serializable (convert numpy types to Python types)
         def make_serializable(obj):
@@ -202,33 +178,14 @@ async def generate_forecast_node(state: OperatorState, services: Dict[str, Any],
         if 'metrics' in services:
             await services['metrics'].update_forecast_metrics(forecast_result)
 
-            # Extract and update LSTM features for dashboard
-            lstm_features = {}
-
-            # Calculate pressure forecasts (normalized to 0-1)
-            current_cpu = state['current_metrics'].get('process_cpu_seconds_total_rate', 0)
-            current_memory = state['current_metrics'].get('process_resident_memory_bytes', 0)
-            current_requests = state['current_metrics'].get('http_requests_total_rate', 0)
-
-            # Simulate LSTM pressure forecasts based on current metrics and trends
-            base_pressure = min(1.0, (current_cpu * 0.4 + current_memory / 1e9 * 0.3 + current_requests / 100 * 0.3))
-
-            lstm_features['next_30sec_pressure'] = min(1.0, base_pressure * (
-                        1 + forecast_result.get('confidence', 0.5) * 0.1))
-            lstm_features['next_60sec_pressure'] = min(1.0, base_pressure * (
-                        1 + forecast_result.get('confidence', 0.5) * 0.2))
-
-            await services['metrics'].update_lstm_features(lstm_features)
-
         execution_time = (time.time() - start_time) * 1000
         state = add_node_output(state, 'generate_forecast', {
-            'method': forecast_result.get('method', 'lstm'),
-            'confidence': float(forecast_result.get('confidence', 0.0)),  # Ensure float
-            'horizon_minutes': int(forecast_result.get('horizon_minutes', 0))  # Ensure int
+            'method': 'lstm',
+            'confidence': 0.9,
+            'horizon_seconds': config.forecasting.forecast_horizon_seconds
         }, execution_time)
 
-        logger.info(f"✅ Forecast generated: method={forecast_result.get('method')}, "
-                    f"confidence={forecast_result.get('confidence', 0):.3f}")
+        logger.info(f"✅ LSTM forecast generated: confidence=0.9, horizon={config.forecasting.forecast_horizon_seconds}s")
         return state
 
     except Exception as e:
@@ -236,16 +193,7 @@ async def generate_forecast_node(state: OperatorState, services: Dict[str, Any],
         execution_time = (time.time() - start_time) * 1000
         state = add_error(state, f"forecast_generation: {str(e)}")
         state = add_node_output(state, 'generate_forecast', {'error': str(e)}, execution_time)
-
-        # Fallback: use current metrics as forecast with proper structure
-        fallback_result = {
-            'predicted_metrics': state['current_metrics'].copy(),
-            'confidence': 0.0,
-            'method': 'error_fallback',
-            'horizon_minutes': config.forecasting.forecast_horizon_minutes
-        }
-        state = update_state_with_forecast(state, fallback_result)
-        return state
+        raise Exception(f"Forecasting failed: {e}")
 
 
 async def dqn_decision_node(state: OperatorState, services: Dict[str, Any], config: Any) -> OperatorState:
@@ -260,10 +208,10 @@ async def dqn_decision_node(state: OperatorState, services: Dict[str, Any], conf
         if not dqn_agent:
             raise Exception("DQN agent not available")
 
-        # Create state vector (22 dimensions)
+        # Create state vector (now 5 dimensions)
         dqn_state_vector = dqn_agent.create_state_vector(
             state['current_metrics'],
-            state['forecast_result']['predicted_metrics'],
+            state['forecast_result']['predicted_metrics'] if state['forecast_result'] else None,
             state['current_replicas']
         )
 
@@ -760,7 +708,7 @@ async def calculate_reward_node(state: OperatorState, services: Dict[str, Any], 
                         }
                         await services['metrics'].update_dqn_metrics(training_stats)
                         logger.info(
-                            f"📊 Epsilon updated in metrics: {dqn_agent.epsilon:.6f} (decay: {config.scaling.dqn_epsilon_decay})")
+                            f"📊 Epsilon updated in metrics: {dqn_agent.epsilon:.6f}")
                 else:
                     logger.info("⏳ Training skipped - frequency limit or already in progress")
 

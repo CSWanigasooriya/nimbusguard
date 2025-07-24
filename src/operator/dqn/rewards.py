@@ -18,24 +18,13 @@ class ProactiveRewardCalculator:
     """Calculates rewards for DQN considering both current and predicted future state."""
 
     def __init__(self):
-        # Get configuration values from config with safe fallbacks
-        try:
-            self.forecast_confidence_threshold = getattr(config.reward, 'forecast_confidence_threshold', 0.2)
-            self.efficiency_targets = getattr(config.reward, 'efficiency_targets', {
-                "cpu_utilization": 0.70,
-                "memory_utilization": 0.80,
-                "default_memory_mb": 1024,  # 1Gi limit
-                "default_cpu_cores": 0.5   # 500m limit
-            })
-        except AttributeError as e:
-            logger.warning(f"Config access issue, using defaults: {e}")
-            self.forecast_confidence_threshold = 0.2
-            self.efficiency_targets = {
-                "cpu_utilization": 0.70,
-                "memory_utilization": 0.80,
-                "default_memory_mb": 1024,  # 1Gi limit
-                "default_cpu_cores": 0.5   # 500m limit
-            }
+        # Efficiency targets for resource utilization
+        self.efficiency_targets = {
+            "cpu_utilization": 0.70,
+            "memory_utilization": 0.80,
+            "default_memory_mb": 1024,  # 1Gi limit
+            "default_cpu_cores": 0.5   # 500m limit
+        }
         
         # Initialize action tracking for stability analysis
         self.recent_actions = []
@@ -43,8 +32,6 @@ class ProactiveRewardCalculator:
         self.max_action_history = 5
         self.max_load_history = 3
         logger.info(f"Initialized ProactiveRewardCalculator with CPU and memory metrics only.")
-        logger.info(f"Using forecast confidence threshold: {self.forecast_confidence_threshold}")
-        logger.info(f"Using efficiency targets: {self.efficiency_targets}")
 
     @staticmethod
     def _validate_metrics(metrics: Dict[str, float]) -> Dict[str, float]:
@@ -377,20 +364,15 @@ class ProactiveRewardCalculator:
                 action, validated_metrics, validated_current_replicas, load_class
             )
 
-            # Forecast-based reward adjustment with confidence threshold from config
+            # Forecast-based reward adjustment (always use forecast if available)
             forecast_reward = 0.0
-            forecast_confidence = 0.0
-            logger.debug(f"Forecast result in reward calculation: {forecast_result}")
-            if forecast_result:
-                logger.debug(f"Forecast confidence: {forecast_result.get('confidence', None)} (threshold: {self.forecast_confidence_threshold})")
-            if forecast_result and forecast_result.get("confidence", 0) > self.forecast_confidence_threshold:
+            if forecast_result and forecast_result.get("predicted_metrics"):
                 forecast_reward = self._calculate_forecast_reward(
                     action, validated_metrics, forecast_result, validated_current_replicas, validated_desired_replicas
                 )
-                forecast_confidence = forecast_result.get("confidence", 0)
-                logger.debug(f"Using forecast reward: confidence={forecast_confidence:.3f} > threshold={self.forecast_confidence_threshold}")
+                logger.debug(f"Using forecast reward (no confidence threshold)")
             else:
-                logger.debug(f"Skipping forecast reward: confidence={forecast_result.get('confidence', 0) if forecast_result else 0:.3f} <= threshold={self.forecast_confidence_threshold}")
+                logger.debug(f"No forecast available for reward calculation")
 
             # Use configurable weights for current and forecast rewards with safe fallbacks
             try:
@@ -544,56 +526,55 @@ class ProactiveRewardCalculator:
                                    forecast_result: Dict[str, Any],
                                    current_replicas: int,
                                    desired_replicas: int) -> float:
-        """Calculate reward based on forecast predictions."""
-        forecast_summary = forecast_result.get("forecast_summary", {})
-        forecast_recommendation = forecast_result.get("recommendation", "keep_same")
-        forecast_confidence = forecast_result.get("confidence", 0.0)
-
-        # Reward for following forecast recommendation
-        alignment_reward = 0.0
-        if action == forecast_recommendation:
-            alignment_reward = 1.0 * forecast_confidence
-        else:
-            alignment_reward = -0.5 * forecast_confidence
-
-        # Proactive scaling rewards
-        proactive_reward = self._calculate_proactive_reward(
-            action, forecast_summary, current_replicas, desired_replicas
+        """Calculate reward based on forecast predictions (no confidence weighting)."""
+        forecast_summary = forecast_result.get("predicted_metrics", {})
+        
+        # Simple proactive reward based on predicted vs current values
+        proactive_reward = self._calculate_proactive_reward_simple(
+            action, current_metrics, forecast_summary, current_replicas, desired_replicas
         )
 
-        # Confidence-weighted total
-        total_forecast_reward = (alignment_reward + proactive_reward) * forecast_confidence
+        logger.debug(f"Forecast reward details: action={action}, proactive_reward={proactive_reward}")
 
-        logger.debug(f"Forecast reward details: action={action}, forecast_recommendation={forecast_recommendation}, "
-                     f"alignment_reward={alignment_reward}, proactive_reward={proactive_reward}, "
-                     f"forecast_confidence={forecast_confidence}, total_forecast_reward={total_forecast_reward}")
-
-        return total_forecast_reward
+        return proactive_reward
 
     @staticmethod
-    def _calculate_proactive_reward(action: str,
-                                    forecast_summary: Dict[str, float],
-                                    current_replicas: int,
-                                    desired_replicas: int) -> float:
-        """Calculate reward for proactive scaling decisions based on CPU and memory trends."""
-        cpu_change = forecast_summary.get("cpu_change_percent", 0.0)
-        memory_change = forecast_summary.get("memory_change_percent", 0.0)
-
-        # Reward for scaling up before predicted resource increase
-        if action == "scale_up" and (cpu_change > 20 or memory_change > 15):
-            return 1.5  # High reward for proactive scale-up
-
-        # Reward for scaling down before predicted resource decrease
-        elif action == "scale_down" and (cpu_change < -20 or memory_change < -15):
-            return 1.5  # High reward for proactive scale-down
-
-        # Penalty for scaling against predicted trend
-        elif action == "scale_up" and (cpu_change < -10 and memory_change < -10):
-            return -1.0  # Penalty for scaling up when resources will decrease
-        elif action == "scale_down" and (cpu_change > 10 and memory_change > 10):
-            return -1.0  # Penalty for scaling down when resources will increase
-
-        return 0.0
+    def _calculate_proactive_reward_simple(action: str,
+                                          current_metrics: Dict[str, float],
+                                          forecast_metrics: Dict[str, float],
+                                          current_replicas: int,
+                                          desired_replicas: int) -> float:
+        """Calculate simple proactive reward by comparing forecast vs current metrics."""
+        try:
+            current_cpu = current_metrics.get("process_cpu_seconds_total_rate", 0.0)
+            current_memory = current_metrics.get("process_resident_memory_bytes", 0.0)
+            
+            forecast_cpu = forecast_metrics.get("process_cpu_seconds_total_rate", current_cpu)
+            forecast_memory = forecast_metrics.get("process_resident_memory_bytes", current_memory)
+            
+            # Calculate predicted changes
+            cpu_change = forecast_cpu - current_cpu
+            memory_change = forecast_memory - current_memory
+            
+            # Reward for scaling up before predicted resource increase
+            if action == "scale_up" and (cpu_change > 0.1 or memory_change > 50*1024*1024):  # >50MB
+                return 1.0  # Good proactive scale-up
+            
+            # Reward for scaling down before predicted resource decrease  
+            elif action == "scale_down" and (cpu_change < -0.05 or memory_change < -25*1024*1024):  # <-25MB
+                return 1.0  # Good proactive scale-down
+            
+            # Penalty for scaling against predicted trend
+            elif action == "scale_up" and (cpu_change < -0.05 and memory_change < -25*1024*1024):
+                return -0.5  # Bad scale-up when resources will decrease
+            elif action == "scale_down" and (cpu_change > 0.05 and memory_change > 25*1024*1024):
+                return -0.5  # Bad scale-down when resources will increase
+            
+            return 0.0  # Neutral for other cases
+            
+        except Exception as e:
+            logger.warning(f"Failed to calculate proactive reward: {e}")
+            return 0.0
 
     def _classify_load(self, metrics: Dict[str, float], replicas: int, deployment_info: Optional[Dict[str, Any]] = None) -> str:
         """Classify current load using CPU and memory metrics only."""
