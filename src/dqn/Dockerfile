@@ -4,16 +4,19 @@ FROM nimbusguard-base:latest
 # Set the working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
+# Copy the pyproject.toml file into the container for dependency management
+COPY pyproject.toml .
+
+# Install the dependencies using modern pyproject.toml approach
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --upgrade pip && \
+    pip install -e .
 
 # Copy the application code into the container
 COPY . .
 
 # Copy the pre-trained models into /tmp for runtime use
-COPY cpu.keras cpu.pkl memory.keras memory.pkl /tmp/
+COPY cpu_forecaster.keras cpu_forecaster_scaler.pkl memory_forecaster.keras memory_forecaster_scaler.pkl /tmp/
 
 # Expose the ports the app runs on
 EXPOSE 8080 8081
