@@ -875,7 +875,7 @@ class WorkflowNodes:
                 self.dqn_agent.replay_buffer.add(experience)
                 metrics.add_experience()
                 
-                logger.info(f"✅ Stored DQN experience: action={decision_data['action']}, "
+                logger.info(f"Stored DQN experience: action={decision_data['action']}, "
                            f"context-aware_reward={calculated_reward:.3f}, buffer_size={self.dqn_agent.replay_buffer.size()}")
             else:
                 logger.debug("No previous state or reward available, skipping experience storage")

@@ -45,7 +45,7 @@ class MinIOModelStorage:
                 self.client.make_bucket(self.bucket_name)
                 logger.info(f"📦 Created MinIO bucket: {self.bucket_name}")
             
-            logger.info("✅ MinIO storage initialized successfully")
+            logger.info("MinIO storage initialized successfully")
             return True
             
         except Exception as e:

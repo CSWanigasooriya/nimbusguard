@@ -130,17 +130,17 @@ class ModelPredictor:
         if len(processed_data) > 3:
             # Calculate volatility ratio
             volatility_ratio = np.std(processed_data['value']) / (np.mean(processed_data['value']) + 1e-6)
-            logger.info(f"🔬 {metric_name.upper()}: Volatility ratio = {volatility_ratio:.3f} (std={np.std(processed_data['value']):.4f}, mean={np.mean(processed_data['value']):.4f})")
+            logger.info(f"{metric_name.upper()}: Volatility ratio = {volatility_ratio:.3f} (std={np.std(processed_data['value']):.4f}, mean={np.mean(processed_data['value']):.4f})")
             
             if volatility_ratio > 1.5:  # High volatility
-                logger.info(f"📊 {metric_name.upper()}: High volatility detected (ratio={volatility_ratio:.2f}), applying smoothing")
+                logger.info(f"{metric_name.upper()}: High volatility detected (ratio={volatility_ratio:.2f}), applying smoothing")
                 # Apply adaptive smoothing - stronger for more volatile data
                 window_size = min(5, max(3, int(len(processed_data) / 3)))
                 processed_data['value'] = processed_data['value'].rolling(
                     window=window_size, center=True, min_periods=1
                 ).mean()
             elif volatility_ratio > 0.8:  # Moderate volatility
-                logger.info(f"📊 {metric_name.upper()}: Moderate volatility detected (ratio={volatility_ratio:.2f}), applying light smoothing")
+                logger.info(f"{metric_name.upper()}: Moderate volatility detected (ratio={volatility_ratio:.2f}), applying light smoothing")
                 # Light smoothing to preserve trends
                 processed_data['value'] = processed_data['value'].rolling(
                     window=3, center=True, min_periods=1
@@ -151,7 +151,7 @@ class ModelPredictor:
         improvement_ratio = np.std(original_values) / (np.std(final_values) + 1e-6)
         
         if improvement_ratio > 1.2:
-            logger.debug(f"✅ {metric_name.upper()}: Reduced noise by {improvement_ratio:.1f}x "
+            logger.debug(f"{metric_name.upper()}: Reduced noise by {improvement_ratio:.1f}x "
                         f"(std: {np.std(original_values):.4f} → {np.std(final_values):.4f})")
         
         return processed_data
