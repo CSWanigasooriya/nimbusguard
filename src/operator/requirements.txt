@@ -2,3 +2,6 @@ prometheus_client
 kopf
 requests
 pandas
+joblib
+tensorflow
+scikit-learn
