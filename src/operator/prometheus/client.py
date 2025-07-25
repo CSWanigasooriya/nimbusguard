@@ -1,184 +1,195 @@
-"""Prometheus client for fetching selected metrics."""
+"""
+Prometheus client for fetching metrics from Prometheus server.
+"""
+
+import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
-
-import numpy as np
-import requests
-from config.settings import load_config
+from typing import Dict, Optional, Tuple
+import aiohttp
 import pandas as pd
-
-config = load_config()
-from prometheus.queries import PrometheusQueries
 
 logger = logging.getLogger(__name__)
 
 
 class PrometheusClient:
-    """Client for fetching Prometheus metrics."""
+    """Client for fetching metrics from Prometheus."""
+    
+    def __init__(self, prometheus_url: str, timeout: int = 30):
+        """
+        Initialize Prometheus client.
+        
+        Args:
+            prometheus_url: Prometheus server URL
+            timeout: Request timeout in seconds
+        """
+        self.prometheus_url = prometheus_url.rstrip("/")
+        self.timeout = timeout
+        
+        # Prometheus queries for the specific metrics needed
+        self.queries = {
+            # CPU usage rate - current CPU utilization per second
+            "process_cpu_seconds_total_rate":
+                'sum(rate(process_cpu_seconds_total{job=~"prometheus.scrape.annotated_pods", instance=~".*:8000"}[15s])) or vector(0)',
 
-    def __init__(self):
-        self.base_url = config.prometheus.url
-        self.timeout = config.prometheus.timeout
-        self.queries = PrometheusQueries()
-
-    def _make_request(self, endpoint: str, params: Dict[str, Any]) -> Optional[Dict]:
-        """Make HTTP request to Prometheus API."""
+            # Memory usage - current instantaneous memory (gauge)
+            "process_resident_memory_bytes":
+                'sum(process_resident_memory_bytes{job=~"prometheus.scrape.annotated_pods", instance=~".*:8000"}) or vector(0)',
+            
+            # Current replica count - essential for DQN state awareness
+            "kube_deployment_status_replicas":
+                'sum(kube_deployment_status_replicas{deployment="consumer", job="prometheus.scrape.annotated_pods", namespace="nimbusguard"}) or vector(0)',
+        }
+    
+    async def fetch_metric_range(
+        self, 
+        metric_name: str, 
+        start_time: datetime, 
+        end_time: datetime, 
+        step: str = "15s"
+    ) -> Optional[pd.DataFrame]:
+        """
+        Fetch metric data over a time range.
+        
+        Args:
+            metric_name: Name of the metric (key in self.queries)
+            start_time: Start time for the query
+            end_time: End time for the query
+            step: Step size for the query
+            
+        Returns:
+            DataFrame with timestamp and value columns, or None if failed
+        """
+        if metric_name not in self.queries:
+            logger.error(f"Unknown metric: {metric_name}")
+            return None
+        
+        query = self.queries[metric_name]
+        
+        # Convert times to Unix timestamps
+        start_timestamp = start_time.timestamp()
+        end_timestamp = end_time.timestamp()
+        
+        # Build the range query URL
+        url = f"{self.prometheus_url}/api/v1/query_range"
+        params = {
+            "query": query,
+            "start": start_timestamp,
+            "end": end_timestamp,
+            "step": step
+        }
+        
         try:
-            url = f"{self.base_url}/api/v1/{endpoint}"
-            response = requests.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-
-            data = response.json()
-            if data.get("status") != "success":
-                logger.error(f"Prometheus API error: {data.get('error', 'Unknown error')}")
-                return None
-
-            return data.get("data", {})
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Prometheus request failed: {e}")
-            return None
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+                async with session.get(url, params=params) as response:
+                    if response.status != 200:
+                        logger.error(f"Prometheus query failed with status {response.status}")
+                        return None
+                    
+                    data = await response.json()
+                    
+                    if data.get("status") != "success":
+                        logger.error(f"Prometheus query failed: {data.get('error', 'Unknown error')}")
+                        return None
+                    
+                    # Parse the response
+                    result = data.get("data", {}).get("result", [])
+                    if not result:
+                        logger.warning(f"No data returned for metric {metric_name}")
+                        return pd.DataFrame(columns=["timestamp", "value"])
+                    
+                    # Extract values (assuming single series result)
+                    values = result[0].get("values", [])
+                    if not values:
+                        logger.warning(f"No values in result for metric {metric_name}")
+                        return pd.DataFrame(columns=["timestamp", "value"])
+                    
+                    # Convert to DataFrame
+                    df = pd.DataFrame(values, columns=["timestamp", "value"])
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+                    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+                    
+                    logger.info(f"Fetched {len(df)} data points for {metric_name}")
+                    return df
+                    
         except Exception as e:
-            logger.error(f"Unexpected error querying Prometheus: {e}")
+            logger.error(f"Error fetching metric {metric_name}: {e}")
             return None
-
-    def get_current_metrics(self) -> Dict[str, float]:
-        """Get current values for all selected features."""
-        metrics = {}
-
-        for feature_name in config.scaling.selected_features:
-            try:
-                # Use aggregated query for current metrics
-                query = self.queries.get_aggregated_query(feature_name)
-
-                data = self._make_request("query", {"query": query})
-                if not data or not data.get("result"):
-                    logger.warning(f"No data returned for feature: {feature_name}")
-                    metrics[feature_name] = 0.0
-                    continue
-
-                # Extract the metric value
-                result = data["result"][0]  # Take first result
-                value = float(result["value"][1])  # [timestamp, value]
-                metrics[feature_name] = value
-
-                # Debug logging for memory metrics specifically
-                if "memory" in feature_name.lower():
-                    logger.info(f"🔍 DEBUG: {feature_name} = {value} bytes ({value / (1024 * 1024):.1f} MB)")
-                else:
-                    logger.debug(f"Feature {feature_name}: {value}")
-
-            except (IndexError, KeyError, ValueError) as e:
-                logger.warning(f"Failed to parse {feature_name}: {e}")
-                metrics[feature_name] = 0.0
-            except Exception as e:
-                logger.error(f"Error fetching {feature_name}: {e}")
-                metrics[feature_name] = 0.0
-
-        logger.info(f"Fetched {len(metrics)} current metrics")
-        return metrics
-
-    async def get_historical_metrics(self, duration_minutes: int) -> Dict[str, pd.DataFrame]:
-        """Get historical time series data for all selected features as DataFrames with timestamps."""
-        historical_data = {}
-
-        # Calculate time range
-        end_time = datetime.utcnow()
-        start_time = end_time - timedelta(minutes=duration_minutes)
-
-        for feature_name in config.scaling.selected_features:
-            try:
-                # Use aggregated query for historical data
-                query = self.queries.get_aggregated_query(feature_name)
-
-                params = {
-                    "query": query,
-                    "start": start_time.isoformat() + "Z",
-                    "end": end_time.isoformat() + "Z",
-                    "step": "15s"  # 15-second resolution (matches LSTM training data)
-                }
-
-                data = self._make_request("query_range", params)
-                if not data or not data.get("result"):
-                    logger.warning(f"No historical data for feature: {feature_name}")
-                    # Create empty DataFrame with proper structure
-                    historical_data[feature_name] = pd.DataFrame(columns=['timestamp', 'value'])
-                    continue
-
-                # Extract time series values with timestamps
-                result = data["result"][0]  # Take first result
-                timestamps = []
-                values = []
-                
-                for timestamp, value in result.get("values", []):
-                    try:
-                        timestamps.append(pd.to_datetime(timestamp, unit='s'))
-                        values.append(float(value))
-                    except (ValueError, TypeError):
-                        timestamps.append(pd.to_datetime(timestamp, unit='s'))
-                        values.append(0.0)
-
-                # Create DataFrame with timestamp and value columns
-                df = pd.DataFrame({
-                    'timestamp': timestamps,
-                    'value': values
-                })
-                # Keep timestamp as a column (don't set as index) so LSTMPredictor can access it
-                historical_data[feature_name] = df
-                
-                logger.debug(f"Feature {feature_name}: {len(values)} historical points")
-
-            except (IndexError, KeyError) as e:
-                logger.warning(f"Failed to parse historical {feature_name}: {e}")
-                historical_data[feature_name] = pd.DataFrame(columns=['timestamp', 'value'])
-            except Exception as e:
-                logger.error(f"Error fetching historical {feature_name}: {e}")
-                historical_data[feature_name] = pd.DataFrame(columns=['timestamp', 'value'])
-
-        logger.info(f"Fetched historical data for {len(historical_data)} features")
-        return historical_data
-
-    def get_feature_matrix(self, duration_minutes: int) -> Optional[np.ndarray]:
-        """Get historical data as a numpy matrix for ML processing."""
-        historical_data = self.get_historical_metrics(duration_minutes)
-
-        if not historical_data:
-            logger.error("No historical data available")
-            return None
-
-        # Find the minimum length across all features
-        non_empty_lengths = [len(values) for values in historical_data.values() if values]
-        if not non_empty_lengths:
-            logger.error("All historical data is empty")
-            return None
-
-        min_length = min(non_empty_lengths)
-        if min_length == 0:
-            logger.error("All historical data is empty")
-            return None
-
-        # Create matrix: [time_steps, features]
-        matrix = []
-        for feature_name in config.scaling.selected_features:
-            values = historical_data.get(feature_name, [])
-            if len(values) >= min_length:
-                matrix.append(values[-min_length:])  # Take last min_length values
-            else:
-                # Pad with zeros if needed
-                padded = [0.0] * (min_length - len(values)) + values
-                matrix.append(padded)
-
-        # Transpose to get [time_steps, features] shape
-        feature_matrix = np.array(matrix).T
-        logger.info(f"Created feature matrix: {feature_matrix.shape}")
-        return feature_matrix
-
-    def health_check(self) -> bool:
-        """Check if Prometheus is accessible."""
+    
+    async def fetch_current_metrics(self) -> Dict[str, float]:
+        """
+        Fetch current values for all metrics.
+        
+        Returns:
+            Dictionary with metric names as keys and current values as values
+        """
+        results = {}
+        
+        # Build instant query URL
+        url = f"{self.prometheus_url}/api/v1/query"
+        
         try:
-            data = self._make_request("query", {"query": "up"})
-            return data is not None
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+                for metric_name, query in self.queries.items():
+                    params = {"query": query}
+                    
+                    async with session.get(url, params=params) as response:
+                        if response.status != 200:
+                            logger.error(f"Prometheus query failed with status {response.status} for {metric_name}")
+                            results[metric_name] = 0.0
+                            continue
+                        
+                        data = await response.json()
+                        
+                        if data.get("status") != "success":
+                            logger.error(f"Prometheus query failed for {metric_name}: {data.get('error', 'Unknown error')}")
+                            results[metric_name] = 0.0
+                            continue
+                        
+                        # Parse the response
+                        result = data.get("data", {}).get("result", [])
+                        if not result:
+                            logger.warning(f"No data returned for current metric {metric_name}")
+                            results[metric_name] = 0.0
+                            continue
+                        
+                        # Extract current value
+                        value = result[0].get("value", [None, "0"])[1]
+                        results[metric_name] = float(value) if value else 0.0
+                        
+                        logger.debug(f"Current {metric_name}: {results[metric_name]}")
+                        
         except Exception as e:
-            logger.error(f"Prometheus health check failed: {e}")
-            return False
+            logger.error(f"Error fetching current metrics: {e}")
+            # Return zeros for all metrics on error
+            return {metric_name: 0.0 for metric_name in self.queries.keys()}
+        
+        return results
+    
+    async def fetch_historical_data(self, lookback_minutes: int = 15) -> Dict[str, pd.DataFrame]:
+        """
+        Fetch historical data for all metrics.
+        
+        Args:
+            lookback_minutes: How many minutes of history to fetch
+            
+        Returns:
+            Dictionary with metric names as keys and DataFrames as values
+        """
+        end_time = datetime.now()
+        start_time = end_time - timedelta(minutes=lookback_minutes)
+        
+        results = {}
+        
+        # Fetch data for all metrics concurrently
+        tasks = []
+        for metric_name in self.queries.keys():
+            task = self.fetch_metric_range(metric_name, start_time, end_time)
+            tasks.append((metric_name, task))
+        
+        # Wait for all tasks to complete
+        for metric_name, task in tasks:
+            df = await task
+            results[metric_name] = df if df is not None else pd.DataFrame(columns=["timestamp", "value"])
+            
+        return results 

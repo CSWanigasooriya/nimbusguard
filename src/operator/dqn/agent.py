@@ -1,485 +1,521 @@
-"""DQN agent that uses both current metrics and forecast data for proactive scaling decisions."""
-import asyncio
+"""
+DQN Agent for intelligent autoscaling decisions.
+"""
+
 import logging
-import os
 import random
-import threading
 import time
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor
-from io import BytesIO
-from typing import Dict, List, Optional, Any, Tuple
-
-import joblib
+from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
-import pandas as pd
-import torch
-import torch.nn.functional as F
-from sklearn.preprocessing import RobustScaler
 
-from config.settings import load_config, ScalingConfig
-from dqn.model import DQNNetwork
-from dqn.rewards import ProactiveRewardCalculator
+from .model import DQNModel
+from .replay_buffer import ReplayBuffer, Experience
+from .rewards import ContextAwareRewardCalculator
+from metrics.collector import metrics
 
 logger = logging.getLogger(__name__)
 
 
-class ReplayBuffer:
-    """Experience replay buffer for DQN training."""
-    
-    def __init__(self, capacity: int):
-        self.buffer = deque(maxlen=capacity)
-        self.capacity = capacity
-        self._lock = threading.Lock()
-    
-    def push(self, state, action, reward, next_state, done):
-        """Add experience to buffer (thread-safe)."""
-        experience = (state, action, reward, next_state, done)
-        with self._lock:
-            self.buffer.append(experience)
-    
-    def sample(self, batch_size: int):
-        """Sample a batch of experiences (thread-safe)."""
-        with self._lock:
-            return random.sample(self.buffer, batch_size)
-    
-    def __len__(self):
-        with self._lock:
-            return len(self.buffer)
-
-
-class ProactiveDQNAgent:
+class DQNAgent:
     """
-    Enhanced DQN agent that uses forecast data for proactive scaling decisions.
-    Includes model persistence to MinIO storage and feature scaling with async training.
+    Deep Q-Network agent for making scaling decisions with epsilon-greedy exploration
+    and experience replay.
     """
     
-    def __init__(self, config: ScalingConfig, device: Optional[str] = None, minio_client=None):
-        self.config = config
-        self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
-        self.minio_client = minio_client
+    def __init__(self, 
+                 state_size: int = 10,
+                 action_size: int = 3,
+                 hidden_dims: List[int] = [64, 32],
+                 learning_rate: float = 0.001,
+                 gamma: float = 0.95,
+                 epsilon_start: float = 0.9,
+                 epsilon_end: float = 0.01,
+                 epsilon_decay: float = 0.995,
+                 replay_buffer_size: int = 10000,
+                 min_replay_size: int = 100,
+                 batch_size: int = 32,
+                 target_update_frequency: int = 100):
+        """
+        Initialize DQN Agent.
         
-        # Initialize a new, unfitted scaler at runtime
-        self.scaler = RobustScaler()
-        self.scaler_fitted = False
+        Args:
+            state_size: Dimension of state space
+            action_size: Number of actions (3: scale_down, no_action, scale_up)
+            hidden_dims: Hidden layer dimensions
+            learning_rate: Learning rate for neural network
+            gamma: Discount factor
+            epsilon_start: Initial exploration rate
+            epsilon_end: Minimum exploration rate
+            epsilon_decay: Epsilon decay rate
+            replay_buffer_size: Size of experience replay buffer
+            min_replay_size: Minimum replay buffer size before training
+            batch_size: Training batch size
+            target_update_frequency: How often to update target network
+        """
+        self.state_size = state_size
+        self.action_size = action_size
+        self.gamma = gamma
+        self.batch_size = batch_size
+        self.target_update_frequency = target_update_frequency
         
-        # State and action dimensions
-        # 2 current metrics + 2 forecast metrics + 1 context (current replicas) = 5 total dimensions
-        self.state_dim = len(config.selected_features) * 2 + 1  # current + forecast metrics + current replicas
-        self.action_dim = 3  # scale_down, keep_same, scale_up
+        # Epsilon-greedy parameters
+        self.epsilon = epsilon_start
+        self.epsilon_start = epsilon_start
+        self.epsilon_end = epsilon_end
+        self.epsilon_decay = epsilon_decay
         
-        # Initialize networks
-        self.q_network = DQNNetwork(
-            state_size=self.state_dim,
-            action_size=self.action_dim,
-            hidden_size=config.dqn_hidden_dims[0]  # Use first hidden dimension
-        ).to(self.device)
-        
-        self.target_network = DQNNetwork(
-            state_size=self.state_dim,
-            action_size=self.action_dim,
-            hidden_size=config.dqn_hidden_dims[0]  # Use first hidden dimension
-        ).to(self.device)
-        
-        # Copy weights to target network
-        self.target_network.load_state_dict(self.q_network.state_dict())
-        self.target_network.eval()
-        
-        # Training components - use lower learning rate for stability
-        self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=config.dqn_learning_rate * 0.1)
-        self.replay_buffer = ReplayBuffer(capacity=config.dqn_memory_capacity)
-        
-        # Exploration parameters
-        self.epsilon = config.dqn_epsilon_start
-        self.epsilon_min = config.dqn_epsilon_end
-        
-        # Training state
+        # Training counters
         self.training_steps = 0
-        self.last_save_time = time.time()
-        self.last_loss = None
+        self.episodes = 0
+        self.total_reward = 0.0
         
-        # Async training setup
-        self.training_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="DQN-Training")
-        self.training_lock = asyncio.Lock()
-        self.is_training = False
+        # Initialize components
+        self.model = DQNModel(
+            state_size=state_size,
+            action_size=action_size,
+            hidden_dims=hidden_dims,
+            learning_rate=learning_rate
+        )
         
-        # Training frequency control
-        self.min_training_interval = 30  # 30 seconds minimum between training sessions (was 120)
-        self.last_training_time = 0
+        # Model persistence paths
+        self.model_save_path = "/tmp/dqn_model.keras"
         
-        # Target network update frequency - less frequent updates for stability
-        self.target_update_frequency = 2000  # Update target network every 2000 steps
+        self.replay_buffer = ReplayBuffer(
+            capacity=replay_buffer_size,
+            min_size=min_replay_size
+        )
         
-        # Reward calculator
-        self.reward_calculator = ProactiveRewardCalculator()
+        self.reward_calculator = ContextAwareRewardCalculator()
         
-        logger.info(f"ProactiveDQNAgent initialized with async training: "
-                   f"state_dim={self.state_dim}, action_dim={self.action_dim}, device={self.device}")
+        # Action mapping
+        self.action_map = {
+            0: 'scale_down',
+            1: 'keep_same',  # Fixed: changed from 'no_action' to 'keep_same'
+            2: 'scale_up'
+        }
+        
+        self.reverse_action_map = {v: k for k, v in self.action_map.items()}
+        
+        # Store last state for experience creation
+        self.last_state = None
+        self.last_action = None
+        self.last_deployment_context = None
+        
+        # Scaling history for context
+        self.scaling_history = []
+        self.max_history_length = 10
+        
+        logger.info(f"Initialized DQN Agent: state_size={state_size}, "
+                   f"epsilon={epsilon_start}, buffer_size={replay_buffer_size}")
+        
+        # Try to load existing model from MinIO
+        self._load_existing_model()
     
-    def _scale_features(self, raw_features: List[float]) -> List[float]:
-        """
-        Scale raw features using the runtime scaler.
-        The scaler is fitted on the first data point it sees.
-        """
+    def _load_existing_model(self):
+        """Try to load existing DQN model from MinIO."""
         try:
-            raw_features_df = pd.DataFrame([raw_features], columns=self.config.selected_features)
-
-            if not self.scaler_fitted:
-                logger.info("First run: Fitting the feature scaler.")
-                self.scaler.fit(raw_features_df)
-                self.scaler_fitted = True
-
-            scaled_features = self.scaler.transform(raw_features_df)
-            logger.debug(f"Raw features: {raw_features}")
-            logger.debug(f"Scaled features: {scaled_features[0].tolist()}")
-            return scaled_features[0].tolist()
-            
+            model_loaded = self.model.load_model(self.model_save_path, load_from_minio=True)
+            if model_loaded:
+                logger.info("🎯 Resumed DQN training from existing model")
+                # TODO: Could also load training state (epsilon, steps, etc.) if stored
+            else:
+                logger.info("🚀 Starting DQN training with fresh model")
         except Exception as e:
-            logger.warning(f"Feature scaling failed: {e}, returning raw features")
-            logger.debug(f"Raw features (scaling failed): {raw_features}")
-            return raw_features
+            logger.warning(f"Failed to load existing model: {e}")
+            logger.info("🚀 Starting DQN training with fresh model")
     
-    def create_state_vector(self, current_metrics: Dict[str, float], 
-                          forecast_metrics: Optional[Dict[str, float]] = None,
-                          current_replicas: int = 1) -> np.ndarray:
+    def _create_state(self, 
+                     metrics: Dict[str, float], 
+                     current_replicas: int,
+                     ready_replicas: int,
+                     forecast: Optional[Dict[str, float]] = None,
+                     deployment_context: Optional[Dict[str, Any]] = None) -> np.ndarray:
         """
-        Create 5-dimensional state vector from current metrics, forecast metrics, and context.
+        Create context-aware state vector from metrics and deployment context.
         
-        State vector structure:
-        - Positions 0-1: Current metrics (CPU rate, Memory bytes) - scaled
-        - Positions 2-3: Forecast metrics (CPU rate, Memory bytes) - scaled  
-        - Position 4: Current replicas - not scaled
-        
-        This gives the agent both current state AND future state information for proactive decisions.
+        Args:
+            metrics: Current metrics
+            current_replicas: Current number of replicas
+            ready_replicas: Number of ready replicas
+            forecast: Forecast metrics (optional)
+            deployment_context: Deployment context with resource constraints (optional)
+            
+        Returns:
+            Context-aware state vector as numpy array
         """
-        state = []
+        state_features = []
         
-        # 1. Current metrics (2 features) - scaled
-        current_raw_features = [current_metrics.get(feature, 0.0) for feature in self.config.selected_features]
-        current_scaled_features = self._scale_features(current_raw_features)
-        state.extend(current_scaled_features)
-
-        # 2. Forecast metrics (2 features) - scaled using same scaler
-        if forecast_metrics:
-            forecast_raw_features = [forecast_metrics.get(feature, 0.0) for feature in self.config.selected_features]
-            forecast_scaled_features = self._scale_features(forecast_raw_features)
-            state.extend(forecast_scaled_features)
-            logger.debug(f"🔮 Using forecast metrics: {forecast_raw_features} -> {forecast_scaled_features}")
+        # Current metrics (normalized)
+        cpu_rate = metrics.get('process_cpu_seconds_total_rate', 0.0)
+        memory_bytes = metrics.get('process_resident_memory_bytes', 0.0)
+        replica_count = metrics.get('kube_deployment_status_replicas', current_replicas)
+        
+        # Get deployment context for context-aware features
+        if deployment_context:
+            resource_requests = deployment_context.get('resource_requests', {})
+            cpu_request = resource_requests.get('cpu', 0.5)  # Default 0.5 cores
+            memory_request = resource_requests.get('memory', 512 * 1024 * 1024)  # Default 512MB
+            min_replicas = deployment_context.get('min_replicas', 1)
+            max_replicas = deployment_context.get('max_replicas', 10)
         else:
-            # If no forecast available, use current metrics as fallback
-            state.extend(current_scaled_features)
-            logger.debug("⚠️ No forecast available, using current metrics as fallback")
-
-        # 3. Essential context (1 feature) - current replicas
-        state.append(current_replicas)
+            # Fallback defaults
+            cpu_request = 0.5
+            memory_request = 512 * 1024 * 1024
+            min_replicas = 1
+            max_replicas = 10
         
-        logger.debug(f"🧠 State vector created: current={current_scaled_features}, forecast={state[2:4]}, replicas={current_replicas}")
-        return np.array(state, dtype=np.float32)
-    
-    def _update_epsilon_by_experience(self):
-        """Update epsilon based on experience count for more consistent exploration decay."""
-        experience_count = len(self.replay_buffer)
+        # Basic metrics
+        cpu_per_replica = cpu_rate / max(current_replicas, 1)
+        memory_per_replica = memory_bytes / max(current_replicas, 1) / (1024 * 1024)  # MB
         
-        # Decay epsilon based on experiences collected (0 to 2000 experiences)
-        decay_experiences = 2000  # Increased for more exploration in production
-        if experience_count < decay_experiences:
-            # Linear decay from start to end over 2000 experiences
-            progress = experience_count / decay_experiences
-            self.epsilon = self.config.dqn_epsilon_start * (1 - progress) + self.config.dqn_epsilon_end * progress
+        # Context-aware resource utilization ratios
+        total_cpu_capacity = cpu_request * current_replicas
+        total_memory_capacity = memory_request * current_replicas / (1024 * 1024)  # MB
+        
+        cpu_utilization = cpu_rate / max(total_cpu_capacity, 0.001)
+        memory_utilization = (memory_bytes / (1024 * 1024)) / max(total_memory_capacity, 1)
+        
+        # Scaling position within boundaries (normalized)
+        replica_position = (current_replicas - min_replicas) / max(max_replicas - min_replicas, 1)
+        
+        state_features.extend([
+            cpu_utilization,             # CPU utilization vs requests [0-1+]
+            memory_utilization,          # Memory utilization vs requests [0-1+]
+            cpu_per_replica,             # CPU per replica (absolute)
+            memory_per_replica,          # Memory per replica (absolute, MB)
+            current_replicas / max_replicas,  # Replica ratio vs max [0-1]
+            ready_replicas / max(current_replicas, 1),  # Stability ratio [0-1]
+            replica_position,            # Position within scaling bounds [0-1]
+        ])
+        
+        # Add forecast features if available
+        if forecast:
+            forecast_cpu = forecast.get('process_cpu_seconds_total_rate', cpu_rate)
+            forecast_memory = forecast.get('process_resident_memory_bytes', memory_bytes)
+            
+            state_features.extend([
+                forecast_cpu,                           # Forecast CPU
+                forecast_memory / (1024 * 1024),       # Forecast memory (MB)
+                forecast_cpu - cpu_rate,                # CPU trend
+            ])
         else:
-            # Keep at minimum after decay period
-            self.epsilon = self.config.dqn_epsilon_end
+            # Fill with zeros if no forecast
+            state_features.extend([0.0, 0.0, 0.0])
         
-        # Log epsilon changes occasionally
-        if experience_count % 25 == 0 or experience_count < 10:  # More frequent logging
-            logger.info(f"🎯 Epsilon updated by experience: {self.epsilon:.4f} (experiences: {experience_count}/2000)")
+        # Pad or truncate to state_size
+        while len(state_features) < self.state_size:
+            state_features.append(0.0)
+        
+        state_features = state_features[:self.state_size]
+        
+        return np.array(state_features, dtype=np.float32)
     
-    def select_action(self, state: np.ndarray, use_forecast_guidance: bool = True) -> Tuple[int, float, bool]:
+    def select_action(self, 
+                     state: np.ndarray, 
+                     deployment_context: Dict[str, Any],
+                     use_epsilon: bool = True) -> Tuple[int, str, float, Dict[str, float]]:
         """
-        Select action using epsilon-greedy with forecast-guided exploration.
-        Returns: (action_index, decision_confidence, is_exploration)
+        Select action using epsilon-greedy policy.
+        
+        Args:
+            state: Current state vector
+            deployment_context: Deployment context for constraints
+            use_epsilon: Whether to use epsilon-greedy exploration
+            
+        Returns:
+            Tuple of (action_index, action_name, confidence, q_values)
         """
-        # Update epsilon based on experience count (not just training steps)
-        self._update_epsilon_by_experience()
+        current_replicas = deployment_context.get('current_replicas', 1)
         
-        # Use epsilon as-is without adjustment
-        # Note: Previously reduced epsilon for forecast guidance, but this was causing
-        # lower exploration than expected. Now using the configured epsilon directly.
-        adjusted_epsilon = self.epsilon
+        # Get Q-values from the model
+        q_values_dict = self.model.get_action_values(state)
+        q_values = np.array([
+            q_values_dict['scale_down'],
+            q_values_dict['keep_same'],  # Fixed: changed from 'no_action' to 'keep_same'
+            q_values_dict['scale_up']
+        ])
         
-        # Get Q-values for confidence calculation
-        with torch.no_grad():
-            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.q_network(state_tensor)
-            q_values_np = q_values.cpu().numpy().flatten()
+        # Apply constraints
+        valid_actions = [0, 1, 2]  # All actions initially valid
         
-        # Calculate decision confidence based on Q-value spread
-        q_max = float(np.max(q_values_np))  # Ensure Python float
-        q_min = float(np.min(q_values_np))  # Ensure Python float
-        q_range = q_max - q_min
-        confidence = min(1.0, max(0.0, q_range / 5.0))  # Normalize to 0-1
+        # Can't scale down below 1 replica
+        if current_replicas <= 1:
+            q_values[0] = -np.inf  # Make scale_down invalid
+            valid_actions.remove(0)
         
-        # Exploration vs exploitation decision
-        if random.random() < adjusted_epsilon:
-            # Exploration
-            action = random.randint(0, 2)
+        # Can't scale up beyond reasonable limit
+        if current_replicas >= 20:
+            q_values[2] = -np.inf  # Make scale_up invalid
+            valid_actions.remove(2)
+        
+        # Epsilon-greedy action selection
+        is_exploration = False
+        if use_epsilon and random.random() < self.epsilon:
+            # Exploration: choose random valid action
+            action_idx = random.choice(valid_actions)
             is_exploration = True
-            # Lower confidence for exploration
-            confidence *= 0.5
+            logger.info(f"🎲 DQN Exploration: {self.action_map[action_idx]} (ε={self.epsilon:.3f})")
         else:
-            # Exploitation - use Q-network
-            action = int(np.argmax(q_values_np))  # Use numpy array instead of tensor
-            is_exploration = False
+            # Exploitation: choose best action
+            action_idx = np.argmax(q_values)
+            logger.info(f"🎯 DQN Exploitation: {self.action_map[action_idx]} (Q={q_values[action_idx]:.3f})")
         
-        return action, confidence, is_exploration
+        action_name = self.action_map[action_idx]
+        confidence = 1.0 - self.epsilon if not is_exploration else self.epsilon
+        
+        # Update metrics
+        metrics.record_dqn_action(is_exploration)
+        metrics.update_dqn_training(
+            loss=0.0,  # Will be updated during training
+            epsilon=self.epsilon,
+            buffer_size=self.replay_buffer.size()
+        )
+        
+        logger.info(f"🤖 DQN Action: {action_name} (conf={confidence:.3f}, exploration={is_exploration})")
+        
+        return action_idx, action_name, confidence, q_values_dict
     
-    def get_q_values(self, state: np.ndarray) -> np.ndarray:
-        """Get Q-values for all actions given a state."""
-        with torch.no_grad():
-            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.q_network(state_tensor)
-            return q_values.cpu().numpy().flatten()
-    
-    def store_experience(self, state: np.ndarray, action: int, reward: float, 
-                        next_state: np.ndarray, done: bool = False):
-        """Store experience in replay buffer."""
-        self.replay_buffer.push(state, action, reward, next_state, done)
-    
-    async def train_async(self) -> Optional[float]:
+    def store_experience(self,
+                        current_metrics: Dict[str, float],
+                        current_replicas: int,
+                        ready_replicas: int,
+                        action: str,
+                        reward: float,
+                        next_metrics: Dict[str, float],
+                        next_replicas: int,
+                        next_ready_replicas: int,
+                        deployment_context: Dict[str, Any],
+                        done: bool = False,
+                        forecast: Optional[Dict[str, float]] = None,
+                        next_forecast: Optional[Dict[str, float]] = None):
         """
-        Perform asynchronous training step using experience replay.
-        Returns the training loss if training occurred, None otherwise.
+        Store experience in replay buffer.
         """
-        if len(self.replay_buffer) < self.config.dqn_batch_size:
+        # Create states
+        current_state = self._create_state(current_metrics, current_replicas, ready_replicas, forecast, deployment_context)
+        next_state = self._create_state(next_metrics, next_replicas, next_ready_replicas, next_forecast, deployment_context)
+        
+        # Convert action to index
+        action_idx = self.reverse_action_map[action]
+        
+        # Create experience
+        experience = Experience(
+            state=current_state,
+            action=action_idx,
+            reward=reward,
+            next_state=next_state,
+            done=done,
+            deployment_context=deployment_context
+        )
+        
+        self.replay_buffer.add(experience)
+        metrics.add_experience()
+        
+        logger.debug(f"Stored experience: action={action}, reward={reward:.3f}, "
+                    f"buffer_size={self.replay_buffer.size()}")
+    
+    def train(self) -> Optional[float]:
+        """
+        Train the DQN model using experience replay.
+        
+        Returns:
+            Training loss or None if not enough experiences
+        """
+        if not self.replay_buffer.can_sample():
+            logger.debug("Not enough experiences for training")
             return None
         
-        # Check if already training
-        if self.is_training:
-            logger.debug("Training already in progress, skipping")
+        # Sample batch from replay buffer
+        batch = self.replay_buffer.sample(self.batch_size)
+        if batch is None:
             return None
         
-        # Check training frequency limit
-        current_time = time.time()
-        if current_time - self.last_training_time < self.min_training_interval:
-            logger.debug(
-                f"Training skipped: {current_time - self.last_training_time:.1f}s < {self.min_training_interval}s interval")
-            return None
+        # Prepare training data
+        states = np.array([exp.state for exp in batch])
+        actions = np.array([exp.action for exp in batch])
+        rewards = np.array([exp.reward for exp in batch])
+        next_states = np.array([exp.next_state for exp in batch])
+        dones = np.array([exp.done for exp in batch])
         
-        async with self.training_lock:
-            if self.is_training:  # Double-check after acquiring lock
-                return None
-            
-            self.is_training = True
-            self.last_training_time = current_time
+        # Train the model
+        loss = self.model.train_step(
+            states=states,
+            actions=actions,
+            rewards=rewards,
+            next_states=next_states,
+            dones=dones,
+            gamma=self.gamma
+        )
         
-        try:
-            # Run training in thread pool to avoid blocking event loop
-            loop = asyncio.get_event_loop()
-            loss = await loop.run_in_executor(self.training_executor, self._train_step_sync)
-            return loss
-        except Exception as e:
-            logger.error(f"Async training failed: {e}")
-            return None
-        finally:
-            self.is_training = False
-    
-    def _train_step_sync(self) -> Optional[float]:
-        """
-        Synchronous training step (runs in thread pool).
-        """
-        if len(self.replay_buffer) < self.config.dqn_batch_size:
-            return None
+        self.training_steps += 1
         
-        try:
-            # Sample batch from replay buffer
-            batch = self.replay_buffer.sample(self.config.dqn_batch_size)
-            states, actions, rewards, next_states, dones = zip(*batch)
+        # Update target network periodically
+        if self.training_steps % self.target_update_frequency == 0:
+            self.model.update_target_network()
+            logger.info(f"Target network updated (step {self.training_steps})")
             
-            # Convert to tensors (no reward normalization to preserve action differences)
-            states = torch.FloatTensor(np.array(states)).to(self.device)
-            actions = torch.LongTensor(actions).to(self.device)
-            rewards = torch.FloatTensor(rewards).to(self.device)
-            next_states = torch.FloatTensor(np.array(next_states)).to(self.device)
-            dones = torch.BoolTensor(dones).to(self.device)
-            
-            # Current Q values
-            current_q_values = self.q_network(states).gather(1, actions.unsqueeze(1))
-            
-            # Target Q values using target network
-            with torch.no_grad():
-                next_q_values = self.target_network(next_states).max(1)[0]
-                target_q_values = rewards + (self.config.dqn_gamma * next_q_values * ~dones)
-            
-            # Compute loss using Huber loss for better stability
-            loss = F.smooth_l1_loss(current_q_values.squeeze(), target_q_values)
-            
-            # Optimize
-            self.optimizer.zero_grad()
-            loss.backward()
-            
-            # Gradient clipping for stability
-            torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), max_norm=1.0)
-            
-            self.optimizer.step()
-            
-            # Update training state
-            self.training_steps += 1
-            
-            # Update target network periodically
-            if self.training_steps % self.target_update_frequency == 0:
-                self.target_network.load_state_dict(self.q_network.state_dict())
-                logger.info(f"Target network updated at step {self.training_steps}")
-            
-            # Log Q-value statistics for monitoring
-            with torch.no_grad():
-                q_stats = {
-                    'q_mean': current_q_values.mean().item(),
-                    'q_std': current_q_values.std().item(),
-                    'q_min': current_q_values.min().item(),
-                    'q_max': current_q_values.max().item(),
-                    'target_mean': target_q_values.mean().item(),
-                }
-            
-            # Note: Epsilon is now primarily updated by experience count in select_action()
-            # This ensures consistent decay regardless of training frequency
-            logger.info(
-                f"🔍 Training completed: loss={loss.item():.6f}, step={self.training_steps}, epsilon={self.epsilon:.4f}")
-            logger.debug(f"Q-value stats: {q_stats}")
-            
-            # Store last loss for metrics
-            self.last_loss = loss.item()
-            
-            return loss.item()
-            
-        except Exception as e:
-            logger.error(f"Training step failed: {e}")
-            return None
-    
-    async def save_model(self, model_name: str = "dqn_model.pt") -> bool:
-        """
-        Save model checkpoint to MinIO storage.
-        """
-        if not self.minio_client:
-            logger.warning("No MinIO client available for model saving")
-            return False
+            # Save model to MinIO periodically (same frequency as target updates)
+            try:
+                self.model.save_model(self.model_save_path, save_to_minio=True)
+                logger.debug(f"Model saved to MinIO (step {self.training_steps})")
+            except Exception as e:
+                logger.warning(f"Failed to save model to MinIO: {e}")
         
-        try:
-            # Create comprehensive checkpoint
-            checkpoint = {
-                'q_network_state_dict': self.q_network.state_dict(),
-                'target_network_state_dict': self.target_network.state_dict(),
-                'optimizer_state_dict': self.optimizer.state_dict(),
-                'epsilon': self.epsilon,
-                'training_steps': self.training_steps,
-                'config': {
-                    'state_dim': self.state_dim,
-                    'action_dim': self.action_dim,
-                    'hidden_dims': self.config.dqn_hidden_dims,
-                    'selected_features': self.config.selected_features
-                },
-                'saved_at': time.time()
-            }
-            
-            # Serialize to buffer
-            buffer = BytesIO()
-            torch.save(checkpoint, buffer)
-            buffer.seek(0)
-            
-            # Upload to MinIO
-            self.minio_client.put_object(
-                bucket_name="models",
-                object_name=model_name,
-                data=buffer,
-                length=buffer.getbuffer().nbytes,
-                content_type='application/octet-stream'
-            )
-            
-            self.last_save_time = time.time()
-            logger.info(f"Model saved to MinIO: {model_name} ({buffer.getbuffer().nbytes} bytes)")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to save model to MinIO: {e}")
-            return False
-    
-    async def load_model(self, model_name: str = "dqn_model.pt") -> bool:
-        """
-        Load model checkpoint from MinIO storage.
-        """
-        if not self.minio_client:
-            logger.warning("No MinIO client available for model loading")
-            return False
+        # Decay epsilon
+        if self.epsilon > self.epsilon_end:
+            self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         
-        try:
-            # Download from MinIO
-            response = self.minio_client.get_object("models", model_name)
-            buffer = BytesIO(response.read())
-            
-            # Load checkpoint
-            checkpoint = torch.load(buffer, map_location=self.device)
-            
-            # Verify compatibility
-            if checkpoint['config']['state_dim'] != self.state_dim:
-                logger.error(
-                    f"State dimension mismatch: expected {self.state_dim}, got {checkpoint['config']['state_dim']}")
-                return False
-            
-            # Load state dicts
-            self.q_network.load_state_dict(checkpoint['q_network_state_dict'])
-            self.target_network.load_state_dict(checkpoint['target_network_state_dict'])
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            
-            # Load training state
-            self.epsilon = checkpoint.get('epsilon', self.config.dqn_epsilon_start)
-            self.training_steps = checkpoint.get('training_steps', 0)
-            
-            logger.info(
-                f"Model loaded from MinIO: {model_name} (steps: {self.training_steps}, epsilon: {self.epsilon:.3f})")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to load model from MinIO: {e}")
-            return False
+        # Update metrics
+        metrics.update_dqn_training(
+            loss=loss,
+            epsilon=self.epsilon,
+            buffer_size=self.replay_buffer.size()
+        )
+        
+        logger.debug(f"Training step {self.training_steps}: loss={loss:.4f}, ε={self.epsilon:.3f}")
+        
+        return loss
     
-    def should_save_model(self, save_interval: int = 300) -> bool:
-        """Check if model should be saved based on time interval."""
-        return time.time() - self.last_save_time > save_interval
+    def calculate_reward(self,
+                        action: str,
+                        current_metrics: Dict[str, float],
+                        deployment_context: Dict[str, Any],
+                        forecast_metrics: Optional[Dict[str, float]] = None) -> Tuple[float, Dict[str, float]]:
+        """
+        Calculate reward for the given action and state.
+        
+        Args:
+            action: Action taken
+            current_metrics: Current system metrics
+            deployment_context: Deployment context
+            forecast_metrics: Forecasted metrics (optional)
+            
+        Returns:
+            Tuple of (reward, reward_components)
+        """
+        reward, components = self.reward_calculator.calculate_reward(
+            action=action,
+            current_metrics=current_metrics,
+            deployment_context=deployment_context,
+            forecast_metrics=forecast_metrics
+        )
+        
+        self.total_reward += reward
+        metrics.update_reward(reward)
+        
+        return reward, components
     
-    def get_training_stats(self) -> Dict[str, Any]:
-        """Get current training statistics."""
+    def make_scaling_decision(self,
+                            current_metrics: Dict[str, float],
+                            current_replicas: int,
+                            ready_replicas: int,
+                            forecast: Optional[Dict[str, float]] = None,
+                            resource_requests: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        """
+        Make a scaling decision based on current state.
+        
+        Args:
+            current_metrics: Current system metrics
+            current_replicas: Current number of replicas
+            ready_replicas: Number of ready replicas
+            forecast: Forecasted metrics (optional)
+            resource_requests: Resource requests per pod
+            
+        Returns:
+            Decision dictionary with action, target_replicas, confidence, etc.
+        """
+        start_time = time.time()
+        
+        # Create deployment context first
+        deployment_context = self.reward_calculator.get_deployment_context(
+            current_replicas=current_replicas,
+            ready_replicas=ready_replicas,
+            target_replicas=current_replicas,  # Will be updated based on action
+            resource_requests=resource_requests,
+            scaling_history=self.scaling_history.copy()
+        )
+        
+        # Create context-aware state vector
+        state = self._create_state(current_metrics, current_replicas, ready_replicas, forecast, deployment_context)
+        
+        # Select action
+        action_idx, action_name, confidence, q_values = self.select_action(
+            state, deployment_context, use_epsilon=True
+        )
+        
+        # Calculate target replicas
+        if action_name == 'scale_up':
+            target_replicas = min(current_replicas + 1, 20)
+        elif action_name == 'scale_down':
+            target_replicas = max(current_replicas - 1, 1)
+        else:
+            target_replicas = current_replicas
+        
+        # Update deployment context with target replicas
+        deployment_context['target_replicas'] = target_replicas
+        
+        # Calculate reward (for monitoring/logging purposes)
+        reward, reward_components = self.calculate_reward(
+            action=action_name,
+            current_metrics=current_metrics,
+            deployment_context=deployment_context,
+            forecast_metrics=forecast
+        )
+        
+        # Update scaling history
+        if action_name != 'keep_same':  # Fixed: changed from 'no_action' to 'keep_same'
+            self.scaling_history.append(action_name)
+            if len(self.scaling_history) > self.max_history_length:
+                self.scaling_history.pop(0)
+        
+        # Update metrics
+        metrics.update_dqn_decision(
+            action=action_name,
+            desired_replicas=target_replicas,
+            current_replicas=current_replicas,
+            confidence=confidence,
+            q_values=q_values
+        )
+        
+        decision_time = time.time() - start_time
+        
+        decision = {
+            'action': action_name,
+            'target_replicas': target_replicas,
+            'current_replicas': current_replicas,
+            'confidence': confidence,
+            'q_values': q_values,
+            'reward': reward,
+            'reward_components': reward_components,
+            'decision_time': decision_time,
+            'epsilon': self.epsilon,
+            'training_steps': self.training_steps
+        }
+        
+        logger.info(f"DQN decision: {action_name} ({current_replicas} → {target_replicas}), "
+                   f"confidence={confidence:.3f}, reward={reward:.3f}, time={decision_time:.3f}s")
+        
+        return decision
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get agent statistics."""
+        buffer_stats = self.replay_buffer.get_stats()
+        
         return {
             'training_steps': self.training_steps,
+            'episodes': self.episodes,
             'epsilon': self.epsilon,
-            'replay_buffer_size': len(self.replay_buffer),
-            'replay_buffer_capacity': self.replay_buffer.capacity,
-            'last_loss': self.last_loss,
-            'is_training': self.is_training,
-            'last_training_time': self.last_training_time,
-            'min_training_interval': self.min_training_interval
+            'total_reward': self.total_reward,
+            'buffer_stats': buffer_stats,
+            'scaling_history': self.scaling_history.copy()
         }
     
-    async def cleanup(self):
-        """Cleanup resources including thread pool executor."""
-        try:
-            logger.info("🧹 Cleaning up DQN agent resources...")
-            
-            # Wait for any ongoing training to complete
-            if self.is_training:
-                logger.info("⏳ Waiting for ongoing training to complete...")
-                async with self.training_lock:
-                    pass  # Just acquire and release the lock
-            
-            # Shutdown thread pool executor
-            self.training_executor.shutdown(wait=True)
-            logger.info("✅ DQN agent cleanup completed")
-            
-        except Exception as e:
-            logger.error(f"❌ Error during DQN agent cleanup: {e}")
+    def save_model(self, filepath: str):
+        """Save the DQN model."""
+        self.model.save_model(filepath)
+        logger.info(f"DQN model saved to {filepath}")
     
-    def __del__(self):
-        """Destructor to ensure cleanup."""
-        try:
-            if hasattr(self, 'training_executor'):
-                self.training_executor.shutdown(wait=False)
-        except:
-            pass  # Ignore errors during destruction 
+    def load_model(self, filepath: str):
+        """Load a saved DQN model."""
+        self.model.load_model(filepath)
+        logger.info(f"DQN model loaded from {filepath}") 

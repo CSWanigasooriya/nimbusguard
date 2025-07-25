@@ -23,19 +23,29 @@ class MinIOConfig:
 
 
 class ForecastingConfig:
-    """Minimal forecasting configuration for using a pre-trained LSTM model."""
+    """Dual-model forecasting configuration for GRU (CPU) and LSTM (Memory) models."""
 
     def __init__(self):
         self.enabled = os.getenv("FORECASTING_ENABLED", "true").lower() == "true"
 
-        # How much history to fetch from Prometheus for the model input
-        self.lookback_minutes = int(os.getenv("FORECASTING_LOOKBACK_MINUTES", "6"))
-
-        # Horizon: 1 step ahead = 15 seconds (since LSTM was trained on 15s intervals)
+        # General forecasting parameters
+        self.lookback_minutes = int(os.getenv("FORECASTING_LOOKBACK_MINUTES", "15"))
         self.forecast_horizon_seconds = int(os.getenv("FORECASTING_HORIZON_SECONDS", "15"))
 
-        # Number of data points (timesteps) fed into the model: 24 timesteps × 15s each = 360s lookback
-        self.sequence_length = int(os.getenv("LSTM_SEQUENCE_LENGTH", "24"))
+        # CPU Model Configuration (GRU-based)
+        self.cpu_model_type = os.getenv("CPU_MODEL_TYPE", "gru")
+        self.cpu_sequence_length = int(os.getenv("CPU_SEQUENCE_LENGTH", "8"))
+        self.cpu_features_count = int(os.getenv("CPU_FEATURES_COUNT", "9"))
+        self.cpu_prediction_steps = int(os.getenv("CPU_PREDICTION_STEPS", "1"))
+
+        # Memory Model Configuration (LSTM-based)
+        self.memory_model_type = os.getenv("MEMORY_MODEL_TYPE", "lstm")
+        self.memory_sequence_length = int(os.getenv("MEMORY_SEQUENCE_LENGTH", "4"))
+        self.memory_features_count = int(os.getenv("MEMORY_FEATURES_COUNT", "4"))
+        self.memory_prediction_steps = int(os.getenv("MEMORY_PREDICTION_STEPS", "10"))
+
+        # Legacy support for old LSTM_SEQUENCE_LENGTH variable
+        self.sequence_length = max(self.cpu_sequence_length, self.memory_sequence_length)
 
         # Features will be set by Config.__init__ from scaling.selected_features
         self.selected_features: list[str] = []
@@ -50,12 +60,17 @@ class ScalingConfig:
 
         # DQN configuration
         self.dqn_hidden_dims = [int(x) for x in os.getenv("DQN_HIDDEN_DIMS", "64,32").split(",")]
-        self.dqn_learning_rate = float(os.getenv("DQN_LEARNING_RATE", "0.0001"))  # Reduced for stability
+        self.dqn_learning_rate = float(os.getenv("DQN_LEARNING_RATE", "0.001"))  # Increased for faster training
         self.dqn_gamma = float(os.getenv("DQN_GAMMA", "0.95"))
-        self.dqn_epsilon_start = float(os.getenv("DQN_EPSILON_START", "0.2"))
+        self.dqn_epsilon_start = float(os.getenv("DQN_EPSILON_START", "0.9"))
         self.dqn_epsilon_end = float(os.getenv("DQN_EPSILON_END", "0.01"))
-        self.dqn_batch_size = int(os.getenv("DQN_BATCH_SIZE", "16"))
+        self.dqn_batch_size = int(os.getenv("DQN_BATCH_SIZE", "32"))
         self.dqn_memory_capacity = int(os.getenv("DQN_MEMORY_CAPACITY", "10000"))
+
+        # Additional DQN configuration (previously hardcoded)
+        self.dqn_epsilon_decay = float(os.getenv("DQN_EPSILON_DECAY", "0.995"))
+        self.dqn_min_replay_size = int(os.getenv("DQN_MIN_REPLAY_SIZE", "100"))
+        self.dqn_target_update_frequency = int(os.getenv("DQN_TARGET_UPDATE_FREQUENCY", "100"))
 
         # Training loop configuration
         self.stabilization_period_seconds = int(os.getenv("STABILIZATION_PERIOD_SECONDS", "15"))
@@ -63,8 +78,9 @@ class ScalingConfig:
         # Consumer-focused features based on HPA baseline analysis
         # These features directly correlate with scaling decisions
         self.selected_features = [
-            'process_cpu_seconds_total_rate',  # CPU per pod (0.48-15.51s spikes)
-            'process_resident_memory_bytes',  # Memory per pod (61-197MB spikes)
+            'process_cpu_seconds_total_rate',     # CPU per pod (0.48-15.51s spikes)
+            'process_resident_memory_bytes',      # Memory per pod (61-197MB spikes)  
+            'kube_deployment_status_replicas',    # Current replica count (essential for scaling decisions)
         ]
 
 
@@ -90,14 +106,6 @@ class MetricsConfig:
         self.enabled = os.getenv("METRICS_ENABLED", "true").lower() == "true"
 
 
-class RewardConfig:
-    """Reward system configuration."""
-
-    def __init__(self):
-        # Single weight parameter - current gets this weight, forecast gets (1 - weight)
-        self.current_weight = float(os.getenv("REWARD_CURRENT_WEIGHT", "0.5"))
-        self.forecast_weight = round(1.0 - self.current_weight, 10)  # Round to avoid floating-point precision issues
-
 
 class AIConfig:
     def __init__(self):
@@ -119,7 +127,6 @@ class Config:
         self.server = ServerConfig()
         self.logging = LoggingConfig()
         self.metrics = MetricsConfig()
-        self.reward = RewardConfig()
         self.ai = AIConfig()
 
         # Share feature list between scaling and forecasting configs

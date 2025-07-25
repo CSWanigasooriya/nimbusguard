@@ -1,4 +1,4 @@
-# Python 3.9 as a base image
+# Use the base image
 FROM nimbusguard-base:latest
 
 # Set the working directory
@@ -15,9 +15,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy the application code into the container
 COPY . .
 
-# Copy the feature scaler into /tmp for runtime use
-COPY forecaster.keras forecaster_scaler.pkl /tmp/
-
+# Copy the pre-trained models into /tmp for runtime use
+COPY cpu_forecaster.keras cpu_forecaster_scaler.pkl memory_forecaster.keras memory_forecaster_scaler.pkl /tmp/
 
 # Expose the ports the app runs on
 EXPOSE 8080 8081
