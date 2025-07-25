@@ -116,7 +116,7 @@ class DQNAgent:
         try:
             model_loaded = self.model.load_model(self.model_save_path, load_from_minio=True)
             if model_loaded:
-                logger.info("🎯 Resumed DQN training from existing model")
+                logger.info("Resumed DQN training from existing model")
                 # TODO: Could also load training state (epsilon, steps, etc.) if stored
             else:
                 logger.info("🚀 Starting DQN training with fresh model")
@@ -258,7 +258,7 @@ class DQNAgent:
         else:
             # Exploitation: choose best action
             action_idx = np.argmax(q_values)
-            logger.info(f"🎯 DQN Exploitation: {self.action_map[action_idx]} (Q={q_values[action_idx]:.3f})")
+            logger.info(f"DQN Exploitation: {self.action_map[action_idx]} (Q={q_values[action_idx]:.3f})")
         
         action_name = self.action_map[action_idx]
         confidence = 1.0 - self.epsilon if not is_exploration else self.epsilon
@@ -271,7 +271,7 @@ class DQNAgent:
             buffer_size=self.replay_buffer.size()
         )
         
-        logger.info(f"🤖 DQN Action: {action_name} (conf={confidence:.3f}, exploration={is_exploration})")
+        logger.info(f"DQN Action: {action_name} (conf={confidence:.3f}, exploration={is_exploration})")
         
         return action_idx, action_name, confidence, q_values_dict
     

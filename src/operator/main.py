@@ -42,9 +42,9 @@ async def initialize_components():
         from storage.minio_client import minio_storage
         minio_initialized = await minio_storage.initialize()
         if minio_initialized:
-            logger.info("✅ MinIO storage ready for model persistence")
+            logger.info("MinIO storage ready for model persistence")
         else:
-            logger.warning("⚠️ MinIO storage initialization failed - models will only be saved locally")
+            logger.warning("WARNING: MinIO storage initialization failed - models will only be saved locally")
         
         # Initialize Prometheus client
         logger.info("Initializing Prometheus client...")
