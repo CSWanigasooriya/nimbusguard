@@ -236,7 +236,7 @@ def poll_consumer_metrics(stop_event, name, namespace, **kwargs):
                         if predicted_mem_bytes is not None:
                             # ✨ FIX: Convert the predicted byte value to MB for logging
                             predicted_mem_mb = predicted_mem_bytes / (1024 * 1024)
-                            print(f"  🔮 Predicted Next Memory (MB): {predicted_mem_mb:.2f}")
+                            print(f"  Predicted Next Memory (MB): {predicted_mem_mb:.2f}")
         
         stop_event.wait(5)
         
