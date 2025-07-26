@@ -85,12 +85,6 @@ class DQNAgent:
         else:
             act_values = self.model.predict(state, verbose=0)
             action = np.argmax(act_values[0])
-        
-        # METRICS: Update Q-values if they were calculated
-        if not is_exploring and 'act_values' in locals():
-            metrics.DQN_Q_VALUE_KEEP_SAME.set(act_values[0][0])
-            metrics.DQN_Q_VALUE_SCALE_UP.set(act_values[0][1])
-            metrics.DQN_Q_VALUE_SCALE_DOWN.set(act_values[0][2])
 
         # METRICS: Update exploration/exploitation counters
         if is_exploring:

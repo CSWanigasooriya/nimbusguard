@@ -19,7 +19,8 @@ class OperatorState:
 
         # --- Forecasting ---
         self.sequence_length = 10
-        self.pod_history = {}
+        self.pod_history = {}  # Per-pod CPU history (still needed for CPU rate calculations)
+        self.global_memory_history = deque(maxlen=self.sequence_length)  # Global max memory history
         self.polling_threads = {}
         self.cpu_model = None
         self.cpu_scaler = None

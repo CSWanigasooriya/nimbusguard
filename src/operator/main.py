@@ -57,27 +57,66 @@ def make_prediction(model, scaler, history_sequence, feature_name):
 
 def fetch_per_instance_metrics(query):
     """
-    Fetches metrics from Prometheus, returning a dictionary of instance-level data.
+    Fetches metrics from Prometheus, returning a dictionary of pod/instance-level data.
+    Handles both instant queries (single value) and range queries (array of values).
+    For range queries, returns the latest value from the 15s window.
     Each value is a tuple of (timestamp, value).
     """
     prometheus_url = "http://prometheus.nimbusguard.svc:9090"
     api_endpoint = "/api/v1/query"
     full_url = f"{prometheus_url}{api_endpoint}"
     metrics = {}
+    
+    # Determine if this is a range query
+    is_range_query = '[' in query and ']' in query
+    
     try:
         response = requests.get(full_url, params={'query': query}, timeout=5)
         response.raise_for_status()
         result = response.json()
+        
         if result.get('status') == 'success':
-            for item in result.get('data', {}).get('result', []):
-                instance = item.get('metric', {}).get('instance')
-                # Use pandas for robust timestamp parsing
-                timestamp = pd.to_datetime(item['value'][0], unit='s', utc=True)
-                value = float(item['value'][1])
-                if instance:
-                    # --- ADDED LOGGING ---
-                    logging.info(f"  [Prometheus Fetch] Instance: {instance}, Value: {value}, Timestamp: {timestamp}")
-                    metrics[instance] = (timestamp, value)
+            results = result.get('data', {}).get('result', [])
+            logging.info(f"[Prometheus Fetch] Query: {query} returned {len(results)} results (Range: {is_range_query})")
+            
+            for item in results:
+                metric_labels = item.get('metric', {})
+                
+                # For cAdvisor metrics, prefer 'pod' label, fallback to 'instance'
+                identifier = metric_labels.get('pod') or metric_labels.get('instance')
+                
+                if identifier:
+                    container = metric_labels.get('container', '')
+                    job = metric_labels.get('job', '')
+                    
+                    if is_range_query and item.get('values'):
+                        # For range queries, use the latest value from the 15s window
+                        values_array = item['values']
+                        if values_array:
+                            # Get the latest (most recent) value
+                            latest_timestamp, latest_value = values_array[-1]
+                            timestamp = pd.to_datetime(float(latest_timestamp), unit='s', utc=True)
+                            value = float(latest_value)
+                            
+                            logging.info(f"  [Range Metric] Pod: {identifier}, Container: {container}, Job: {job}, Latest Value: {value} ({len(values_array)} samples)")
+                            metrics[identifier] = (timestamp, value)
+                        else:
+                            logging.warning(f"  [Skip] Empty values array for {identifier}")
+                    
+                    elif not is_range_query and item.get('value'):
+                        # For instant queries, use single value
+                        timestamp = pd.to_datetime(item['value'][0], unit='s', utc=True)
+                        value = float(item['value'][1])
+                        
+                        logging.info(f"  [Instant Metric] Pod: {identifier}, Container: {container}, Job: {job}, Value: {value}")
+                        metrics[identifier] = (timestamp, value)
+                    
+                    else:
+                        logging.warning(f"  [Skip] Missing data for {identifier}: range={is_range_query}, has_values={bool(item.get('values'))}, has_value={bool(item.get('value'))}")
+                else:
+                    logging.warning(f"  [Skip] Missing identifier in metric: {metric_labels}")
+        else:
+            logging.error(f"Prometheus query failed: {result.get('error', 'Unknown error')}")
     except Exception as e:
         logging.error(f"Could not fetch Prometheus metrics for query '{query}': {e}")
     return metrics
@@ -189,63 +228,130 @@ def run_scaling_cycle(name, namespace):
         min_replicas = int(annotations.get('nimbusguard.io/min-replicas', '1'))
         max_replicas = int(annotations.get('nimbusguard.io/max-replicas', '10'))
 
-        cpu_query = 'process_cpu_seconds_total{job=~"prometheus.scrape.annotated_pods", instance=~".*:8000"}'
-        mem_query = 'process_resident_memory_bytes{job=~"prometheus.scrape.annotated_pods", instance=~".*:8000"}'
+        # Use cAdvisor container metrics with 15s range to match DQN decision interval
+        # Get 15-second range data and filter by container name and job to get actual consumer containers
+        cpu_query = 'container_cpu_usage_seconds_total{container="consumer",job="cadvisor"}[15s]'
+        mem_query = 'container_memory_working_set_bytes{container="consumer",job="cadvisor"}[15s]'
         current_cpu_metrics = fetch_per_instance_metrics(cpu_query)
         current_mem_metrics = fetch_per_instance_metrics(mem_query)
         all_instances = set(current_cpu_metrics.keys()) | set(current_mem_metrics.keys())
 
         total_current_cpu_rate = 0
         total_current_mem = 0
-        total_predicted_mem = 0 # REMOVED: total_predicted_cpu
+        current_memory_values = []  # Collect all current memory values to find max
 
         logging.info(f"--- App: {name} | Replicas: {current_replicas} | Constraints: {min_replicas}-{max_replicas} ---")
 
         for instance in all_instances:
             if instance not in state.pod_history:
                 state.pod_history[instance] = {
-                    'cpu_raw': deque(maxlen=state.sequence_length + 1),
-                    'memory': deque(maxlen=state.sequence_length)
+                    'cpu_raw': deque(maxlen=state.sequence_length + 1)
+                    # No longer storing per-pod memory history
                 }
             
             logging.info(f"--- Processing Instance: {instance} ---")
 
-            # --- Process CPU Metrics (for current value only) ---
+            # --- Process CPU Metrics (cAdvisor cumulative CPU seconds from 15s range) ---
             if instance in current_cpu_metrics:
                 timestamp, value = current_cpu_metrics[instance]
-                if not state.pod_history[instance]['cpu_raw'] or state.pod_history[instance]['cpu_raw'][-1][1] != value:
-                    state.pod_history[instance]['cpu_raw'].append((timestamp, value))
+                # Always append - deque with maxlen automatically removes oldest values
+                state.pod_history[instance]['cpu_raw'].append((timestamp, value))
+                logging.info(f"  [CPU] Added cumulative value: {value:.2f} seconds (from 15s range, queue size: {len(state.pod_history[instance]['cpu_raw'])})")
                 
                 cpu_history_raw = list(state.pod_history[instance]['cpu_raw'])
                 if len(cpu_history_raw) > 1:
                     prev_time, prev_val = cpu_history_raw[-2]
                     curr_time, curr_val = cpu_history_raw[-1]
                     time_delta = (curr_time - prev_time).total_seconds()
+                    # For cAdvisor metrics: calculate CPU rate from cumulative seconds over ~15s intervals
                     if curr_val >= prev_val and time_delta > 0:
-                        instance_cpu_rate = (curr_val - prev_val) / time_delta
+                        cpu_delta = curr_val - prev_val
+                        instance_cpu_rate = cpu_delta / time_delta
+                        cpu_percentage = (instance_cpu_rate / cpu_limit) * 100 if cpu_limit else 0
+                        logging.info(f"  [CPU Rate] Instance {instance}: {instance_cpu_rate:.6f} cores/second (Δ{cpu_delta:.6f}s over {time_delta:.2f}s = {cpu_percentage:.2f}%)")
                         total_current_cpu_rate += instance_cpu_rate
+                        
+                        # Additional debugging for very small rates
+                        if instance_cpu_rate < 0.0001:
+                            logging.info(f"    [DEBUG] Very low CPU rate detected - this is normal for idle/low-usage pods")
+                    else:
+                        logging.warning(f"  [CPU] Skipping calculation for {instance}: curr_val={curr_val}, prev_val={prev_val}, time_delta={time_delta}")
+                else:
+                    logging.info(f"  [CPU] Not enough history for rate calculation on {instance} (need 2+ data points)")
+            else:
+                logging.warning(f"  [CPU] No metrics found for instance {instance}")
 
-            # --- Process Memory Metrics and Prediction ---
+            # --- Collect Memory Metrics (for finding max) ---
             if instance in current_mem_metrics:
                 timestamp, value = current_mem_metrics[instance]
-                state.pod_history[instance]['memory'].append(value)
+                current_memory_values.append(value)
+                logging.info(f"  [Memory] Current value: {value / (1024*1024):.2f} MB")
                 total_current_mem += value
-            
-            mem_history_bytes = list(state.pod_history[instance]['memory'])
 
-            if len(mem_history_bytes) < state.sequence_length:
-                logging.info(f"  Collecting memory history... ({len(mem_history_bytes)}/{state.sequence_length} points)")
+        # --- CPU Summary Logging ---
+        active_pods = len(all_instances)
+        pods_with_cpu_activity = len([i for i in all_instances if i in current_cpu_metrics])
+        logging.info(f"--- CPU Summary: Total rate {total_current_cpu_rate:.6f} cores/second across {pods_with_cpu_activity}/{active_pods} pods ---")
+        
+        # --- Process Global Max Memory and Prediction ---
+        if current_memory_values:
+            max_memory_value = max(current_memory_values)
+            
+            # Debug logging for memory values with high precision
+            memory_values_mb = [val / (1024*1024) for val in current_memory_values]
+            logging.info(f"--- Memory Values (MB): {[f'{val:.3f}' for val in memory_values_mb]} ---")
+            logging.info(f"--- Max Memory: {max_memory_value} bytes = {max_memory_value / (1024*1024):.6f} MB ---")
+            
+            # Check for change from previous value
+            if len(state.global_memory_history) > 0:
+                last_value = state.global_memory_history[-1]
+                diff_bytes = abs(max_memory_value - last_value)
+                diff_mb = diff_bytes / (1024*1024)
+                logging.info(f"--- Memory Change: {diff_bytes} bytes ({diff_mb:.6f} MB) from last measurement ---")
+                
+                if diff_bytes == 0:
+                    logging.warning("--- WARNING: Exact same memory value detected! This may hurt predictor performance ---")
+            
+            # Always append to maintain sequence length for predictor
+            state.global_memory_history.append(max_memory_value)
+            logging.info(f"--- Global Memory History: {len(state.global_memory_history)} values, Latest: {max_memory_value/(1024*1024):.6f} MB ---")
+            
+            global_mem_history = list(state.global_memory_history)
+            
+            if len(global_mem_history) < state.sequence_length:
+                logging.info(f"Collecting global memory history... ({len(global_mem_history)}/{state.sequence_length} points) - DQN decisions pending")
+                total_predicted_mem = max_memory_value  # Use current max as prediction
             else:
-                logging.info(f"  Mem History (MB, last {state.sequence_length}): {[float(f'{m/(1024*1024):.2f}') for m in mem_history_bytes]}")
+                # Show high-precision history to detect small changes
+                history_mb_precise = [m/(1024*1024) for m in global_mem_history]
+                logging.info(f"Global Mem History (MB, last {state.sequence_length}): {[f'{m:.6f}' for m in history_mb_precise]}")
+                
+                # Check for variance in the data
+                if len(set(global_mem_history)) == 1:
+                    logging.warning("--- WARNING: All values in memory history are identical! Predictor may not work well ---")
+                else:
+                    variance = max(global_mem_history) - min(global_mem_history)
+                    logging.info(f"--- Memory History Variance: {variance} bytes ({variance/(1024*1024):.6f} MB) ---")
+                
                 if state.models_loaded.is_set():
-                    # REMOVED: CPU prediction logic
-                    predicted_mem = make_prediction(state.memory_model, state.memory_scaler, mem_history_bytes, 'memory_bytes')
+                    predicted_mem = make_prediction(state.memory_model, state.memory_scaler, global_mem_history, 'memory_bytes')
                     if predicted_mem is not None:
-                        logging.info(f"  Predicted Next Memory (MB): {predicted_mem / (1024*1024):.2f}")
-                        total_predicted_mem += predicted_mem
+                        total_predicted_mem = predicted_mem
+                        logging.info(f"Predicted Next Max Memory (MB): {predicted_mem / (1024*1024):.2f}")
+                    else:
+                        total_predicted_mem = max_memory_value
+                else:
+                    total_predicted_mem = max_memory_value
+        else:
+            total_predicted_mem = 0
         
         if total_predicted_mem == 0:
-            logging.info("Memory predictions not yet available for any instance. Skipping DQN cycle.")
+            logging.info("No memory data available from any pod. Skipping DQN cycle.")
+            return
+
+        # Check if global memory history queue is full before making DQN decisions
+        if len(state.global_memory_history) < state.sequence_length:
+            logging.info(f"Global memory history not yet full ({len(state.global_memory_history)}/{state.sequence_length}). DQN will wait for more data.")
             return
         
         metrics.LSTM_FORECAST_MEMORY_BYTES.set(total_predicted_mem)
@@ -255,9 +361,16 @@ def run_scaling_cycle(name, namespace):
         return
 
     # --- 2. CONSTRUCT DQN STATE (using aggregated values) ---
+    logging.info("Proceeding with DQN decision making...")
     current_cpu_util = (total_current_cpu_rate / cpu_limit) * 100 if cpu_limit else 0
     current_mem_util = (total_current_mem / mem_limit) * 100 if mem_limit else 0
     predicted_mem_util = (total_predicted_mem / mem_limit) * 100 if mem_limit else 0
+    
+    # Enhanced logging for CPU utilization
+    logging.info(f"--- Resource Utilization ---")
+    logging.info(f"  CPU: {total_current_cpu_rate:.6f} cores used / {cpu_limit:.2f} limit = {current_cpu_util:.3f}%")
+    logging.info(f"  Memory: {total_current_mem/(1024*1024):.1f} MB used / {mem_limit/(1024*1024):.1f} MB limit = {current_mem_util:.3f}%")
+    logging.info(f"  Predicted Memory: {total_predicted_mem/(1024*1024):.1f} MB = {predicted_mem_util:.3f}%")
     # REMOVED: predicted_cpu_util
 
     # MODIFIED: State vector no longer includes predicted_cpu_util. State size is now 4.
@@ -279,6 +392,13 @@ def run_scaling_cycle(name, namespace):
 
     # --- 4. ACT ---
     action = state.dqn_agent.act(current_state)
+    if action == 0:
+        metrics.DQN_ACTION_KEEP_SAME_TOTAL.inc()
+    elif action == 1:
+        metrics.DQN_ACTION_SCALE_UP_TOTAL.inc()
+    elif action == 2:
+        metrics.DQN_ACTION_SCALE_DOWN_TOTAL.inc()
+        
     logging.info(f"DQN Agent chose Action: {action} (0:None, 1:Up, 2:Down) with Epsilon: {state.dqn_agent.epsilon:.3f}")
 
     # --- 5. EXECUTE ---
@@ -313,13 +433,16 @@ def poll_consumer_metrics(stop_event, name, namespace, **kwargs):
 
 
 # --- Kopf Handlers ---
+@kopf.on.startup()
+def startup_handler(**kwargs):
+    """Start Prometheus metrics server on startup."""
+    logging.info("Starting Prometheus client server on port 8080.")
+    start_http_server(8080)
+    state.prometheus_server_started = True
+
 @kopf.on.resume('apps', 'v1', 'deployments', when=lambda name, **_: name == 'consumer')
 @kopf.on.create('apps', 'v1', 'deployments', when=lambda name, **_: name == 'consumer')
 def start_polling_for_consumer(uid, name, namespace, **kwargs):
-    if not hasattr(state, 'prometheus_server_started'):
-        logging.info("Starting Prometheus client server on port 8080.")
-        start_http_server(8080)
-        state.prometheus_server_started = True
 
     if not state.models_loaded.is_set():
         load_models_and_scalers()
