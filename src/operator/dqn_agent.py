@@ -7,6 +7,9 @@ from keras.optimizers import Adam
 from collections import deque
 import random
 
+# METRICS: Import the metric objects
+import metrics
+
 # Set random seeds for reproducibility
 np.random.seed(42)
 tf.random.set_seed(42)
@@ -14,52 +17,37 @@ random.seed(42)
 
 class DQNAgent:
     """
-    An upgraded Deep Q-Network Agent.
-
-    This version includes a Target Network and the Double DQN (DDQN) algorithm
-    for improved stability and performance.
+    An upgraded Deep Q-Network Agent with integrated Prometheus metrics.
     """
     def __init__(self, state_size, action_size):
         """
         Initializes the DQN agent and its components.
-
-        Args:
-            state_size (int): The number of features in the state vector.
-            action_size (int): The number of possible actions.
         """
         self.state_size = state_size
         self.action_size = action_size
         self.memory = deque(maxlen=2000)
 
         # --- Hyperparameters ---
-        self.gamma = 0.95    # Discount factor
-        self.epsilon = 1.0   # Initial exploration rate
+        self.gamma = 0.95
+        self.epsilon = 1.0
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.995
         self.learning_rate = 0.001
         self.batch_size = 32
         
-        # ✨ --- Target Network --- ✨
-        # The 'model' is the main network we train every step.
-        # The 'target_model' is a clone that we only update periodically.
-        # This provides a stable target for the main model to learn towards.
+        # --- Target Network ---
         self.model = self._build_model()
         self.target_model = self._build_model()
-        self.update_target_model() # Initialize target model with same weights
-        self.update_target_freq = 10 # How often to update the target network
+        self.update_target_model()
+        self.update_target_freq = 10
         self.update_target_counter = 0
-
 
     def _build_model(self):
         """
         Builds the neural network for approximating Q-values.
         """
         model = Sequential([
-            # ✨ FIX: Use a dedicated Input layer to define the model's input shape.
-            # This is the modern Keras practice and removes the UserWarning.
             Input(shape=(self.state_size,)),
-            
-            # The rest of the layers no longer need to specify the input size.
             Dense(24, activation='relu'),
             Dense(24, activation='relu'),
             Dense(self.action_size, activation='linear')
@@ -76,50 +64,78 @@ class DQNAgent:
 
     def remember(self, state, action, reward, next_state, done):
         """
-        Stores an experience tuple in the replay memory.
+        Stores an experience tuple and updates relevant metrics.
         """
         self.memory.append((state, action, reward, next_state, done))
+        # METRICS: Update buffer size and experiences added
+        metrics.DQN_REPLAY_BUFFER_SIZE.set(len(self.memory))
+        metrics.DQN_EXPERIENCES_ADDED_TOTAL.inc()
 
-    def act(self, state):
+    def act(self, state, return_exploration_status=False):
         """
-        Selects an action using an epsilon-greedy policy.
+        Selects an action using an epsilon-greedy policy and updates metrics.
         """
+        # METRICS: Update epsilon gauge
+        metrics.DQN_EPSILON_VALUE.set(self.epsilon)
+        
+        is_exploring = False
         if np.random.rand() <= self.epsilon:
-            return random.randrange(self.action_size)
-        act_values = self.model.predict(state, verbose=0)
-        return np.argmax(act_values[0])
+            is_exploring = True
+            action = random.randrange(self.action_size)
+        else:
+            act_values = self.model.predict(state, verbose=0)
+            action = np.argmax(act_values[0])
+        
+        # METRICS: Update Q-values if they were calculated
+        if not is_exploring and 'act_values' in locals():
+            metrics.DQN_Q_VALUE_KEEP_SAME.set(act_values[0][0])
+            metrics.DQN_Q_VALUE_SCALE_UP.set(act_values[0][1])
+            metrics.DQN_Q_VALUE_SCALE_DOWN.set(act_values[0][2])
+
+        # METRICS: Update exploration/exploitation counters
+        if is_exploring:
+            metrics.DQN_EXPLORATION_ACTIONS_TOTAL.inc()
+        else:
+            metrics.DQN_EXPLOITATION_ACTIONS_TOTAL.inc()
+
+        if return_exploration_status:
+            return action, is_exploring
+        return action
 
     def replay(self):
         """
         Trains the neural network using a random sample from the replay memory.
-        This method now implements the Double DQN logic.
+        This version is vectorized for efficiency and returns the training loss.
         """
         if len(self.memory) < self.batch_size:
-            return
+            return None  # Not enough samples to train
 
         minibatch = random.sample(self.memory, self.batch_size)
 
-        for state, action, reward, next_state, done in minibatch:
-            target = reward
-            if not done:
-                # ✨ --- Double DQN Logic --- ✨
-                # 1. Use the main model to pick the best action for the next state.
-                action_prime = np.argmax(self.model.predict(next_state, verbose=0)[0])
-                
-                # 2. Use the target model to get the Q-value of taking that action.
-                # This decouples action selection from value estimation.
-                q_future = self.target_model.predict(next_state, verbose=0)[0][action_prime]
-                
-                target = reward + self.gamma * q_future
+        # Vectorized implementation for efficiency
+        states = np.array([transition[0] for transition in minibatch]).reshape(-1, self.state_size)
+        next_states = np.array([transition[3] for transition in minibatch]).reshape(-1, self.state_size)
 
-            # Get current Q-values for the starting state from the main model
-            target_f = self.model.predict(state, verbose=0)
+        q_values_current = self.model.predict(states, verbose=0)
+        q_values_next_main = self.model.predict(next_states, verbose=0)
+        q_values_next_target = self.target_model.predict(next_states, verbose=0)
+
+        for i, (state, action, reward, next_state, done) in enumerate(minibatch):
+            if done:
+                target = reward
+            else:
+                action_prime = np.argmax(q_values_next_main[i])
+                q_future = q_values_next_target[i][action_prime]
+                target = reward + self.gamma * q_future
             
-            # Update the Q-value for the action that was actually taken
-            target_f[0][action] = target
-            
-            # Train the main model
-            self.model.fit(state, target_f, epochs=1, verbose=0)
+            q_values_current[i][action] = target
+
+        history = self.model.fit(states, q_values_current, epochs=1, verbose=0)
+        loss = history.history['loss'][0]
+
+        # METRICS: Update training loss and steps
+        metrics.DQN_TRAINING_LOSS.set(loss)
+        metrics.DQN_TRAINING_STEPS_TOTAL.inc()
 
         # Decay epsilon
         if self.epsilon > self.epsilon_min:
@@ -127,6 +143,8 @@ class DQNAgent:
             
         # Periodically update the target network
         self.update_target_counter += 1
-        if self.update_target_counter > self.update_target_freq:
+        if self.update_target_counter >= self.update_target_freq:
             self.update_target_model()
             self.update_target_counter = 0
+            
+        return loss

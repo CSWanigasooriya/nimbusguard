@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY . .
 
 # Copy the pre-trained models into /tmp for runtime use
-COPY cpu.keras cpu.pkl memory.keras memory.pkl /tmp/
+COPY memory.keras memory.pkl /tmp/
 
 # Expose the ports the app runs on
 EXPOSE 8080 8081
