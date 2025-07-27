@@ -113,9 +113,6 @@ class AIConfig:
             logging.info(f"  Model: {self.model_name}")
             logging.info(f"  Temperature: {self.temperature}")
             logging.info(f"  MCP Server URL: {self.mcp_server_url}")
-            logging.info(f"  Validation Timeout: {self.validation_timeout}s")
-            logging.info(f"  Enhanced Prompts: {self.use_enhanced_prompts}")
-            logging.info(f"  Emergency Validation: {self.enable_emergency_validation}")
             logging.info(f"  OpenAI API Key: {'***configured***' if self.openai_api_key else 'NOT SET'}")
         else:
             logging.info("  LLM validation is disabled - using standard validation only")
@@ -127,23 +124,16 @@ class AIConfig:
             'model_name': self.model_name,
             'temperature': self.temperature,
             'mcp_server_url': self.mcp_server_url,
-            'validation_timeout': self.validation_timeout,
-            'validation_retry_count': self.validation_retry_count,
-            'use_enhanced_prompts': self.use_enhanced_prompts,
-            'enable_emergency_validation': self.enable_emergency_validation,
-            'emergency_cpu_threshold': self.emergency_cpu_threshold,
-            'emergency_memory_threshold': self.emergency_memory_threshold,
             'has_openai_key': bool(self.openai_api_key)
         }
     
     def is_emergency_condition(self, cpu_util: float, mem_util: float, predicted_mem_util: float) -> bool:
         """Check if current conditions warrant emergency validation."""
-        if not self.enable_emergency_validation:
-            return False
-        
-        return (cpu_util >= self.emergency_cpu_threshold or 
-                mem_util >= self.emergency_memory_threshold or 
-                predicted_mem_util >= self.emergency_memory_threshold)
+        # Simple emergency condition based on high utilization
+        emergency_threshold = 90.0  # Fixed threshold since attributes were removed
+        return (cpu_util >= emergency_threshold or 
+                mem_util >= emergency_threshold or 
+                predicted_mem_util >= emergency_threshold)
     
     def validate(self) -> bool:
         """Validate AI configuration."""
@@ -152,8 +142,6 @@ class AIConfig:
                 assert self.openai_api_key, "OpenAI API key is required when LLM validation is enabled"
                 assert self.mcp_server_url, "MCP server URL is required when LLM validation is enabled"
                 assert 0.0 <= self.temperature <= 2.0, f"Temperature must be between 0 and 2, got {self.temperature}"
-                assert self.validation_timeout > 0, f"Validation timeout must be positive, got {self.validation_timeout}"
-                assert self.validation_retry_count >= 0, f"Retry count must be non-negative, got {self.validation_retry_count}"
                 
                 logging.info("AI configuration validation passed")
             else:

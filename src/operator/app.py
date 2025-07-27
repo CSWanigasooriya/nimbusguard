@@ -391,7 +391,6 @@ def execute_scaling_node(state: AutoscalerState) -> dict:
 def calculate_reward_node(state: AutoscalerState) -> dict:
     """Node 6: Calculate reward for the DQN agent."""
     logging.info("[REWARD] Calculating reward...")
-    logging.info(f"[REWARD] State type: {type(state)}")
     
     try:
         # Only calculate reward if we have a previous action to learn from

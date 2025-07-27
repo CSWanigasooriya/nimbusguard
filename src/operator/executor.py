@@ -87,7 +87,7 @@ class ClusterExecutor:
                 'memory_request': memory_request,
                 'labels': labels,
                 'annotations': annotations,
-                'creation_timestamp': creation_timestamp,
+                'creation_timestamp': creation_timestamp.isoformat() if creation_timestamp else None,
                 'container_name': container.name,
                 'image': container.image
             }
@@ -162,7 +162,7 @@ class ClusterExecutor:
             
             # Update shared state with scaling action
             scaling_record = {
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now().isoformat(),
                 'deployment': f"{namespace}/{name}",
                 'action': action,
                 'from_replicas': current_replicas,
@@ -197,7 +197,7 @@ class ClusterExecutor:
             
             # Record failed scaling attempt
             scaling_record = {
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now().isoformat(),
                 'deployment': f"{namespace}/{name}",
                 'action': 'scale_failed',
                 'from_replicas': current_replicas if 'current_replicas' in locals() else 'unknown',

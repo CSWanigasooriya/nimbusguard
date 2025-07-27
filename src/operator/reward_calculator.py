@@ -16,9 +16,9 @@ class RewardCalculator:
         """
         self.config = config or {}
         
-        # Simple targets: keep resources around 75%
-        self.cpu_target = self.config.get('cpu_target', 75.0)
-        self.memory_target = self.config.get('memory_target', 75.0)
+        # More realistic targets: keep resources in optimal range
+        self.cpu_target = self.config.get('cpu_target', 60.0)  # Lower, more realistic target
+        self.memory_target = self.config.get('memory_target', 60.0)  # Lower, more realistic target
         self.resource_emergency = self.config.get('resource_emergency', 90.0)
         
         # Weights for current vs predicted memory
@@ -67,16 +67,29 @@ class RewardCalculator:
         logging.info(f"Action: {action}, Replicas: {replicas} (range: {min_replicas}-{max_replicas})")
         
         # 1. Resource distance reward: closer to target = better (considers both CPU and memory)
-        resource_distance = abs(combined_util - self.cpu_target)  # Use same 75% target for combined
-        resource_reward = max(0, 25.0 - resource_distance)  # Max 25 points when at target
+        resource_distance = abs(combined_util - self.cpu_target)  # Use same target for combined
+        # Use a more gradual reward curve that doesn't drop to 0 so quickly
+        if resource_distance <= 10.0:
+            resource_reward = 25.0 - resource_distance  # Full range when close to target
+        else:
+            # Gradual decay for larger distances, but never fully zero
+            resource_reward = max(1.0, 15.0 - (resource_distance - 10.0) * 0.2)
         
-        # 2. Action penalty: encourage stability (doing nothing is often best)
+        # 2. Special handling for very low utilization - reward scale down decisions
+        if combined_util < 20.0 and action == 2 and replicas > min_replicas:
+            resource_reward += 10.0  # Bonus for scaling down when under-utilized
+            logging.info(f"      [+10.0] Under-utilization scale-down bonus")
+        elif combined_util < 20.0 and action == 0:
+            resource_reward += 2.0  # Small bonus for not scaling up when under-utilized
+            logging.info(f"      [+2.0] Under-utilization stability bonus")
+        
+        # 3. Action penalty: encourage stability (doing nothing is often best)
         action_cost = self.action_penalty if action != 0 else 0
         
-        # 3. Emergency penalty: heavily penalize high resource usage
+        # 4. Emergency penalty: heavily penalize high resource usage
         emergency_cost = self.emergency_penalty if combined_util > self.resource_emergency else 0
         
-        # 4. Boundary penalties
+        # 5. Boundary penalties
         boundary_cost = 0
         if action == 1 and replicas >= max_replicas:
             boundary_cost = self.boundary_penalty
@@ -108,7 +121,18 @@ class RewardCalculator:
         
         # Calculate components
         resource_distance = abs(combined_util - self.cpu_target)
-        resource_reward = max(0, 25.0 - resource_distance)
+        # Use the same improved reward curve
+        if resource_distance <= 10.0:
+            resource_reward = 25.0 - resource_distance
+        else:
+            resource_reward = max(1.0, 15.0 - (resource_distance - 10.0) * 0.2)
+        
+        # Add under-utilization bonuses
+        if combined_util < 20.0 and action == 2 and replicas > min_replicas:
+            resource_reward += 10.0  # Under-utilization scale-down bonus
+        elif combined_util < 20.0 and action == 0:
+            resource_reward += 2.0  # Under-utilization stability bonus
+            
         action_cost = self.action_penalty if action != 0 else 0
         emergency_cost = self.emergency_penalty if combined_util > self.resource_emergency else 0
         

@@ -322,7 +322,7 @@ class ScalingValidator:
             Dictionary with detailed validation results
         """
         summary = {
-            'timestamp': datetime.now(),
+            'timestamp': datetime.now().isoformat(),
             'action': action,
             'current_replicas': current_replicas,
             'target_replicas': target_replicas,
