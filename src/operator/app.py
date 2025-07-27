@@ -62,6 +62,7 @@ class AutoscalerState(TypedDict):
     state_vector: Optional[Any]  # np.ndarray serialized as list
     dqn_action: int
     target_replicas: int
+    actual_action: int  # The action that was actually executed (may differ from dqn_action)
     
     # Validation
     validation_result: Optional[Dict]
@@ -75,7 +76,7 @@ class AutoscalerState(TypedDict):
     
     # Reward calculation
     reward: float
-    reward_components: Optional[Dict]
+    reward_breakdown: Optional[Dict]
     
     # Control flow
     should_continue: bool
@@ -92,7 +93,7 @@ reward_calculator = RewardCalculator()
 
 # --- LangGraph Node Functions ---
 
-def collect_metrics_node(state: AutoscalerState) -> AutoscalerState:
+def collect_metrics_node(state: AutoscalerState) -> dict:
     """Node 1: Collect metrics and deployment information."""
     logging.info("[COLLECTOR] Starting metrics collection...")
     
@@ -100,45 +101,52 @@ def collect_metrics_node(state: AutoscalerState) -> AutoscalerState:
         # Collect metrics using the MetricsCollector
         metrics_data = collector.collect_and_process_metrics()
         if not metrics_data:
-            state["error_message"] = "Failed to collect metrics"
-            state["should_continue"] = False
-            return state
+            return {
+                "error_message": "Failed to collect metrics",
+                "should_continue": False
+            }
         
         # Get deployment information
         deployment_info = executor.get_deployment_info(state["deployment_name"], state["deployment_namespace"])
         if not deployment_info:
-            state["error_message"] = "Failed to get deployment info"
-            state["should_continue"] = False
-            return state
-        
-        # Update state with collected data
-        state["metrics_data"] = metrics_data
-        state["deployment_info"] = deployment_info
-        state["historical_data"] = collector.get_historical_data()
-        
-        # Extract key metrics
-        state["total_current_mem"] = metrics_data['total_memory_bytes']
-        state["current_replicas"] = deployment_info['current_replicas']
-        state["min_replicas"] = deployment_info['min_replicas']
-        state["max_replicas"] = deployment_info['max_replicas']
-        state["cpu_limit"] = deployment_info['cpu_limit']
-        state["mem_limit"] = deployment_info['memory_limit']
+            return {
+                "error_message": "Failed to get deployment info",
+                "should_continue": False
+            }
         
         # Calculate utilization percentages
-        state["current_cpu_util"] = (metrics_data['total_cpu_rate'] / state["cpu_limit"]) * 100 if state["cpu_limit"] else 0
-        state["current_mem_util"] = (state["total_current_mem"] / state["mem_limit"]) * 100 if state["mem_limit"] else 0
+        total_current_mem = metrics_data['total_memory_bytes']
+        cpu_limit = deployment_info['cpu_limit']
+        mem_limit = deployment_info['memory_limit']
+        current_cpu_util = (metrics_data['total_cpu_rate'] / cpu_limit) * 100 if cpu_limit else 0
+        current_mem_util = (total_current_mem / mem_limit) * 100 if mem_limit else 0
         
-        logging.info(f"[COLLECTOR] Metrics collected - CPU: {state['current_cpu_util']:.1f}%, Memory: {state['current_mem_util']:.1f}%")
-        logging.info(f"[COLLECTOR] Replicas: {state['current_replicas']}, Historical entries: {len(state['historical_data'])}")
+        logging.info(f"[COLLECTOR] Metrics collected - CPU: {current_cpu_util:.1f}%, Memory: {current_mem_util:.1f}%")
+        logging.info(f"[COLLECTOR] Replicas: {deployment_info['current_replicas']}, Historical entries: {len(collector.get_historical_data())}")
+        
+        # Return state updates
+        return {
+            "metrics_data": metrics_data,
+            "deployment_info": deployment_info,
+            "historical_data": collector.get_historical_data(),
+            "total_current_mem": total_current_mem,
+            "current_replicas": deployment_info['current_replicas'],
+            "min_replicas": deployment_info['min_replicas'],
+            "max_replicas": deployment_info['max_replicas'],
+            "cpu_limit": cpu_limit,
+            "mem_limit": mem_limit,
+            "current_cpu_util": current_cpu_util,
+            "current_mem_util": current_mem_util
+        }
         
     except Exception as e:
         logging.error(f"[COLLECTOR] Error: {e}")
-        state["error_message"] = f"Collection error: {e}"
-        state["should_continue"] = False
-    
-    return state
+        return {
+            "error_message": f"Collection error: {e}",
+            "should_continue": False
+        }
 
-def forecast_memory_node(state: AutoscalerState) -> AutoscalerState:
+def forecast_memory_node(state: AutoscalerState) -> dict:
     """Node 2: Generate memory predictions using LSTM."""
     logging.info("[FORECASTER] Starting memory prediction...")
     
@@ -146,42 +154,50 @@ def forecast_memory_node(state: AutoscalerState) -> AutoscalerState:
         # Check if forecaster is ready
         if not forecaster.is_ready():
             logging.warning("[FORECASTER] LSTM models not loaded yet")
-            state["predicted_mem_util"] = state["current_mem_util"]  # Fallback to current
-            state["prediction_ready"] = False
-            return state
+            return {
+                "predicted_mem_util": state["current_mem_util"],  # Fallback to current
+                "prediction_ready": False
+            }
         
         # Check if we have sufficient data
         if not collector.has_sufficient_aggregated_data():
             logging.info(f"[FORECASTER] Insufficient data for prediction")
-            state["predicted_mem_util"] = state["current_mem_util"]  # Fallback to current
-            state["prediction_ready"] = False
-            return state
+            return {
+                "predicted_mem_util": state["current_mem_util"],  # Fallback to current
+                "prediction_ready": False
+            }
         
         # Make prediction
         prediction_result = forecaster.predict_next_interval(state["historical_data"])
         
         if prediction_result:
-            state["prediction_result"] = prediction_result
-            state["predicted_mem_util"] = (prediction_result['predicted_memory_bytes'] / state["mem_limit"]) * 100
-            state["prediction_ready"] = True
+            predicted_mem_util = (prediction_result['predicted_memory_bytes'] / state["mem_limit"]) * 100
             
             logging.info(f"[FORECASTER] Prediction successful:")
-            logging.info(f"    Memory: {prediction_result['predicted_memory_mb']:.1f} MB ({state['predicted_mem_util']:.1f}%)")
+            logging.info(f"    Memory: {prediction_result['predicted_memory_mb']:.1f} MB ({predicted_mem_util:.1f}%)")
             logging.info(f"    Change: {prediction_result['memory_change_mb']:+.1f} MB")
             logging.info(f"    Pods: {prediction_result['predicted_pod_count']:.0f} (+{prediction_result['pod_change']:.0f})")
+            
+            return {
+                "prediction_result": prediction_result,
+                "predicted_mem_util": predicted_mem_util,
+                "prediction_ready": True
+            }
         else:
             logging.warning("[FORECASTER] Prediction failed, using current memory")
-            state["predicted_mem_util"] = state["current_mem_util"]
-            state["prediction_ready"] = False
+            return {
+                "predicted_mem_util": state["current_mem_util"],
+                "prediction_ready": False
+            }
         
     except Exception as e:
         logging.error(f"[FORECASTER] Error: {e}")
-        state["predicted_mem_util"] = state["current_mem_util"]
-        state["prediction_ready"] = False
-    
-    return state
+        return {
+            "predicted_mem_util": state["current_mem_util"],
+            "prediction_ready": False
+        }
 
-def make_decision_node(state: AutoscalerState) -> AutoscalerState:
+def make_decision_node(state: AutoscalerState) -> dict:
     """Node 3: Make scaling decision using DQN."""
     logging.info("[DECISION] Making scaling decision...")
     
@@ -190,9 +206,10 @@ def make_decision_node(state: AutoscalerState) -> AutoscalerState:
         is_ready, ready_message = decision_engine.is_ready()
         if not is_ready:
             logging.error(f"[DECISION] Decision engine not ready: {ready_message}")
-            state["error_message"] = f"Decision engine error: {ready_message}"
-            state["should_continue"] = False
-            return state
+            return {
+                "error_message": f"Decision engine error: {ready_message}",
+                "should_continue": False
+            }
         
         # Construct state vector
         state_vector = decision_engine.construct_state_vector(
@@ -206,16 +223,13 @@ def make_decision_node(state: AutoscalerState) -> AutoscalerState:
         is_valid_vector, vector_error = decision_engine.validate_state_vector(state_vector)
         if not is_valid_vector:
             logging.error(f"[DECISION] Invalid state vector: {vector_error}")
-            state["error_message"] = f"State vector error: {vector_error}"
-            state["should_continue"] = False
-            return state
-        
-        # Store state vector as list for serialization
-        state["state_vector"] = state_vector.tolist() if state_vector is not None else None
+            return {
+                "error_message": f"State vector error: {vector_error}",
+                "should_continue": False
+            }
         
         # Make decision
         dqn_action = decision_engine.make_decision(state_vector)
-        state["dqn_action"] = dqn_action
         
         # Calculate target replicas
         target_replicas = executor.calculate_new_replicas(
@@ -224,20 +238,25 @@ def make_decision_node(state: AutoscalerState) -> AutoscalerState:
             state["min_replicas"], 
             state["max_replicas"]
         )
-        state["target_replicas"] = target_replicas
         
         action_name = decision_engine.get_action_name(dqn_action)
         logging.info(f"[DECISION] Action: {dqn_action} ({action_name})")
         logging.info(f"[DECISION] Target replicas: {state['current_replicas']} → {target_replicas}")
         
+        return {
+            "state_vector": state_vector.tolist() if state_vector is not None else None,
+            "dqn_action": dqn_action,
+            "target_replicas": target_replicas
+        }
+        
     except Exception as e:
         logging.error(f"[DECISION] Error: {e}")
-        state["error_message"] = f"Decision error: {e}"
-        state["should_continue"] = False
-    
-    return state
+        return {
+            "error_message": f"Decision error: {e}",
+            "should_continue": False
+        }
 
-def validate_action_node(state: AutoscalerState) -> AutoscalerState:
+def validate_action_node(state: AutoscalerState) -> dict:
     """Node 4: Validate the scaling action."""
     logging.info("[VALIDATOR] Validating scaling action...")
     
@@ -249,6 +268,10 @@ def validate_action_node(state: AutoscalerState) -> AutoscalerState:
             'current_mem_util': state["current_mem_util"],
             'predicted_mem_util': state["predicted_mem_util"]
         }
+        
+        # Start with current action and target
+        current_dqn_action = state["dqn_action"]
+        current_target_replicas = state["target_replicas"]
         
         # Check for forced actions first
         forced_action, force_reason = validator.should_force_action(
@@ -262,72 +285,78 @@ def validate_action_node(state: AutoscalerState) -> AutoscalerState:
         
         if forced_action is not None:
             logging.warning(f"[VALIDATOR] {force_reason}")
-            state["dqn_action"] = forced_action
-            state["target_replicas"] = executor.calculate_new_replicas(
+            current_dqn_action = forced_action
+            current_target_replicas = executor.calculate_new_replicas(
                 forced_action, state["current_replicas"], state["min_replicas"], state["max_replicas"]
             )
         
         # Validate the action
         is_valid, validation_reason, adjusted_target = validator.validate_scaling_action(
-            state["dqn_action"],
+            current_dqn_action,
             state["current_replicas"],
-            state["target_replicas"],
+            current_target_replicas,
             state["min_replicas"],
             state["max_replicas"],
             validation_deployment_info
         )
-        
-        state["is_valid"] = is_valid
-        state["validation_reason"] = validation_reason
-        state["adjusted_target"] = adjusted_target
         
         # Get comprehensive validation summary
         validation_result = validator.get_validation_summary(
-            state["dqn_action"],
+            current_dqn_action,
             state["current_replicas"],
-            state["target_replicas"],
+            current_target_replicas,
             state["min_replicas"],
             state["max_replicas"],
             validation_deployment_info
         )
-        state["validation_result"] = validation_result
         
         # Use adjusted target if validation modified it
-        if adjusted_target != state["target_replicas"]:
-            logging.info(f"[VALIDATOR] Target adjusted: {state['target_replicas']} → {adjusted_target}")
-            state["target_replicas"] = adjusted_target
+        final_target_replicas = adjusted_target
+        if adjusted_target != current_target_replicas:
+            logging.info(f"[VALIDATOR] Target adjusted: {current_target_replicas} → {adjusted_target}")
         
         if is_valid:
             logging.info(f"[VALIDATOR] Action validated: {validation_reason}")
         else:
             logging.warning(f"[VALIDATOR] Action rejected: {validation_reason}")
         
+        return {
+            "dqn_action": current_dqn_action,
+            "target_replicas": final_target_replicas,
+            "is_valid": is_valid,
+            "validation_reason": validation_reason,
+            "adjusted_target": adjusted_target,
+            "validation_result": validation_result
+        }
+        
     except Exception as e:
         logging.error(f"[VALIDATOR] Error: {e}")
-        state["error_message"] = f"Validation error: {e}"
-        state["should_continue"] = False
-    
-    return state
+        return {
+            "error_message": f"Validation error: {e}",
+            "should_continue": False
+        }
 
-def execute_scaling_node(state: AutoscalerState) -> AutoscalerState:
+def execute_scaling_node(state: AutoscalerState) -> dict:
     """Node 5: Execute the scaling action."""
     logging.info("[EXECUTOR] Executing scaling action...")
     
     try:
         if not state["is_valid"]:
             logging.info("[EXECUTOR] Skipping execution - action not valid")
-            state["scaling_successful"] = False
-            return state
+            return {
+                "scaling_successful": False
+            }
         
         if state["target_replicas"] == state["current_replicas"]:
             logging.info("[EXECUTOR] No scaling needed - target equals current")
-            state["scaling_successful"] = True
-            state["execution_result"] = {
-                'success': True,
-                'action': 'none',
-                'reason': 'No change needed'
+            return {
+                "scaling_successful": True,
+                "execution_result": {
+                    'success': True,
+                    'action': 'none',
+                    'reason': 'No change needed'
+                }
             }
-            return state
         
         # Execute the scaling with validation reason
         execution_result = executor.scale_deployment(
@@ -337,10 +366,9 @@ def execute_scaling_node(state: AutoscalerState) -> AutoscalerState:
             reason=state["validation_reason"]
         )
         
-        state["execution_result"] = execution_result
-        state["scaling_successful"] = execution_result.get('success', False)
+        scaling_successful = execution_result.get('success', False)
         
-        if state["scaling_successful"]:
+        if scaling_successful:
             action_name = execution_result.get('action', 'unknown')
             logging.info(f"[EXECUTOR] Scaling successful: {action_name}")
             logging.info(f"[EXECUTOR] Replicas: {state['current_replicas']} → {state['target_replicas']}")
@@ -348,70 +376,102 @@ def execute_scaling_node(state: AutoscalerState) -> AutoscalerState:
             error = execution_result.get('error', 'Unknown error')
             logging.error(f"[EXECUTOR] Scaling failed: {error}")
         
+        return {
+            "execution_result": execution_result,
+            "scaling_successful": scaling_successful
+        }
+        
     except Exception as e:
         logging.error(f"[EXECUTOR] Error: {e}")
-        state["execution_result"] = {'success': False, 'error': str(e)}
-        state["scaling_successful"] = False
-    
-    return state
+        return {
+            "execution_result": {'success': False, 'error': str(e)},
+            "scaling_successful": False
+        }
 
-def calculate_reward_node(state: AutoscalerState) -> AutoscalerState:
+def calculate_reward_node(state: AutoscalerState) -> dict:
     """Node 6: Calculate reward for the DQN agent."""
     logging.info("[REWARD] Calculating reward...")
+    logging.info(f"[REWARD] State type: {type(state)}")
     
     try:
         # Only calculate reward if we have a previous action to learn from
         if state["state_vector"] is not None:
-            # Calculate reward
+            # Determine the actual action that was executed
+            actual_action = 0  # Default to no action
+            if state["scaling_successful"] and state["execution_result"]:
+                current_replicas = state["current_replicas"]
+                target_replicas = state["target_replicas"]
+                if target_replicas > current_replicas:
+                    actual_action = 1  # Scale up
+                elif target_replicas < current_replicas:
+                    actual_action = 2  # Scale down
+                else:
+                    actual_action = 0  # No change
+            
+            # Calculate reward based on the ACTUAL executed action, not the DQN's original decision
             reward = reward_calculator.calculate_reward(
                 state["current_cpu_util"],
                 state["current_mem_util"],
                 state["predicted_mem_util"],
-                state["dqn_action"],
+                actual_action,  # Use actual executed action
                 state["current_replicas"],
                 state["min_replicas"],
                 state["max_replicas"]
             )
-            state["reward"] = reward
             
-            # Get reward components for analysis
-            reward_components = reward_calculator.get_reward_components(
+            # Get reward breakdown for analysis
+            reward_breakdown = reward_calculator.get_reward_breakdown(
                 state["current_cpu_util"],
                 state["current_mem_util"],
                 state["predicted_mem_util"],
-                state["dqn_action"],
+                actual_action,  # Use actual executed action
                 state["current_replicas"],
                 state["min_replicas"],
                 state["max_replicas"]
             )
-            state["reward_components"] = reward_components
             
             # Convert state vector back to numpy array for DQN
             state_vector_np = np.array(state["state_vector"]).reshape(1, -1) if state["state_vector"] else None
             
-            # Update DQN agent with experience
+            # Update DQN agent with experience using the actual executed action
             decision_engine.learn_from_experience(reward, state_vector_np)
             
-            # Prepare for next cycle
-            decision_engine.prepare_for_next_cycle(state_vector_np, state["dqn_action"])
+            # Prepare for next cycle using the actual executed action
+            decision_engine.prepare_for_next_cycle(state_vector_np, actual_action)
+            
+            # Update Q-value metrics for the current state after learning
+            if state_vector_np is not None:
+                # Access DQN agent through state manager
+                from state_manager import state as global_state
+                global_state.dqn_agent.update_q_value_metrics(state_vector_np)
+            
+            # Log the action discrepancy if any
+            if actual_action != state["dqn_action"]:
+                logging.warning(f"[REWARD] Action discrepancy: DQN chose {state['dqn_action']} but {actual_action} was executed")
             
             logging.info(f"[REWARD] Reward calculated: {reward:.2f}")
             
             # Update metrics
-            metrics.DQN_REWARD_TOTAL.set(reward)
+            current_total = metrics.DQN_REWARD_TOTAL._value._value
+            metrics.DQN_REWARD_TOTAL.set(current_total + reward)
             metrics.LSTM_FORECAST_MEMORY_BYTES.set(state["total_current_mem"])
             metrics.NIMBUSGUARD_CURRENT_REPLICAS.set(state["current_replicas"])
             metrics.NIMBUSGUARD_DESIRED_REPLICAS.set(state["target_replicas"])
+            
+            # Return updated state - LangGraph expects dict updates
+            return {
+                "reward": reward,
+                "reward_breakdown": reward_breakdown,
+                "actual_action": actual_action,
+                "cycle_complete": True
+            }
         else:
             logging.info("[REWARD] No previous state to learn from (first cycle)")
-        
-        state["cycle_complete"] = True
+            return {"cycle_complete": True}
         
     except Exception as e:
         logging.error(f"[REWARD] Error: {e}")
-        state["error_message"] = f"Reward calculation error: {e}"
-    
-    return state
+        return {"error_message": f"Reward calculation error: {e}"}
 
 # --- LangGraph Workflow Setup ---
 
@@ -480,6 +540,7 @@ def run_scaling_cycle(name: str, namespace: str):
             "state_vector": None,
             "dqn_action": 0,
             "target_replicas": 0,
+            "actual_action": 0,
             
             # Validation
             "validation_result": None,
@@ -493,7 +554,7 @@ def run_scaling_cycle(name: str, namespace: str):
             
             # Reward calculation
             "reward": 0.0,
-            "reward_components": None,
+            "reward_breakdown": None,
             
             # Control flow
             "should_continue": True,

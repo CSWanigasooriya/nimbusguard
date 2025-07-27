@@ -50,7 +50,7 @@ class MetricsCollector:
         # DQN Training Metrics
         self.dqn_training_loss = Gauge(
             'dqn_training_loss',
-            'Current DQN training loss',
+            'Cumulative total of all DQN training loss values',
             registry=self.registry
         )
         
@@ -133,7 +133,7 @@ class MetricsCollector:
         # DQN Reward Metrics
         self.dqn_reward_total = Gauge(
             'dqn_reward_total',
-            'Total cumulative reward',
+            'Total cumulative rewards (positive and negative)',
             registry=self.registry
         )
         
@@ -249,7 +249,8 @@ class MetricsCollector:
     
     def update_dqn_training(self, loss: float, epsilon: float, buffer_size: int):
         """Update DQN training metrics."""
-        self.dqn_training_loss.set(loss)
+        current_total = self.dqn_training_loss._value._value
+        self.dqn_training_loss.set(current_total + loss)
         self.dqn_epsilon_value.set(epsilon)
         self.dqn_replay_buffer_size.set(buffer_size)
         self.dqn_training_steps.inc()
@@ -266,7 +267,7 @@ class MetricsCollector:
         self.dqn_experiences_added.inc()
     
     def update_reward(self, reward: float):
-        """Update reward metrics."""
+        """Update reward metrics - adds reward to cumulative total (can be positive or negative)."""
         current_total = self.dqn_reward_total._value._value
         self.dqn_reward_total.set(current_total + reward)
     

@@ -17,7 +17,7 @@ NIMBUSGUARD_CURRENT_REPLICAS = Gauge(
 # --- DQN Agent & Training Metrics ---
 DQN_TRAINING_LOSS = Gauge(
     'dqn_training_loss',
-    'The loss value from the DQN agent training step (e.g., MSE).'
+    'The cumulative total of all training loss values from DQN agent training steps.'
 )
 DQN_EPSILON_VALUE = Gauge(
     'dqn_epsilon_value',
@@ -29,7 +29,7 @@ DQN_REPLAY_BUFFER_SIZE = Gauge(
 )
 DQN_REWARD_TOTAL = Gauge(
     'dqn_reward_total',
-    'The most recently calculated reward value for the last action.'
+    'The cumulative total of all reward values (positive and negative) received by the DQN agent.'
 )
 
 # --- Action & Decision Counters ---

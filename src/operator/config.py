@@ -83,7 +83,86 @@ class DQNConfig:
             return True
             
         except AssertionError as e:
-            logging.error(f"DQN configuration validation failed: {e}")
+            logging.error(f"❌ DQN configuration validation failed: {e}")
+            return False
+
+class AIConfig:
+    """Configuration class for AI/LLM settings."""
+    
+    def __init__(self):
+        """Initialize AI configuration from environment variables."""
+        # LLM validation settings
+        self.enable_llm_validation = bool(os.getenv('ENABLE_LLM_VALIDATION', 'false').lower() == 'true')
+        self.model_name = os.getenv('AI_MODEL', 'gpt-4-turbo')
+        self.temperature = float(os.getenv('AI_TEMPERATURE', '0.1'))
+        
+        # API settings
+        self.openai_api_key = os.getenv('OPENAI_API_KEY', '')
+        self.mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://mcp-server.nimbusguard.svc:8080')
+        
+
+        
+        # Log the loaded configuration
+        self._log_config()
+    
+    def _log_config(self):
+        """Log the current AI configuration."""
+        logging.info("AI Configuration loaded:")
+        logging.info(f"  LLM Validation Enabled: {self.enable_llm_validation}")
+        if self.enable_llm_validation:
+            logging.info(f"  Model: {self.model_name}")
+            logging.info(f"  Temperature: {self.temperature}")
+            logging.info(f"  MCP Server URL: {self.mcp_server_url}")
+            logging.info(f"  Validation Timeout: {self.validation_timeout}s")
+            logging.info(f"  Enhanced Prompts: {self.use_enhanced_prompts}")
+            logging.info(f"  Emergency Validation: {self.enable_emergency_validation}")
+            logging.info(f"  OpenAI API Key: {'***configured***' if self.openai_api_key else 'NOT SET'}")
+        else:
+            logging.info("  LLM validation is disabled - using standard validation only")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert configuration to dictionary."""
+        return {
+            'enable_llm_validation': self.enable_llm_validation,
+            'model_name': self.model_name,
+            'temperature': self.temperature,
+            'mcp_server_url': self.mcp_server_url,
+            'validation_timeout': self.validation_timeout,
+            'validation_retry_count': self.validation_retry_count,
+            'use_enhanced_prompts': self.use_enhanced_prompts,
+            'enable_emergency_validation': self.enable_emergency_validation,
+            'emergency_cpu_threshold': self.emergency_cpu_threshold,
+            'emergency_memory_threshold': self.emergency_memory_threshold,
+            'has_openai_key': bool(self.openai_api_key)
+        }
+    
+    def is_emergency_condition(self, cpu_util: float, mem_util: float, predicted_mem_util: float) -> bool:
+        """Check if current conditions warrant emergency validation."""
+        if not self.enable_emergency_validation:
+            return False
+        
+        return (cpu_util >= self.emergency_cpu_threshold or 
+                mem_util >= self.emergency_memory_threshold or 
+                predicted_mem_util >= self.emergency_memory_threshold)
+    
+    def validate(self) -> bool:
+        """Validate AI configuration."""
+        try:
+            if self.enable_llm_validation:
+                assert self.openai_api_key, "OpenAI API key is required when LLM validation is enabled"
+                assert self.mcp_server_url, "MCP server URL is required when LLM validation is enabled"
+                assert 0.0 <= self.temperature <= 2.0, f"Temperature must be between 0 and 2, got {self.temperature}"
+                assert self.validation_timeout > 0, f"Validation timeout must be positive, got {self.validation_timeout}"
+                assert self.validation_retry_count >= 0, f"Retry count must be non-negative, got {self.validation_retry_count}"
+                
+                logging.info("AI configuration validation passed")
+            else:
+                logging.info("AI configuration validation skipped (LLM validation disabled)")
+            
+            return True
+            
+        except AssertionError as e:
+            logging.error(f"❌ AI configuration validation failed: {e}")
             return False
 
 class SystemConfig:
@@ -140,8 +219,12 @@ class SystemConfig:
 
 # Global configuration instances
 dqn_config = DQNConfig()
+ai_config = AIConfig()
 system_config = SystemConfig()
 
-# Validate DQN configuration on import
+# Validate configurations on import
 if not dqn_config.validate():
-    logging.warning("DQN configuration validation failed - using potentially invalid parameters") 
+    logging.warning("⚠️ DQN configuration validation failed - using potentially invalid parameters")
+
+if not ai_config.validate():
+    logging.warning("⚠️ AI configuration validation failed - LLM validation may not work properly") 

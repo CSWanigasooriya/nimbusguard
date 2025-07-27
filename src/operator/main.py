@@ -359,7 +359,8 @@ def calculate_reward(current_cpu_util, current_mem_util, predicted_mem_util, act
         total_reward -= 10.0
         logging.info("      [-10.0] Penalty for attempting to scale down at min_replicas.")
 
-    metrics.DQN_REWARD_TOTAL.set(total_reward)
+    current_total = metrics.DQN_REWARD_TOTAL._value._value
+    metrics.DQN_REWARD_TOTAL.set(current_total + total_reward)
     logging.info(f"Final Calculated Reward: {total_reward:.2f} (CPU: {current_cpu_util:.2f}%, WeightedMem: {weighted_mem_util:.2f}%)")
     return total_reward
 

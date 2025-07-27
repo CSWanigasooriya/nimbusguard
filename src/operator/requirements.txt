@@ -7,3 +7,4 @@ tensorflow
 scikit-learn
 langgraph
 kubernetes
+langchain_mcp_adapters

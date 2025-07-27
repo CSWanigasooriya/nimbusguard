@@ -77,7 +77,8 @@ class DecisionEngine:
                                    current_state_vector, False)
             
             # Update reward metric (decision engine responsibility)
-            metrics.DQN_REWARD_TOTAL.set(reward)
+            current_total = metrics.DQN_REWARD_TOTAL._value._value
+            metrics.DQN_REWARD_TOTAL.set(current_total + reward)
             
             # Train the agent - agent handles training metrics internally, pass reward for save-on-improvement
             loss = state.dqn_agent.replay(current_reward=reward)

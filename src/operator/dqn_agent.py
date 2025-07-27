@@ -229,6 +229,13 @@ class DQNAgent:
         else:
             act_values = self.model.predict(state, verbose=0)
             action = np.argmax(act_values[0])
+            
+            # METRICS: Update Q-value metrics when using exploitation (agent-level metrics)
+            # Assuming action indices: 0=keep_same, 1=scale_up, 2=scale_down
+            if len(act_values[0]) >= 3:
+                metrics.DQN_Q_VALUE_KEEP_SAME.set(float(act_values[0][0]))
+                metrics.DQN_Q_VALUE_SCALE_UP.set(float(act_values[0][1]))
+                metrics.DQN_Q_VALUE_SCALE_DOWN.set(float(act_values[0][2]))
 
         # METRICS: Update exploration/exploitation counters (agent-level metrics)
         if is_exploring:
@@ -281,7 +288,8 @@ class DQNAgent:
         self.training_steps += 1
 
         # METRICS: Update training loss and steps (agent-level metrics)
-        metrics.DQN_TRAINING_LOSS.set(loss)
+        current_total = metrics.DQN_TRAINING_LOSS._value._value
+        metrics.DQN_TRAINING_LOSS.set(current_total + loss)
         metrics.DQN_TRAINING_STEPS_TOTAL.inc()
 
         # Decay epsilon and update epsilon metric
@@ -300,6 +308,15 @@ class DQNAgent:
         should_save, save_reason = self._should_save_model(current_reward)
         if should_save:
             self._save_model(save_reason)
+        
+        # METRICS: Update Q-values after training to reflect new learned values
+        # Use the first state from the batch to update current Q-values
+        if len(states) > 0:
+            current_q_values = self.model.predict(states[0:1], verbose=0)
+            if len(current_q_values[0]) >= 3:
+                metrics.DQN_Q_VALUE_KEEP_SAME.set(float(current_q_values[0][0]))
+                metrics.DQN_Q_VALUE_SCALE_UP.set(float(current_q_values[0][1]))
+                metrics.DQN_Q_VALUE_SCALE_DOWN.set(float(current_q_values[0][2]))
             
         return loss
 
@@ -362,6 +379,22 @@ class DQNAgent:
             True if save was successful
         """
         return self._save_model(reason)
+
+    def update_q_value_metrics(self, state):
+        """
+        Update Q-value metrics for a given state.
+        
+        Args:
+            state: State vector to get Q-values for
+        """
+        try:
+            act_values = self.model.predict(state, verbose=0)
+            if len(act_values[0]) >= 3:
+                metrics.DQN_Q_VALUE_KEEP_SAME.set(float(act_values[0][0]))
+                metrics.DQN_Q_VALUE_SCALE_UP.set(float(act_values[0][1]))
+                metrics.DQN_Q_VALUE_SCALE_DOWN.set(float(act_values[0][2]))
+        except Exception as e:
+            logging.warning(f"Failed to update Q-value metrics: {e}")
 
     def get_storage_status(self):
         """
