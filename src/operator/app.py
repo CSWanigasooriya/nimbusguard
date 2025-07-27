@@ -276,8 +276,9 @@ def validate_action_node(state: AutoscalerState) -> dict:
     
     try:
         # Prepare validation info
+        base_deployment_info = state["deployment_info"] or {}
         validation_deployment_info = {
-            **state["deployment_info"],
+            **base_deployment_info,
             'current_cpu_util': state["current_cpu_util"],
             'current_mem_util': state["current_mem_util"],
             'predicted_mem_util': state["predicted_mem_util"]

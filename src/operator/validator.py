@@ -179,10 +179,12 @@ class ScalingValidator:
         return True, "Rate limit validation passed"
     
     def _validate_resource_constraints(self, action: int, current_replicas: int, target_replicas: int, 
-                                     deployment_info: Dict, exploration_mode: bool = False) -> Tuple[bool, str]:
+                                     deployment_info: Dict, exploration_mode: bool = False, log_details: bool = True) -> Tuple[bool, str]:
         """Validate against resource utilization constraints."""
-        # This would typically use current resource metrics
-        # For now, we'll use placeholder logic
+        # Handle case where deployment_info is None
+        if deployment_info is None:
+            logging.warning("[VALIDATOR] No deployment info provided for resource validation - allowing action")
+            return True, "No deployment info available for resource validation"
         
         # Get current utilization (would come from metrics)
         current_cpu_util = deployment_info.get('current_cpu_util', 0)
@@ -250,7 +252,8 @@ class ScalingValidator:
                     reason = f"Scale-up justified by CPU utilization ({current_cpu_util:.1f}% >= {self.min_cpu_util_for_scale_up}%)"
                 else:  # memory_justified
                     reason = f"Scale-up justified by Memory utilization ({current_mem_util:.1f}% >= {self.min_memory_util_for_scale_up}%)"
-                logging.info(f"[VALIDATOR] {reason}")
+                if log_details:
+                    logging.info(f"[VALIDATOR] {reason}")
         
         return True, "Resource constraint validation passed"
     
@@ -405,7 +408,7 @@ class ScalingValidator:
         
         if deployment_info:
             resource_valid, resource_reason = self._validate_resource_constraints(
-                action, current_replicas, target_replicas, deployment_info
+                action, current_replicas, target_replicas, deployment_info, exploration_mode=False, log_details=False
             )
             summary['validations']['resource_constraints'] = {
                 'valid': resource_valid,
@@ -624,9 +627,14 @@ class ScalingValidator:
         replica_change = context["scaling_action"]["replica_change"]
         
         deployment_info = context["deployment_info"]
-        current_cpu = deployment_info.get("current_cpu_util", "unknown")
-        current_mem = deployment_info.get("current_mem_util", "unknown")
-        predicted_mem = deployment_info.get("predicted_mem_util", "unknown")
+        if deployment_info:
+            current_cpu = deployment_info.get("current_cpu_util", "unknown")
+            current_mem = deployment_info.get("current_mem_util", "unknown")
+            predicted_mem = deployment_info.get("predicted_mem_util", "unknown")
+        else:
+            current_cpu = "unknown"
+            current_mem = "unknown"
+            predicted_mem = "unknown"
         
         # Extract tool names and descriptions from MCP tools
         tool_descriptions = []
