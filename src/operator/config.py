@@ -100,7 +100,8 @@ class AIConfig:
         self.openai_api_key = os.getenv('OPENAI_API_KEY', '')
         self.mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://mcp-server.nimbusguard.svc:8080')
         
-
+        # Validation behavior settings
+        self.enable_exploration_leniency = bool(os.getenv('ENABLE_EXPLORATION_LENIENCY', 'true').lower() == 'true')
         
         # Log the loaded configuration
         self._log_config()
@@ -116,6 +117,8 @@ class AIConfig:
             logging.info(f"  OpenAI API Key: {'***configured***' if self.openai_api_key else 'NOT SET'}")
         else:
             logging.info("  LLM validation is disabled - using standard validation only")
+        
+        logging.info(f"  Exploration Leniency: {'enabled' if self.enable_exploration_leniency else 'disabled'}")
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
@@ -124,6 +127,7 @@ class AIConfig:
             'model_name': self.model_name,
             'temperature': self.temperature,
             'mcp_server_url': self.mcp_server_url,
+            'enable_exploration_leniency': self.enable_exploration_leniency,
             'has_openai_key': bool(self.openai_api_key)
         }
     

@@ -306,12 +306,15 @@ def validate_action_node(state: AutoscalerState) -> dict:
         
         # Check if we're in exploration mode (high epsilon)
         from state_manager import state as global_state
+        from config import ai_config
+        
         current_epsilon = global_state.dqn_agent.epsilon
         exploration_threshold = 0.2  # Consider exploration if epsilon > 20%
         exploration_mode = current_epsilon > exploration_threshold
         
-        if exploration_mode:
-            logging.info(f"[VALIDATOR] Exploration mode active (ε={current_epsilon:.3f} > {exploration_threshold})")
+        # Only log exploration mode if leniency is enabled (otherwise it doesn't matter)
+        if exploration_mode and ai_config.enable_exploration_leniency:
+            logging.info(f"[VALIDATOR] Exploration mode active (ε={current_epsilon:.3f} > {exploration_threshold}) - Leniency enabled")
         
         # Validate the action (more lenient during exploration)
         is_valid, validation_reason, adjusted_target = validator.validate_scaling_action(

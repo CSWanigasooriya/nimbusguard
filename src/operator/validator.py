@@ -23,12 +23,16 @@ class ScalingValidator:
         """
         self.config = config or {}
         
-        # LLM validation settings
-        self.enable_llm_validation = bool(os.getenv('ENABLE_LLM_VALIDATION', 'false').lower() == 'true')
-        self.openai_api_key = os.getenv('OPENAI_API_KEY', '')
-        self.ai_model = os.getenv('AI_MODEL', 'gpt-4-turbo')
-        self.ai_temperature = float(os.getenv('AI_TEMPERATURE', '0.1'))
-        self.mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://mcp-server.nimbusguard.svc:8080')
+        # Import and use centralized AI configuration
+        from config import ai_config
+        
+        # LLM validation settings from centralized config
+        self.enable_llm_validation = ai_config.enable_llm_validation
+        self.openai_api_key = ai_config.openai_api_key
+        self.ai_model = ai_config.model_name
+        self.ai_temperature = ai_config.temperature
+        self.mcp_server_url = ai_config.mcp_server_url
+        self.enable_exploration_leniency = ai_config.enable_exploration_leniency
         
         # Scaling rate limits
         self.max_scale_up_per_minute = self.config.get('max_scale_up_per_minute', 3)
@@ -37,8 +41,10 @@ class ScalingValidator:
         
         # Resource thresholds
         self.max_cpu_util_for_scale_down = self.config.get('max_cpu_util_for_scale_down', 80.0)
+        self.min_cpu_util_for_scale_up = self.config.get('min_cpu_util_for_scale_up', 50.0)
         self.min_memory_util_for_scale_up = self.config.get('min_memory_util_for_scale_up', 60.0)
         self.critical_memory_threshold = self.config.get('critical_memory_threshold', 95.0)
+        self.critical_cpu_threshold = self.config.get('critical_cpu_threshold', 90.0)
         
         # Stability requirements
         self.min_stable_period_seconds = self.config.get('min_stable_period_seconds', 60)
@@ -57,6 +63,10 @@ class ScalingValidator:
                 self.enable_llm_validation = False
         else:
             logging.info("Using regular validation (LLM validation disabled)")
+        
+        # Log exploration leniency configuration
+        leniency_status = "enabled" if self.enable_exploration_leniency else "disabled"
+        logging.info(f"Exploration leniency: {leniency_status}")
     
     def validate_scaling_action(self, action: int, current_replicas: int, target_replicas: int,
                                min_replicas: int, max_replicas: int, deployment_info: Dict = None, 
@@ -184,7 +194,7 @@ class ScalingValidator:
         
         max_mem_util = max(effective_mem_util, predicted_mem_util)
         
-        # Emergency scale-up logic - trust memory metrics and act decisively
+        # Emergency scale-up logic - trust both memory and CPU metrics and act decisively
         if max_mem_util > self.emergency_scale_up_threshold:
             if action == 1:  # Already scaling up - approve it
                 return True, f"Scale-up approved for emergency memory pressure (memory: {max_mem_util:.1f}% > {self.emergency_scale_up_threshold}%)"
@@ -194,6 +204,17 @@ class ScalingValidator:
                 # High memory usage is a real problem that needs addressing
                 # Don't reject here, but should_force_action() will recommend emergency scaling
                 logging.warning(f"High memory pressure detected but no scaling action proposed (memory: {max_mem_util:.1f}%)")
+        
+        # Emergency scale-up logic for CPU
+        if current_cpu_util > self.critical_cpu_threshold:
+            if action == 1:  # Already scaling up - approve it
+                return True, f"Scale-up approved for emergency CPU pressure (CPU: {current_cpu_util:.1f}% > {self.critical_cpu_threshold}%)"
+            elif action == 2:  # Scale down - absolutely prevent it
+                return False, f"Scale-down BLOCKED: Emergency CPU pressure detected (CPU: {current_cpu_util:.1f}% > {self.critical_cpu_threshold}%)"
+            else:  # No action - allow validation to continue, emergency logic in should_force_action()
+                # High CPU usage is a real problem that needs addressing
+                # Don't reject here, but should_force_action() will recommend emergency scaling
+                logging.warning(f"High CPU pressure detected but no scaling action proposed (CPU: {current_cpu_util:.1f}%)")
         
         # Prevent scale-down under high load
         if action == 2:  # Scale down
@@ -205,15 +226,31 @@ class ScalingValidator:
         
         # Require minimum utilization for scale-up (more lenient during exploration)
         if action == 1:  # Scale up
-            if (current_mem_util < self.min_memory_util_for_scale_up and 
-                predicted_mem_util < self.min_memory_util_for_scale_up):
-                
-                # During exploration, be more lenient to allow learning
-                if exploration_mode:
-                    logging.info(f"[VALIDATOR] Exploration mode: Allowing scale-up despite low utilization (current: {current_mem_util:.1f}%, predicted: {predicted_mem_util:.1f}%)")
-                    return True, f"Exploration mode: Scale-up allowed for learning (utilization: {current_mem_util:.1f}%)"
+            # Check both CPU and memory utilization
+            cpu_justified = current_cpu_util >= self.min_cpu_util_for_scale_up
+            memory_justified = (current_mem_util >= self.min_memory_util_for_scale_up or 
+                               predicted_mem_util >= self.min_memory_util_for_scale_up)
+            
+            # Scale-up is justified if either CPU OR memory is high enough
+            if not cpu_justified and not memory_justified:
+                # During exploration, be more lenient to allow learning (if enabled in config)
+                if exploration_mode and self.enable_exploration_leniency:
+                    logging.info(f"[VALIDATOR] Exploration mode: Allowing scale-up despite low utilization (CPU: {current_cpu_util:.1f}%, Memory: {current_mem_util:.1f}%)")
+                    return True, f"Exploration mode: Scale-up allowed for learning (CPU: {current_cpu_util:.1f}%, Memory: {current_mem_util:.1f}%)"
+                elif exploration_mode and not self.enable_exploration_leniency:
+                    logging.info(f"[VALIDATOR] Exploration detected but leniency disabled - applying strict validation")
+                    return False, f"Scale-up not justified: Both CPU ({current_cpu_util:.1f}% < {self.min_cpu_util_for_scale_up}%) and Memory ({current_mem_util:.1f}% < {self.min_memory_util_for_scale_up}%) utilization too low"
                 else:
-                    return False, f"Scale-up not justified: Memory utilization too low (current: {current_mem_util:.1f}%, predicted: {predicted_mem_util:.1f}% < {self.min_memory_util_for_scale_up}%)"
+                    return False, f"Scale-up not justified: Both CPU ({current_cpu_util:.1f}% < {self.min_cpu_util_for_scale_up}%) and Memory ({current_mem_util:.1f}% < {self.min_memory_util_for_scale_up}%) utilization too low"
+            else:
+                # Log which resource justified the scale-up
+                if cpu_justified and memory_justified:
+                    reason = f"Scale-up justified by both CPU ({current_cpu_util:.1f}% >= {self.min_cpu_util_for_scale_up}%) and Memory ({current_mem_util:.1f}% >= {self.min_memory_util_for_scale_up}%)"
+                elif cpu_justified:
+                    reason = f"Scale-up justified by CPU utilization ({current_cpu_util:.1f}% >= {self.min_cpu_util_for_scale_up}%)"
+                else:  # memory_justified
+                    reason = f"Scale-up justified by Memory utilization ({current_mem_util:.1f}% >= {self.min_memory_util_for_scale_up}%)"
+                logging.info(f"[VALIDATOR] {reason}")
         
         return True, "Resource constraint validation passed"
     
@@ -308,13 +345,17 @@ class ScalingValidator:
         
         max_mem_util = max(effective_mem_util, predicted_mem_util)
         
-        # Force scale-up for critical resource usage
+        # Force scale-up for critical resource usage (memory or CPU)
         if max_mem_util > self.critical_memory_threshold:
             if current_replicas < max_replicas:
                 return 1, f"CRITICAL: Force scale-up due to memory pressure ({max_mem_util:.1f}% > {self.critical_memory_threshold}%)"
         
+        if current_cpu_util > self.critical_cpu_threshold:
+            if current_replicas < max_replicas:
+                return 1, f"CRITICAL: Force scale-up due to CPU pressure ({current_cpu_util:.1f}% > {self.critical_cpu_threshold}%)"
+        
         # Force scale-up for emergency threshold (less critical but still urgent)
-        elif max_mem_util > self.emergency_scale_up_threshold:
+        if max_mem_util > self.emergency_scale_up_threshold:
             if current_replicas < max_replicas:
                 return 1, f"EMERGENCY: Force scale-up due to high memory ({max_mem_util:.1f}% > {self.emergency_scale_up_threshold}%)"
         
@@ -428,8 +469,10 @@ class ScalingValidator:
             'max_scale_down_per_minute': self.max_scale_down_per_minute,
             'min_time_between_scales': self.min_time_between_scales,
             'max_cpu_util_for_scale_down': self.max_cpu_util_for_scale_down,
+            'min_cpu_util_for_scale_up': self.min_cpu_util_for_scale_up,
             'min_memory_util_for_scale_up': self.min_memory_util_for_scale_up,
             'critical_memory_threshold': self.critical_memory_threshold,
+            'critical_cpu_threshold': self.critical_cpu_threshold,
             'min_stable_period_seconds': self.min_stable_period_seconds,
             'max_utilization_variance': self.max_utilization_variance,
             'emergency_scale_up_threshold': self.emergency_scale_up_threshold,
@@ -542,7 +585,9 @@ class ScalingValidator:
                 "system_thresholds": {
                     "emergency_scale_up_threshold": self.emergency_scale_up_threshold,
                     "critical_memory_threshold": self.critical_memory_threshold,
+                    "critical_cpu_threshold": self.critical_cpu_threshold,
                     "max_cpu_util_for_scale_down": self.max_cpu_util_for_scale_down,
+                    "min_cpu_util_for_scale_up": self.min_cpu_util_for_scale_up,
                     "min_memory_util_for_scale_up": self.min_memory_util_for_scale_up
                 }
             }
@@ -608,7 +653,9 @@ class ScalingValidator:
             predicted_mem=predicted_mem,
             emergency_scale_up_threshold=context["system_thresholds"]["emergency_scale_up_threshold"],
             critical_memory_threshold=context["system_thresholds"]["critical_memory_threshold"],
+            critical_cpu_threshold=context["system_thresholds"]["critical_cpu_threshold"],
             max_cpu_util_for_scale_down=context["system_thresholds"]["max_cpu_util_for_scale_down"],
+            min_cpu_util_for_scale_up=context["system_thresholds"]["min_cpu_util_for_scale_up"],
             min_memory_util_for_scale_up=context["system_thresholds"]["min_memory_util_for_scale_up"],
             deployment_info=json.dumps(deployment_info, indent=2) if deployment_info else "No additional deployment information"
         )

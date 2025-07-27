@@ -17,7 +17,9 @@ SCALING CONTEXT:
 SYSTEM THRESHOLDS:
 - Emergency scale-up threshold: {emergency_scale_up_threshold}%
 - Critical memory threshold: {critical_memory_threshold}%
+- Critical CPU threshold: {critical_cpu_threshold}%
 - Max CPU for scale-down: {max_cpu_util_for_scale_down}%
+- Min CPU for scale-up: {min_cpu_util_for_scale_up}%
 - Min memory for scale-up: {min_memory_util_for_scale_up}%
 
 DEPLOYMENT STATE:
