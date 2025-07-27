@@ -288,8 +288,7 @@ class DQNAgent:
         self.training_steps += 1
 
         # METRICS: Update training loss and steps (agent-level metrics)
-        current_total = metrics.DQN_TRAINING_LOSS._value._value
-        metrics.DQN_TRAINING_LOSS.set(current_total + loss)
+        metrics.DQN_TRAINING_LOSS.set(loss)  # Set current loss, not cumulative
         metrics.DQN_TRAINING_STEPS_TOTAL.inc()
 
         # Decay epsilon and update epsilon metric

@@ -59,7 +59,8 @@ class ScalingValidator:
             logging.info("Using regular validation (LLM validation disabled)")
     
     def validate_scaling_action(self, action: int, current_replicas: int, target_replicas: int,
-                               min_replicas: int, max_replicas: int, deployment_info: Dict = None) -> Tuple[bool, str, int]:
+                               min_replicas: int, max_replicas: int, deployment_info: Dict = None, 
+                               exploration_mode: bool = False) -> Tuple[bool, str, int]:
         """
         Comprehensive validation of a scaling action for multi-pod environments.
         
@@ -86,7 +87,7 @@ class ScalingValidator:
         """
         # First, always run regular validation for safety
         regular_valid, regular_reason, regular_target = self._validate_regular(
-            action, current_replicas, target_replicas, min_replicas, max_replicas, deployment_info
+            action, current_replicas, target_replicas, min_replicas, max_replicas, deployment_info, exploration_mode
         )
         
         # If regular validation fails, return immediately
@@ -168,7 +169,7 @@ class ScalingValidator:
         return True, "Rate limit validation passed"
     
     def _validate_resource_constraints(self, action: int, current_replicas: int, target_replicas: int, 
-                                     deployment_info: Dict) -> Tuple[bool, str]:
+                                     deployment_info: Dict, exploration_mode: bool = False) -> Tuple[bool, str]:
         """Validate against resource utilization constraints."""
         # This would typically use current resource metrics
         # For now, we'll use placeholder logic
@@ -202,11 +203,17 @@ class ScalingValidator:
             if current_mem_util > self.max_cpu_util_for_scale_down:
                 return False, f"Cannot scale down: Memory utilization too high ({current_mem_util:.1f}% > {self.max_cpu_util_for_scale_down}%)"
         
-        # Require minimum utilization for scale-up
+        # Require minimum utilization for scale-up (more lenient during exploration)
         if action == 1:  # Scale up
             if (current_mem_util < self.min_memory_util_for_scale_up and 
                 predicted_mem_util < self.min_memory_util_for_scale_up):
-                return False, f"Scale-up not justified: Memory utilization too low (current: {current_mem_util:.1f}%, predicted: {predicted_mem_util:.1f}% < {self.min_memory_util_for_scale_up}%)"
+                
+                # During exploration, be more lenient to allow learning
+                if exploration_mode:
+                    logging.info(f"[VALIDATOR] Exploration mode: Allowing scale-up despite low utilization (current: {current_mem_util:.1f}%, predicted: {predicted_mem_util:.1f}%)")
+                    return True, f"Exploration mode: Scale-up allowed for learning (utilization: {current_mem_util:.1f}%)"
+                else:
+                    return False, f"Scale-up not justified: Memory utilization too low (current: {current_mem_util:.1f}%, predicted: {predicted_mem_util:.1f}% < {self.min_memory_util_for_scale_up}%)"
         
         return True, "Resource constraint validation passed"
     
@@ -398,23 +405,20 @@ class ScalingValidator:
         """
         Calculate effective memory utilization for validation purposes.
         
-        In multi-pod environments, we trust the memory metrics as reported since:
-        - High memory usage indicates genuine resource pressure
-        - Load balancing issues are real problems that need addressing
-        - Memory metrics should not be artificially reduced
+        Memory utilization is now correctly calculated as:
+        (total_memory_usage) / (per_pod_limit × current_replicas) × 100
+        
+        This accounts for the distributed nature of multi-pod deployments.
         
         Args:
-            current_mem_util: Raw memory utilization percentage
+            current_mem_util: Memory utilization percentage (already accounts for multiple pods)
             current_replicas: Current number of replicas
             
         Returns:
-            Memory utilization percentage (unchanged - we trust the metrics)
+            Memory utilization percentage (already correctly calculated)
         """
-        # Return the actual memory utilization without adjustment
-        # High memory usage in multi-pod environments indicates real problems:
-        # - Uneven load distribution
-        # - Memory pressure on individual pods
-        # - Need for additional capacity
+        # Memory utilization is now correctly calculated upstream to account for multiple pods
+        # No adjustment needed here
         return current_mem_util
     
     def get_config(self) -> Dict:
@@ -433,7 +437,8 @@ class ScalingValidator:
         } 
 
     def _validate_regular(self, action: int, current_replicas: int, target_replicas: int,
-                         min_replicas: int, max_replicas: int, deployment_info: Dict = None) -> Tuple[bool, str, int]:
+                         min_replicas: int, max_replicas: int, deployment_info: Dict = None, 
+                         exploration_mode: bool = False) -> Tuple[bool, str, int]:
         """
         Regular validation logic (the original validation).
         """        
@@ -453,10 +458,10 @@ class ScalingValidator:
         if not rate_valid:
             return False, rate_reason, current_replicas
         
-        # Resource-based validation
+        # Resource-based validation (more lenient during exploration)
         if deployment_info:
             resource_valid, resource_reason = self._validate_resource_constraints(
-                action, current_replicas, target_replicas, deployment_info
+                action, current_replicas, target_replicas, deployment_info, exploration_mode
             )
             if not resource_valid:
                 return False, resource_reason, current_replicas

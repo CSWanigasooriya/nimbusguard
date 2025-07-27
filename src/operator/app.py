@@ -118,8 +118,14 @@ def collect_metrics_node(state: AutoscalerState) -> dict:
         total_current_mem = metrics_data['total_memory_bytes']
         cpu_limit = deployment_info['cpu_limit']
         mem_limit = deployment_info['memory_limit']
-        current_cpu_util = (metrics_data['total_cpu_rate'] / cpu_limit) * 100 if cpu_limit else 0
-        current_mem_util = (total_current_mem / mem_limit) * 100 if mem_limit else 0
+        current_replicas = deployment_info['current_replicas']
+        
+        # Calculate total cluster limits (per-pod limit × number of pods)
+        total_cpu_limit = cpu_limit * current_replicas if cpu_limit else 0
+        total_mem_limit = mem_limit * current_replicas if mem_limit else 0
+        
+        current_cpu_util = (metrics_data['total_cpu_rate'] / total_cpu_limit) * 100 if total_cpu_limit else 0
+        current_mem_util = (total_current_mem / total_mem_limit) * 100 if total_mem_limit else 0
         
         logging.info(f"[COLLECTOR] Metrics collected - CPU: {current_cpu_util:.1f}%, Memory: {current_mem_util:.1f}%")
         logging.info(f"[COLLECTOR] Replicas: {deployment_info['current_replicas']}, Historical entries: {len(collector.get_historical_data())}")
@@ -290,14 +296,24 @@ def validate_action_node(state: AutoscalerState) -> dict:
                 forced_action, state["current_replicas"], state["min_replicas"], state["max_replicas"]
             )
         
-        # Validate the action
+        # Check if we're in exploration mode (high epsilon)
+        from state_manager import state as global_state
+        current_epsilon = global_state.dqn_agent.epsilon
+        exploration_threshold = 0.2  # Consider exploration if epsilon > 20%
+        exploration_mode = current_epsilon > exploration_threshold
+        
+        if exploration_mode:
+            logging.info(f"[VALIDATOR] Exploration mode active (ε={current_epsilon:.3f} > {exploration_threshold})")
+        
+        # Validate the action (more lenient during exploration)
         is_valid, validation_reason, adjusted_target = validator.validate_scaling_action(
             current_dqn_action,
             state["current_replicas"],
             current_target_replicas,
             state["min_replicas"],
             state["max_replicas"],
-            validation_deployment_info
+            validation_deployment_info,
+            exploration_mode
         )
         
         # Get comprehensive validation summary

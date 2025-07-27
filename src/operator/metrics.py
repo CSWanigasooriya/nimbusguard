@@ -17,7 +17,7 @@ NIMBUSGUARD_CURRENT_REPLICAS = Gauge(
 # --- DQN Agent & Training Metrics ---
 DQN_TRAINING_LOSS = Gauge(
     'dqn_training_loss',
-    'The cumulative total of all training loss values from DQN agent training steps.'
+    'The current training loss value from the most recent DQN agent training step.'
 )
 DQN_EPSILON_VALUE = Gauge(
     'dqn_epsilon_value',
