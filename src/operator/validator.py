@@ -140,14 +140,16 @@ class ScalingValidator:
         last_scaling_time = None
         
         for record in state.scaling_history:
-            if record['timestamp'] > one_minute_ago:
+            # Convert ISO string timestamp back to datetime for comparison
+            record_time = datetime.fromisoformat(record['timestamp']) if isinstance(record['timestamp'], str) else record['timestamp']
+            if record_time > one_minute_ago:
                 if record['action'] == 'scale_up':
                     recent_scale_ups += 1
                 elif record['action'] == 'scale_down':
                     recent_scale_downs += 1
                 
-                if last_scaling_time is None or record['timestamp'] > last_scaling_time:
-                    last_scaling_time = record['timestamp']
+                if last_scaling_time is None or record_time > last_scaling_time:
+                    last_scaling_time = record_time
         
         # Check rate limits
         if action == 1:  # Scale up
@@ -221,7 +223,9 @@ class ScalingValidator:
             five_minutes_ago = datetime.now() - timedelta(minutes=5)
             
             for record in state.scaling_history:
-                if record['timestamp'] > five_minutes_ago:
+                # Convert ISO string timestamp back to datetime for comparison
+                record_time = datetime.fromisoformat(record['timestamp']) if isinstance(record['timestamp'], str) else record['timestamp']
+                if record_time > five_minutes_ago:
                     recent_actions.append(record['action'])
             
             # Check for oscillating behavior
@@ -264,7 +268,9 @@ class ScalingValidator:
             ten_minutes_ago = datetime.now() - timedelta(minutes=10)
             
             for record in state.scaling_history:
-                if (record['timestamp'] > ten_minutes_ago and 
+                # Convert ISO string timestamp back to datetime for comparison
+                record_time = datetime.fromisoformat(record['timestamp']) if isinstance(record['timestamp'], str) else record['timestamp']
+                if (record_time > ten_minutes_ago and 
                     record.get('success') is False):
                     recent_failures.append(record)
             
