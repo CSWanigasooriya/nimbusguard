@@ -223,12 +223,15 @@ class DQNAgent:
         metrics.DQN_EPSILON_VALUE.set(self.epsilon)
         
         is_exploring = False
-        if np.random.rand() <= self.epsilon:
+        random_value = np.random.rand()
+        if random_value <= self.epsilon:
             is_exploring = True
             action = random.randrange(self.action_size)
+            logging.debug(f"[DQN] EXPLORATION: ε={self.epsilon:.3f}, random={random_value:.3f}, chose action {action}")
         else:
             act_values = self.model.predict(state, verbose=0)
             action = np.argmax(act_values[0])
+            logging.debug(f"[DQN] EXPLOITATION: ε={self.epsilon:.3f}, random={random_value:.3f}, Q-values={act_values[0]}, chose action {action}")
             
             # METRICS: Update Q-value metrics when using exploitation (agent-level metrics)
             # Assuming action indices: 0=keep_same, 1=scale_up, 2=scale_down

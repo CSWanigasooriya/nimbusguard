@@ -177,7 +177,9 @@ def forecast_memory_node(state: AutoscalerState) -> dict:
         prediction_result = forecaster.predict_next_interval(state["historical_data"])
         
         if prediction_result:
-            predicted_mem_util = (prediction_result['predicted_memory_bytes'] / state["mem_limit"]) * 100
+            # Use total cluster memory limit (per-pod limit × replicas) for consistency
+            total_mem_limit = state["mem_limit"] * state["current_replicas"]
+            predicted_mem_util = (prediction_result['predicted_memory_bytes'] / total_mem_limit) * 100 if total_mem_limit else 0
             
             logging.info(f"[FORECASTER] Prediction successful:")
             logging.info(f"    Memory: {prediction_result['predicted_memory_mb']:.1f} MB ({predicted_mem_util:.1f}%)")
@@ -236,6 +238,12 @@ def make_decision_node(state: AutoscalerState) -> dict:
         
         # Make decision
         dqn_action = decision_engine.make_decision(state_vector)
+        
+        # Log exploration status for debugging  
+        from state_manager import state as global_state
+        current_epsilon = global_state.dqn_agent.epsilon
+        exploration_status = "EXPLORATION" if current_epsilon > 0.2 else "EXPLOITATION"
+        logging.info(f"[DECISION] {exploration_status} mode (ε={current_epsilon:.3f})")
         
         # Calculate target replicas
         target_replicas = executor.calculate_new_replicas(
