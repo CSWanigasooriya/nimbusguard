@@ -19,4 +19,4 @@ COPY memory.keras memory.pkl /tmp/
 EXPOSE 8080 8081
 
 # Command to run the application using Kopf with liveness probe
-CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8081/healthz", "/app/main.py"] 
+CMD ["kopf", "run", "--namespace", "nimbusguard", "--liveness=http://0.0.0.0:8081/healthz", "/app/app.py"] 

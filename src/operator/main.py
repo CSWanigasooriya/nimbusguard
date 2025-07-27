@@ -27,32 +27,182 @@ k8s_apps_v1 = client.AppsV1Api()
 
 # --- Model Loading & Prediction ---
 def load_models_and_scalers():
-    """Loads only the memory forecasting model and scaler."""
+    """Loads the LSTM model and scalers separately."""
     model_dir = "/tmp"
     mem_model_path = f"{model_dir}/memory.keras"
     mem_scaler_path = f"{model_dir}/memory.pkl"
-    logging.info("--- Attempting to load memory forecasting model and scaler ---")
+    logging.info("--- Attempting to load LSTM model and scalers ---")
     try:
-        # REMOVED CPU model loading
+        # Load the Keras model
         state.memory_model = tf.keras.models.load_model(mem_model_path)
-        state.memory_scaler = joblib.load(mem_scaler_path)
+        logging.info("LSTM model loaded successfully.")
+        
+        # Load the scalers
+        scalers_data = joblib.load(mem_scaler_path)
+        state.memory_scaler = scalers_data['feature_scaler']
+        state.target_scaler = scalers_data['target_scaler']
+        logging.info("Scalers loaded successfully.")
+        
+        # Verify prediction mode
+        predict_both = scalers_data.get('predict_both', True)
+        lookback_window = scalers_data.get('lookback_window', 20)
+        logging.info(f"Model configuration: predict_both={predict_both}, lookback_window={lookback_window}")
+        
         state.models_loaded.set()
-        logging.info("Memory forecasting model and scaler loaded successfully.")
+        logging.info("LSTM model and scalers loaded successfully.")
     except Exception as e:
-        logging.error(f"CRITICAL: Failed to load memory model. Forecasting will be disabled. Error: {e}")
+        logging.error(f"CRITICAL: Failed to load LSTM model and scalers. Forecasting will be disabled. Error: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
 
-def make_prediction(model, scaler, history_sequence, feature_name):
-    if not model or not scaler:
+def make_lstm_prediction(model, pod_data):
+    """
+    LSTM prediction function using raw Keras model directly.
+    pod_data format: [{'timestamp': str, 'pod_name': str, 'memory_bytes': int}, ...]
+    
+    Args:
+        model: Raw Keras model
+        pod_data: List of dictionaries with timestamp, pod_name, and memory_bytes
+    
+    Returns:
+        Dictionary with prediction results, or None if prediction fails
+    """
+    if not model or not pod_data:
         return None
+    
     try:
-        input_df = pd.DataFrame(history_sequence, columns=[feature_name])
-        scaled_data = scaler.transform(input_df)
-        reshaped_data = scaled_data.reshape(1, state.sequence_length, 1)
-        prediction_scaled = model.predict(reshaped_data, verbose=0)
-        prediction = scaler.inverse_transform(prediction_scaled)
-        return prediction[0][0]
+        # Check if we have enough data points (need 20+ intervals)
+        if len(pod_data) < state.sequence_length:
+            logging.info(f"Not enough data for LSTM prediction. Have {len(pod_data)}, need {state.sequence_length}")
+            return None
+            
+        # Convert raw pod data to the format the model expects
+        df = pd.DataFrame(pod_data)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        # Round timestamps to nearest 15 seconds to group pods with slightly different timestamps
+        df['timestamp_rounded'] = df['timestamp'].dt.round('15s')
+        
+        # Aggregate by rounded timestamp (same as training)
+        aggregated = df.groupby('timestamp_rounded').agg({
+            'memory_bytes': 'sum',    # Total memory across all consumer pods
+            'pod_name': 'count'       # Number of consumer pods
+        }).reset_index()
+        
+        # Rename column back to timestamp
+        aggregated = aggregated.rename(columns={'timestamp_rounded': 'timestamp'})
+        
+        # Rename columns to match training format
+        aggregated.columns = ['timestamp', 'total_memory_bytes', 'pod_count']
+        
+        # Convert to MB (same as training)
+        aggregated['total_memory_mb'] = aggregated['total_memory_bytes'] / (1024 * 1024)
+        
+        # Sort by timestamp
+        aggregated = aggregated.sort_values('timestamp').reset_index(drop=True)
+        
+        # Debug: Show recent aggregated data
+        logging.info(f"--- LSTM Aggregation: {len(aggregated)} time intervals from {len(pod_data)} pod entries ---")
+        if len(aggregated) > 0:
+            latest_agg = aggregated.iloc[-1]
+            logging.info(f"    Latest aggregated: {latest_agg['timestamp']} | {latest_agg['total_memory_mb']:.1f} MB | {latest_agg['pod_count']} pods")
+        
+        # Check if we have enough history after aggregation
+        if len(aggregated) < state.sequence_length:
+            logging.info(f"Not enough aggregated data for prediction. Need {state.sequence_length}, got {len(aggregated)}")
+            logging.info(f"LSTM needs {state.sequence_length * 15} seconds ({state.sequence_length * 15 / 60:.1f} minutes) of data for prediction")
+            return None
+        
+        # Extract features for last N intervals
+        features = ['total_memory_mb', 'pod_count']
+        recent_data = aggregated[features].tail(state.sequence_length).values
+        
+        # Filter out periods with pod count changes to get stable prediction data
+        current_pod_count = aggregated['pod_count'].iloc[-1]
+        stable_data = aggregated[aggregated['pod_count'] == current_pod_count]
+        
+        if len(stable_data) < state.sequence_length:
+            logging.info(f"Not enough stable data (same pod count={current_pod_count}). Have {len(stable_data)}, need {state.sequence_length}")
+            logging.info("LSTM requires stable pod count period for accurate prediction")
+            return None
+        
+        # Use stable data for prediction
+        recent_data = stable_data[features].tail(state.sequence_length).values
+        
+        # Debug: Show the actual sequence we're feeding to LSTM
+        recent_timestamps = stable_data['timestamp'].tail(state.sequence_length)
+        recent_memory = stable_data['total_memory_mb'].tail(state.sequence_length)
+        recent_pods = stable_data['pod_count'].tail(state.sequence_length)
+        
+        logging.info(f"--- LSTM Input Sequence (last {state.sequence_length} stable intervals with {current_pod_count} pods) ---")
+        logging.info(f"Memory range: {recent_memory.min():.1f} - {recent_memory.max():.1f} MB")
+        logging.info(f"Pod count: {current_pod_count} (constant)")
+        logging.info(f"First 3 intervals:")
+        for i in range(min(3, len(recent_timestamps))):
+            idx = recent_timestamps.index[i]
+            logging.info(f"  [{i}] {recent_timestamps.iloc[i]} | {recent_memory.iloc[i]:.1f} MB | {recent_pods.iloc[i]} pods")
+        logging.info(f"Last 3 intervals:")
+        for i in range(max(0, len(recent_timestamps)-3), len(recent_timestamps)):
+            idx = recent_timestamps.index[i]
+            logging.info(f"  [{i}] {recent_timestamps.iloc[i]} | {recent_memory.iloc[i]:.1f} MB | {recent_pods.iloc[i]} pods")
+        
+        # Scale using the scaler
+        if not hasattr(state, 'memory_scaler') or state.memory_scaler is None:
+            logging.error("Memory scaler not loaded")
+            return None
+            
+        scaled_data = state.memory_scaler.transform(recent_data)
+        
+        # Reshape for LSTM (batch_size=1, sequence_length=N, features=2)
+        model_input = scaled_data.reshape(1, state.sequence_length, len(features))
+        
+        # Make prediction using the raw Keras model
+        prediction_scaled = model.predict(model_input, verbose=0)
+        
+        # Debug: Show raw model output
+        logging.info(f"--- LSTM Raw Output (scaled): {prediction_scaled[0]} ---")
+        
+        # Inverse transform prediction using target scaler
+        if not hasattr(state, 'target_scaler') or state.target_scaler is None:
+            logging.error("Target scaler not loaded")
+            return None
+            
+        prediction = state.target_scaler.inverse_transform(prediction_scaled)[0]
+        
+        # Debug: Show final prediction
+        logging.info(f"--- LSTM Final Prediction: Memory={prediction[0]:.1f} MB, Pods={prediction[1]:.1f} ---")
+        
+        # Get current values for comparison (use stable data, not all aggregated data)
+        latest_stable = stable_data.iloc[-1]
+        latest_all = aggregated.iloc[-1]
+        
+        # Debug logging for LSTM input vs current totals
+        logging.info(f"--- LSTM Debug: Latest stable data: {latest_stable['total_memory_mb']:.1f} MB ---")
+        logging.info(f"--- LSTM Debug: Latest all data: {latest_all['total_memory_mb']:.1f} MB ---")
+        logging.info(f"--- LSTM Raw Prediction vs Latest Stable: {prediction[0]:.1f} MB vs {latest_stable['total_memory_mb']:.1f} MB ---")
+        
+        # Return structured result (use latest_all for current comparison since DQN uses current total)
+        result = {
+            'predicted_memory_mb': round(prediction[0], 1),
+            'predicted_pod_count': round(prediction[1], 0),
+            'predicted_memory_bytes': int(prediction[0] * 1024 * 1024),
+            'current_memory_bytes': int(latest_all['total_memory_bytes']),
+            'memory_change_mb': round(prediction[0] - latest_all['total_memory_mb'], 1),
+            'pod_change': round(prediction[1] - latest_all['pod_count'], 0)
+        }
+        
+        # Additional debug: Check if prediction equals current
+        if abs(result['memory_change_mb']) < 0.1:
+            logging.warning(f"LSTM predicting essentially no change! Raw prediction: {prediction[0]:.6f} MB, Current: {latest_all['total_memory_mb']:.6f} MB")
+            logging.warning(f"Raw model output was: {prediction_scaled[0]}")
+            
+        logging.info(f"LSTM prediction successful: Memory {result['predicted_memory_mb']:.0f}MB (+{result['memory_change_mb']:.0f}), Pods {result['predicted_pod_count']:.0f} (+{result['pod_change']:.0f})")
+        return result
+        
     except Exception as e:
-        logging.error(f"Error during prediction for feature '{feature_name}': {e}")
+        logging.error(f"Error during LSTM prediction: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
         return None
 
 def fetch_per_instance_metrics(query):
@@ -281,11 +431,20 @@ def run_scaling_cycle(name, namespace):
             else:
                 logging.warning(f"  [CPU] No metrics found for instance {instance}")
 
-            # --- Collect Memory Metrics (for finding max) ---
+            # --- Collect Memory Metrics (for structured data storage) ---
             if instance in current_mem_metrics:
                 timestamp, value = current_mem_metrics[instance]
                 current_memory_values.append(value)
-                logging.info(f"  [Memory] Current value: {value / (1024*1024):.2f} MB")
+                
+                # Store structured data for LSTM prediction
+                memory_entry = {
+                    'timestamp': timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                    'pod_name': instance,
+                    'memory_bytes': int(value)
+                }
+                state.global_memory_history.append(memory_entry)
+                
+                logging.info(f"  [Memory] Pod {instance}: {value / (1024*1024):.2f} MB")
                 total_current_mem += value
 
         # --- CPU Summary Logging ---
@@ -293,55 +452,57 @@ def run_scaling_cycle(name, namespace):
         pods_with_cpu_activity = len([i for i in all_instances if i in current_cpu_metrics])
         logging.info(f"--- CPU Summary: Total rate {total_current_cpu_rate:.6f} cores/second across {pods_with_cpu_activity}/{active_pods} pods ---")
         
-        # --- Process Global Max Memory and Prediction ---
+        # --- Process Structured Memory Data and Prediction ---
         if current_memory_values:
             max_memory_value = max(current_memory_values)
             
-            # Debug logging for memory values with high precision
+            # Debug logging for memory values
             memory_values_mb = [val / (1024*1024) for val in current_memory_values]
             logging.info(f"--- Memory Values (MB): {[f'{val:.3f}' for val in memory_values_mb]} ---")
             logging.info(f"--- Max Memory: {max_memory_value} bytes = {max_memory_value / (1024*1024):.6f} MB ---")
+            logging.info(f"--- Total Current Memory: {total_current_mem} bytes = {total_current_mem / (1024*1024):.1f} MB ---")
+            logging.info(f"--- Sum of current_memory_values: {sum(current_memory_values)} bytes = {sum(current_memory_values) / (1024*1024):.1f} MB ---")
             
-            # Check for change from previous value
-            if len(state.global_memory_history) > 0:
-                last_value = state.global_memory_history[-1]
-                diff_bytes = abs(max_memory_value - last_value)
-                diff_mb = diff_bytes / (1024*1024)
-                logging.info(f"--- Memory Change: {diff_bytes} bytes ({diff_mb:.6f} MB) from last measurement ---")
-                
-                if diff_bytes == 0:
-                    logging.warning("--- WARNING: Exact same memory value detected! This may hurt predictor performance ---")
+            # Log structured data info
+            history_data = list(state.global_memory_history)
+            logging.info(f"--- Structured Memory History: {len(history_data)} entries stored ---")
+            if history_data:
+                latest_entries = history_data[-min(3, len(history_data)):]
+                for entry in latest_entries:
+                    logging.info(f"    {entry['timestamp']} | {entry['pod_name']} | {entry['memory_bytes']/(1024*1024):.2f} MB")
             
-            # Always append to maintain sequence length for predictor
-            state.global_memory_history.append(max_memory_value)
-            logging.info(f"--- Global Memory History: {len(state.global_memory_history)} values, Latest: {max_memory_value/(1024*1024):.6f} MB ---")
-            
-            global_mem_history = list(state.global_memory_history)
-            
-            if len(global_mem_history) < state.sequence_length:
-                logging.info(f"Collecting global memory history... ({len(global_mem_history)}/{state.sequence_length} points) - DQN decisions pending")
-                total_predicted_mem = max_memory_value  # Use current max as prediction
+            # Check if we have enough structured data for prediction
+            if len(history_data) < state.sequence_length:
+                logging.info(f"Collecting structured memory history... ({len(history_data)}/{state.sequence_length} points) - DQN decisions pending")
+                total_predicted_mem = total_current_mem  # Use current total instead of max
             else:
-                # Show high-precision history to detect small changes
-                history_mb_precise = [m/(1024*1024) for m in global_mem_history]
-                logging.info(f"Global Mem History (MB, last {state.sequence_length}): {[f'{m:.6f}' for m in history_mb_precise]}")
-                
-                # Check for variance in the data
-                if len(set(global_mem_history)) == 1:
-                    logging.warning("--- WARNING: All values in memory history are identical! Predictor may not work well ---")
-                else:
-                    variance = max(global_mem_history) - min(global_mem_history)
-                    logging.info(f"--- Memory History Variance: {variance} bytes ({variance/(1024*1024):.6f} MB) ---")
+                logging.info(f"--- Structured Memory History: {len(history_data)} entries available for LSTM prediction ---")
                 
                 if state.models_loaded.is_set():
-                    predicted_mem = make_prediction(state.memory_model, state.memory_scaler, global_mem_history, 'memory_bytes')
-                    if predicted_mem is not None:
-                        total_predicted_mem = predicted_mem
-                        logging.info(f"Predicted Next Max Memory (MB): {predicted_mem / (1024*1024):.2f}")
+                    # Use new LSTM prediction with structured data
+                    prediction_result = make_lstm_prediction(state.memory_model, history_data)
+                    if prediction_result is not None:
+                        # Extract predicted memory in bytes from the result dictionary
+                        total_predicted_mem = prediction_result.get('predicted_memory_bytes', total_current_mem)
+                        
+                        # Log detailed prediction information
+                        pred_mb = prediction_result.get('predicted_memory_mb', 0)
+                        change_mb = prediction_result.get('memory_change_mb', 0)
+                        
+                        logging.info(f"LSTM Predicted Next Max Memory: {pred_mb:.1f} MB ({total_predicted_mem} bytes)")
+                        logging.info(f"Memory Change Prediction: {change_mb:+.1f} MB")
+                        
+                        # If the model predicts both memory and pods, log pod prediction too
+                        if 'predicted_pod_count' in prediction_result:
+                            pred_pods = prediction_result.get('predicted_pod_count', 0)
+                            pod_change = prediction_result.get('pod_change', 0)
+                            logging.info(f"LSTM Predicted Pod Count: {pred_pods:.0f} (+{pod_change:.0f})")
                     else:
-                        total_predicted_mem = max_memory_value
+                        total_predicted_mem = total_current_mem
+                        logging.warning("LSTM prediction failed, using current total memory")
                 else:
-                    total_predicted_mem = max_memory_value
+                    total_predicted_mem = total_current_mem
+                    logging.info("Models not loaded, using current total memory")
         else:
             total_predicted_mem = 0
         
@@ -349,10 +510,28 @@ def run_scaling_cycle(name, namespace):
             logging.info("No memory data available from any pod. Skipping DQN cycle.")
             return
 
-        # Check if global memory history queue is full before making DQN decisions
+        # Check if structured memory history has enough data before making DQN decisions
         if len(state.global_memory_history) < state.sequence_length:
             logging.info(f"Global memory history not yet full ({len(state.global_memory_history)}/{state.sequence_length}). DQN will wait for more data.")
             return
+        
+        # Additional check: Ensure we have enough aggregated time intervals for LSTM prediction
+        # Convert structured history to DataFrame and check aggregated intervals
+        try:
+            history_df = pd.DataFrame(list(state.global_memory_history))
+            history_df['timestamp'] = pd.to_datetime(history_df['timestamp'])
+            history_df['timestamp_rounded'] = history_df['timestamp'].dt.round('15s')
+            aggregated_intervals = len(history_df.groupby('timestamp_rounded'))
+            
+            if aggregated_intervals < state.sequence_length:
+                logging.info(f"Not enough aggregated time intervals for LSTM prediction. Have {aggregated_intervals}, need {state.sequence_length}")
+                logging.info(f"DQN waiting for LSTM to be ready. Need {state.sequence_length * 15} seconds ({state.sequence_length * 15 / 60:.1f} minutes) of aggregated data.")
+                return
+            else:
+                logging.info(f"LSTM data requirements met: {aggregated_intervals} time intervals available")
+        except Exception as e:
+            logging.warning(f"Could not check LSTM data requirements: {e}. Proceeding with DQN.")
+            # Continue with DQN if we can't check LSTM requirements
         
         metrics.LSTM_FORECAST_MEMORY_BYTES.set(total_predicted_mem)
 
