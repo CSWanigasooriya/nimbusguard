@@ -41,8 +41,8 @@ class ScalingValidator:
         
         # Resource thresholds
         self.max_cpu_util_for_scale_down = self.config.get('max_cpu_util_for_scale_down', 80.0)
-        self.min_cpu_util_for_scale_up = self.config.get('min_cpu_util_for_scale_up', 20.0)  # Adjusted to 20%
-        self.min_memory_util_for_scale_up = self.config.get('min_memory_util_for_scale_up', 50.0)
+        self.min_cpu_util_for_scale_up = self.config.get('min_cpu_util_for_scale_up', 20.0)  # Set to 20%
+        self.min_memory_util_for_scale_up = self.config.get('min_memory_util_for_scale_up', 20.0)  # Reduced to 20%
         self.critical_memory_threshold = self.config.get('critical_memory_threshold', 95.0)
         self.critical_cpu_threshold = self.config.get('critical_cpu_threshold', 90.0)
         
