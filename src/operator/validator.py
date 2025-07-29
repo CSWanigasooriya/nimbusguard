@@ -35,13 +35,13 @@ class ScalingValidator:
         self.enable_exploration_leniency = ai_config.enable_exploration_leniency
         
         # Scaling rate limits
-        self.max_scale_up_per_minute = self.config.get('max_scale_up_per_minute', 3)
+        self.max_scale_up_per_minute = self.config.get('max_scale_up_per_minute', 4)  # Increased for responsiveness
         self.max_scale_down_per_minute = self.config.get('max_scale_down_per_minute', 2)
-        self.min_time_between_scales = self.config.get('min_time_between_scales', 30)  # seconds
+        self.min_time_between_scales = self.config.get('min_time_between_scales', 15)  # Reduced to 15s for faster reaction
         
         # Resource thresholds
         self.max_cpu_util_for_scale_down = self.config.get('max_cpu_util_for_scale_down', 80.0)
-        self.min_cpu_util_for_scale_up = self.config.get('min_cpu_util_for_scale_up', 50.0)
+        self.min_cpu_util_for_scale_up = self.config.get('min_cpu_util_for_scale_up', 20.0)  # Adjusted to 20%
         self.min_memory_util_for_scale_up = self.config.get('min_memory_util_for_scale_up', 50.0)
         self.critical_memory_threshold = self.config.get('critical_memory_threshold', 95.0)
         self.critical_cpu_threshold = self.config.get('critical_cpu_threshold', 90.0)
@@ -134,8 +134,13 @@ class ScalingValidator:
         
         return True, "Boundary validation passed", target_replicas
     
-    def _validate_scaling_rate(self, action: int, current_replicas: int, target_replicas: int) -> Tuple[bool, str]:
-        """Validate scaling rate limits."""
+    def _validate_scaling_rate(self, action: int, current_replicas: int, target_replicas: int, 
+                              deployment_info: Dict = None) -> Tuple[bool, str]:
+        """
+        Validate scaling rate limits with intelligent emergency handling.
+        
+        Allows bypassing rate limits for emergency conditions to ensure responsiveness.
+        """
         from state_manager import state
         
         # Check if we have scaling history
@@ -162,21 +167,54 @@ class ScalingValidator:
                 if last_scaling_time is None or record_time > last_scaling_time:
                     last_scaling_time = record_time
         
-        # Check rate limits
+        # Check for emergency conditions that should bypass rate limits
+        emergency_bypass = False
+        if deployment_info and action == 1:  # Scale up only
+            current_cpu_util = deployment_info.get('current_cpu_util', 0)
+            current_mem_util = deployment_info.get('current_mem_util', 0)
+            predicted_mem_util = deployment_info.get('predicted_mem_util', current_mem_util)
+            
+            # Allow bypassing rate limits for critical resource pressure
+            if (current_cpu_util > self.critical_cpu_threshold or 
+                current_mem_util > self.critical_memory_threshold or
+                predicted_mem_util > self.critical_memory_threshold):
+                emergency_bypass = True
+                logging.info(f"[VALIDATOR] Emergency bypass: CPU={current_cpu_util:.1f}%, Mem={current_mem_util:.1f}%, PredMem={predicted_mem_util:.1f}%")
+        
+        # Check rate limits (with emergency bypass for scale-ups)
         if action == 1:  # Scale up
-            if recent_scale_ups >= self.max_scale_up_per_minute:
+            if recent_scale_ups >= self.max_scale_up_per_minute and not emergency_bypass:
                 return False, f"Scale up rate limit exceeded: {recent_scale_ups}/{self.max_scale_up_per_minute} in last minute"
         elif action == 2:  # Scale down
             if recent_scale_downs >= self.max_scale_down_per_minute:
                 return False, f"Scale down rate limit exceeded: {recent_scale_downs}/{self.max_scale_down_per_minute} in last minute"
         
-        # Check minimum time between scaling actions
+        # Check minimum time between scaling actions (with emergency bypass for scale-ups)
         if last_scaling_time:
             time_since_last = (now - last_scaling_time).total_seconds()
-            if time_since_last < self.min_time_between_scales:
-                return False, f"Minimum time between scales not met: {time_since_last:.0f}s < {self.min_time_between_scales}s"
+            min_time = self.min_time_between_scales
+            
+            # For scale-ups, be more lenient with timing
+            if action == 1:
+                # Reduce minimum time for scale-ups to prioritize responsiveness
+                min_time = max(10, self.min_time_between_scales * 0.7)  # At least 10s, but 30% less than configured
+                
+                # Emergency bypass for critical conditions
+                if emergency_bypass:
+                    min_time = 5  # Allow very quick scale-ups in emergencies
+            
+            if time_since_last < min_time:
+                if emergency_bypass and action == 1:
+                    logging.info(f"[VALIDATOR] Emergency override: Scaling up despite {time_since_last:.0f}s < {min_time}s")
+                    return True, f"Emergency scale-up allowed (time: {time_since_last:.0f}s)"
+                else:
+                    return False, f"Minimum time between scales not met: {time_since_last:.0f}s < {min_time}s"
         
-        return True, "Rate limit validation passed"
+        reason = "Rate limit validation passed"
+        if emergency_bypass and action == 1:
+            reason = "Rate limit validation passed (emergency conditions detected)"
+        
+        return True, reason
     
     def _validate_resource_constraints(self, action: int, current_replicas: int, target_replicas: int, 
                                      deployment_info: Dict, exploration_mode: bool = False, log_details: bool = True) -> Tuple[bool, str]:
@@ -258,30 +296,82 @@ class ScalingValidator:
         return True, "Resource constraint validation passed"
     
     def _validate_system_stability(self, action: int) -> Tuple[bool, str]:
-        """Validate system stability before scaling."""
-        from state_manager import state
+        """
+        Validate system stability before scaling.
         
-        # Check if deployment is in a stable state
-        # This would typically check metrics variance, pod readiness, etc.
+        Improved logic:
+        - Scale-ups are generally safer and should be less restricted
+        - Focus on detecting rapid oscillation rather than just mixed actions
+        - Allow emergency scale-ups even during instability
+        - Consider time gaps between actions
+        """
+        from state_manager import state
         
         # Check for recent deployment instability
         if hasattr(state, 'scaling_history') and state.scaling_history:
+            now = datetime.now()
+            two_minutes_ago = now - timedelta(minutes=2)  # Reduced from 5 minutes
+            one_minute_ago = now - timedelta(minutes=1)   # Reduced from 2 minutes
+            
             recent_actions = []
-            five_minutes_ago = datetime.now() - timedelta(minutes=5)
+            very_recent_actions = []
             
             for record in state.scaling_history:
                 # Convert ISO string timestamp back to datetime for comparison
                 record_time = datetime.fromisoformat(record['timestamp']) if isinstance(record['timestamp'], str) else record['timestamp']
-                if record_time > five_minutes_ago:
-                    recent_actions.append(record['action'])
-            
-            # Check for oscillating behavior
-            if len(recent_actions) >= 4:
-                scale_ups = recent_actions.count('scale_up')
-                scale_downs = recent_actions.count('scale_down')
                 
-                if scale_ups > 0 and scale_downs > 0:
-                    return False, f"System instability detected: {scale_ups} scale-ups and {scale_downs} scale-downs in last 5 minutes"
+                if record_time > two_minutes_ago:  # Changed from 5 minutes
+                    recent_actions.append({
+                        'action': record['action'],
+                        'timestamp': record_time
+                    })
+                
+                if record_time > one_minute_ago:  # Changed from 2 minutes
+                    very_recent_actions.append({
+                        'action': record['action'],
+                        'timestamp': record_time
+                    })
+            
+            # For scale-ups (action == 1), be very permissive
+            if action == 1:
+                # Only block scale-ups if there's true rapid oscillation in the last 1 minute
+                if len(very_recent_actions) >= 3:
+                    very_recent_action_types = [a['action'] for a in very_recent_actions]
+                    scale_ups_recent = very_recent_action_types.count('scale_up')
+                    scale_downs_recent = very_recent_action_types.count('scale_down')
+                    
+                    # Block only if we have extreme back-and-forth in last 1 minute
+                    if scale_ups_recent >= 2 and scale_downs_recent >= 2:
+                        return False, f"Rapid oscillation detected: {scale_ups_recent} scale-ups and {scale_downs_recent} scale-downs in last 1 minute"
+                
+                # Allow more scale-ups in a shorter window (increased from 4 to 6)
+                recent_scale_ups = sum(1 for a in recent_actions if a['action'] == 'scale_up')
+                if recent_scale_ups >= 6:
+                    return False, f"Too many scale-ups recently: {recent_scale_ups} scale-ups in last 2 minutes"
+                
+                # Otherwise allow scale-up (prioritize responsiveness)
+                return True, "Scale-up allowed for responsiveness"
+            
+            # For scale-downs (action == 2), be more restrictive but with shorter window
+            elif action == 2:
+                # Check for any oscillation in the last 2 minutes (reduced from 5)
+                if len(recent_actions) >= 3:  # Reduced threshold from 4 to 3
+                    recent_action_types = [a['action'] for a in recent_actions]
+                    scale_ups = recent_action_types.count('scale_up')
+                    scale_downs = recent_action_types.count('scale_down')
+                    
+                    # Only block if there's been recent scale-up activity
+                    if scale_ups > 0 and scale_downs >= 2:
+                        return False, f"System instability detected: {scale_ups} scale-ups and {scale_downs} scale-downs in last 2 minutes - blocking scale-down"
+                
+                # Check for too many recent scale-downs (reduced window)
+                recent_scale_downs = sum(1 for a in recent_actions if a['action'] == 'scale_down')
+                if recent_scale_downs >= 2:  # Reduced from 3 to 2
+                    return False, f"Too many scale-downs recently: {recent_scale_downs} scale-downs in last 2 minutes"
+            
+            # For no action (action == 0), always allow
+            else:
+                return True, "No action - stability check passed"
         
         return True, "Stability validation passed"
     
@@ -400,7 +490,7 @@ class ScalingValidator:
             'adjusted_target': boundary_target
         }
         
-        rate_valid, rate_reason = self._validate_scaling_rate(action, current_replicas, target_replicas)
+        rate_valid, rate_reason = self._validate_scaling_rate(action, current_replicas, target_replicas, deployment_info)
         summary['validations']['rate_limit'] = {
             'valid': rate_valid,
             'reason': rate_reason
@@ -500,7 +590,7 @@ class ScalingValidator:
             return True, "No scaling required", current_replicas
         
         # Rate limiting validation
-        rate_valid, rate_reason = self._validate_scaling_rate(action, current_replicas, target_replicas)
+        rate_valid, rate_reason = self._validate_scaling_rate(action, current_replicas, target_replicas, deployment_info)
         if not rate_valid:
             return False, rate_reason, current_replicas
         
