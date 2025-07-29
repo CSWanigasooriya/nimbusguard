@@ -256,13 +256,30 @@ class ScalingValidator:
                 # Don't reject here, but should_force_action() will recommend emergency scaling
                 logging.warning(f"High CPU pressure detected but no scaling action proposed (CPU: {current_cpu_util:.1f}%)")
         
-        # Prevent scale-down under high load
+        # Prevent scale-down under high load (strengthened validation)
         if action == 2:  # Scale down
+            # Block scale-down if CPU is above threshold
             if current_cpu_util > self.max_cpu_util_for_scale_down:
                 return False, f"Cannot scale down: CPU utilization too high ({current_cpu_util:.1f}% > {self.max_cpu_util_for_scale_down}%)"
             
-            if current_mem_util > self.max_cpu_util_for_scale_down:
+            # Block scale-down if memory is above threshold (fixed bug - was using CPU threshold)
+            if current_mem_util > self.max_cpu_util_for_scale_down:  # Using same 80% threshold for consistency
                 return False, f"Cannot scale down: Memory utilization too high ({current_mem_util:.1f}% > {self.max_cpu_util_for_scale_down}%)"
+            
+            # Block scale-down if predicted memory is high
+            if predicted_mem_util > self.max_cpu_util_for_scale_down:
+                return False, f"Cannot scale down: Predicted memory utilization too high ({predicted_mem_util:.1f}% > {self.max_cpu_util_for_scale_down}%)"
+            
+            # Additional protection: Don't scale down if either resource is above scale-up threshold
+            # This prevents scale-down when we might need to scale up soon
+            if current_cpu_util >= self.min_cpu_util_for_scale_up:
+                return False, f"Cannot scale down: CPU utilization justifies scale-up ({current_cpu_util:.1f}% >= {self.min_cpu_util_for_scale_up}%)"
+            
+            if current_mem_util >= self.min_memory_util_for_scale_up:
+                return False, f"Cannot scale down: Memory utilization justifies scale-up ({current_mem_util:.1f}% >= {self.min_memory_util_for_scale_up}%)"
+            
+            if predicted_mem_util >= self.min_memory_util_for_scale_up:
+                return False, f"Cannot scale down: Predicted memory justifies scale-up ({predicted_mem_util:.1f}% >= {self.min_memory_util_for_scale_up}%)"
         
         # Require minimum utilization for scale-up (more lenient during exploration)
         if action == 1:  # Scale up
