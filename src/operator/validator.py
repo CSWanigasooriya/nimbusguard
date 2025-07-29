@@ -299,7 +299,9 @@ class ScalingValidator:
                     return False, f"Scale-up not justified: Both CPU ({current_cpu_util:.1f}% < {self.min_cpu_util_for_scale_up}%) and Memory ({current_mem_util:.1f}% < {self.min_memory_util_for_scale_up}%) utilization too low"
                 else:
                     return False, f"Scale-up not justified: Both CPU ({current_cpu_util:.1f}% < {self.min_cpu_util_for_scale_up}%) and Memory ({current_mem_util:.1f}% < {self.min_memory_util_for_scale_up}%) utilization too low"
-            else:
+            
+            # Only log and continue if utilization actually justifies scale-up
+            if cpu_justified or memory_justified:
                 # Log which resource justified the scale-up
                 if cpu_justified and memory_justified:
                     reason = f"Scale-up justified by both CPU ({current_cpu_util:.1f}% >= {self.min_cpu_util_for_scale_up}%) and Memory ({current_mem_util:.1f}% >= {self.min_memory_util_for_scale_up}%)"
