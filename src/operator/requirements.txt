@@ -9,3 +9,4 @@ langgraph
 kubernetes
 langchain_mcp_adapters
 langchain_openai
+minio>=7.1.0

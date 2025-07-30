@@ -516,7 +516,6 @@ def create_autoscaler_workflow() -> CompiledStateGraph:
     workflow.add_node("executor", execute_scaling_node)
     workflow.add_node("reward", calculate_reward_node)
     
-    # Define the flow: collector -> forecaster -> decision -> validator -> executor -> reward
     workflow.add_edge(START, "collector")
     workflow.add_edge("collector", "forecaster")
     workflow.add_edge("forecaster", "decision")
