@@ -63,13 +63,13 @@ class SimpleLoadGenerator:
         try:
             async with self.session.get(f"{self.base_url}/health") as response:
                 if response.status == 200:
-                    logger.info("✅ Service is healthy")
+                    logger.info("Service is healthy")
                     return True
                 else:
-                    logger.error(f"❌ Health check failed: {response.status}")
+                    logger.error(f"Health check failed: {response.status}")
                     return False
         except Exception as e:
-            logger.error(f"❌ Health check failed: {e}")
+            logger.error(f"Health check failed: {e}")
             return False
 
     async def send_request(self, request_id: int, async_mode: bool) -> Dict[str, Any]:
@@ -103,14 +103,14 @@ class SimpleLoadGenerator:
                 }
 
                 if result['success']:
-                    logger.info(f"✅ Request {request_id}: {response.status} in {result['response_time']:.2f}s")
+                    logger.info(f"Request {request_id}: {response.status} in {result['response_time']:.2f}s")
                 else:
-                    logger.error(f"❌ Request {request_id}: {response.status}")
+                    logger.error(f"Request {request_id}: {response.status}")
 
                 return result
 
         except asyncio.TimeoutError:
-            logger.error(f"⏰ Request {request_id}: Timeout")
+            logger.error(f"Request {request_id}: Timeout")
             return {
                 'request_id': request_id,
                 'status_code': 408,
@@ -118,7 +118,7 @@ class SimpleLoadGenerator:
                 'success': False
             }
         except Exception as e:
-            logger.error(f"💥 Request {request_id}: Error - {str(e)[:100]}")
+            logger.error(f"Request {request_id}: Error - {str(e)[:100]}")
             return {
                 'request_id': request_id,
                 'status_code': 500,
@@ -128,8 +128,8 @@ class SimpleLoadGenerator:
 
     async def run_load_test(self, load_test: LoadTest) -> Dict[str, Any]:
         """Run the load test"""
-        logger.info(f"🚀 Starting load test: {load_test.name}")
-        logger.info(f"⚙️  Config: {load_test.concurrent_requests} concurrent, {load_test.total_requests} total requests")
+        logger.info(f"Starting load test: {load_test.name}")
+        logger.info(f"Config: {load_test.concurrent_requests} concurrent, {load_test.total_requests} total requests")
         
         start_time = time.time()
         semaphore = asyncio.Semaphore(load_test.concurrent_requests)
@@ -171,10 +171,10 @@ class SimpleLoadGenerator:
             'requests_per_second': load_test.total_requests / total_time,
         }
 
-        logger.info(f"✅ Load test completed in {total_time:.2f}s")
-        logger.info(f"📊 Success rate: {success_rate:.1f}% ({len(successful)}/{load_test.total_requests})")
-        logger.info(f"⚡ RPS: {summary['requests_per_second']:.2f}")
-        logger.info(f"⏱️  Avg response time: {avg_response_time:.2f}s")
+        logger.info(f"Load test completed in {total_time:.2f}s")
+        logger.info(f"Success rate: {success_rate:.1f}% ({len(successful)}/{load_test.total_requests})")
+        logger.info(f"RPS: {summary['requests_per_second']:.2f}")
+        logger.info(f"Avg response time: {avg_response_time:.2f}s")
 
         return summary
 
@@ -228,7 +228,7 @@ async def main():
     # Use predefined test or create custom
     if args.test and args.test in LOAD_TESTS:
         load_test = LOAD_TESTS[args.test]
-        logger.info(f"📋 Using predefined test: {args.test}")
+        logger.info(f"Using predefined test: {args.test}")
     else:
         load_test = LoadTest(
             name="Custom Load Test",
@@ -241,7 +241,7 @@ async def main():
     # Run the test
     async with SimpleLoadGenerator(args.url) as generator:
         if not await generator.health_check():
-            logger.error("❌ Service not healthy, aborting")
+            logger.error("Service not healthy, aborting")
             return
 
         await generator.run_load_test(load_test)

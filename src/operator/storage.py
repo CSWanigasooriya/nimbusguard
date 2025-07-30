@@ -61,7 +61,7 @@ class DQNModelStorage:
         """
         try:
             # Create temporary files for weights and metadata
-            with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as temp_weights:
+            with tempfile.NamedTemporaryFile(suffix='.weights.h5', delete=False) as temp_weights:
                 weights_path = temp_weights.name
             
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_metadata:
@@ -149,7 +149,7 @@ class DQNModelStorage:
                 return False, None
             
             # Create temporary files for download
-            with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as temp_weights:
+            with tempfile.NamedTemporaryFile(suffix='.weights.h5', delete=False) as temp_weights:
                 weights_path = temp_weights.name
             
             with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as temp_metadata:
