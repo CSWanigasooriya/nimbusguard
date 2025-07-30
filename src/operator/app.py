@@ -425,7 +425,11 @@ def calculate_reward_node(state: AutoscalerState) -> dict:
         if state["state_vector"] is not None:
             # Determine the actual action that was executed
             actual_action = 0  # Default to no action
+            reward = 0.0
+            reward_breakdown = {}
+            
             if state["scaling_successful"] and state["execution_result"]:
+                # Action was executed successfully
                 current_replicas = state["current_replicas"]
                 target_replicas = state["target_replicas"]
                 if target_replicas > current_replicas:
@@ -434,28 +438,75 @@ def calculate_reward_node(state: AutoscalerState) -> dict:
                     actual_action = 2  # Scale down
                 else:
                     actual_action = 0  # No change
-            
-            # Calculate reward based on the ACTUAL executed action, not the DQN's original decision
-            reward = reward_calculator.calculate_reward(
-                state["current_cpu_util"],
-                state["current_mem_util"],
-                state["predicted_mem_util"],
-                actual_action,  # Use actual executed action
-                state["current_replicas"],
-                state["min_replicas"],
-                state["max_replicas"]
-            )
-            
-            # Get reward breakdown for analysis
-            reward_breakdown = reward_calculator.get_reward_breakdown(
-                state["current_cpu_util"],
-                state["current_mem_util"],
-                state["predicted_mem_util"],
-                actual_action,  # Use actual executed action
-                state["current_replicas"],
-                state["min_replicas"],
-                state["max_replicas"]
-            )
+                
+                # Calculate positive reward for executed action
+                reward = reward_calculator.calculate_reward(
+                    state["current_cpu_util"],
+                    state["current_mem_util"],
+                    state["predicted_mem_util"],
+                    actual_action,  # Use actual executed action
+                    state["current_replicas"],
+                    state["min_replicas"],
+                    state["max_replicas"]
+                )
+                
+                # Get reward breakdown for analysis
+                reward_breakdown = reward_calculator.get_reward_breakdown(
+                    state["current_cpu_util"],
+                    state["current_mem_util"],
+                    state["predicted_mem_util"],
+                    actual_action,  # Use actual executed action
+                    state["current_replicas"],
+                    state["min_replicas"],
+                    state["max_replicas"]
+                )
+                
+            elif not state.get("is_valid", True):
+                # Action was rejected by validator - calculate negative reward
+                dqn_action = state.get("dqn_action", 0)
+                validation_reason = state.get("validation_reason", "Unknown rejection")
+                
+                # Calculate rejection penalty for the DQN's original (rejected) action
+                reward = reward_calculator.calculate_rejection_penalty(
+                    dqn_action,
+                    validation_reason,
+                    state["current_cpu_util"],
+                    state["current_mem_util"],
+                    state["predicted_mem_util"]
+                )
+                
+                # For rejected actions, actual_action should be the DQN's original action for learning
+                actual_action = dqn_action
+                
+                reward_breakdown = {
+                    'rejection_penalty': reward,
+                    'rejection_reason': validation_reason,
+                    'dqn_action': dqn_action
+                }
+                
+                logging.warning(f"[REWARD] Action rejected - DQN will learn from negative reward: {reward:.2f}")
+                
+            else:
+                # No scaling action taken (likely no action or other condition)
+                reward = reward_calculator.calculate_reward(
+                    state["current_cpu_util"],
+                    state["current_mem_util"],
+                    state["predicted_mem_util"],
+                    0,  # No action
+                    state["current_replicas"],
+                    state["min_replicas"],
+                    state["max_replicas"]
+                )
+                
+                reward_breakdown = reward_calculator.get_reward_breakdown(
+                    state["current_cpu_util"],
+                    state["current_mem_util"],
+                    state["predicted_mem_util"],
+                    0,  # No action
+                    state["current_replicas"],
+                    state["min_replicas"],
+                    state["max_replicas"]
+                )
             
             # Convert state vector back to numpy array for DQN
             state_vector_np = np.array(state["state_vector"]).reshape(1, -1) if state["state_vector"] else None
@@ -472,9 +523,13 @@ def calculate_reward_node(state: AutoscalerState) -> dict:
                 from state_manager import state as global_state
                 global_state.dqn_agent.update_q_value_metrics(state_vector_np)
             
-            # Log the action discrepancy if any
-            if actual_action != state["dqn_action"]:
-                logging.warning(f"[REWARD] Action discrepancy: DQN chose {state['dqn_action']} but {actual_action} was executed")
+            # Log the action outcome for learning transparency
+            if not state.get("is_valid", True):
+                logging.info(f"[REWARD] DQN learning from rejection: DQN chose {state['dqn_action']} → Validator blocked → Negative reward {reward:.2f}")
+            elif actual_action != state.get("dqn_action", actual_action):
+                logging.info(f"[REWARD] DQN learning from execution: DQN chose {state['dqn_action']} → Executed {actual_action} → Reward {reward:.2f}")
+            else:
+                logging.info(f"[REWARD] DQN learning from outcome: Action {actual_action} → Reward {reward:.2f}")
             
             logging.info(f"[REWARD] Reward calculated: {reward:.2f}")
             
